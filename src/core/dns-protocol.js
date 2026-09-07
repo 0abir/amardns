@@ -620,6 +620,7 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
     if (alike.detected) {
       _sh.alikeBlocks++;
       _domainIQ.see(name, "dga");
+      autoBlockSet(name, alike.reason || "brand_impersonation", 300);
       _action("alike_domain_block", alike.reason, {
         domain: name,
         brand: alike.brand,
@@ -650,6 +651,7 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
     if (shouldBlock) {
       _sh.dgaBlocked++;
       _domainIQ.see(name, "dga");
+      autoBlockSet(name, "dga_classifier", 300);
       _action("dga_block", "dga_classifier", {
         domain: name,
         score: heuristicScore,

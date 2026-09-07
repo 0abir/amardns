@@ -93,7 +93,13 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
     let proxyChecked = false;
     let clientIp = socket.remoteAddress?.replace(/^::ffff:/, "") || "127.0.0.1";
 
-    let dotDeviceId = `dot-${clientIp}-${socket.remotePort ? (socket.remotePort % 10000) : Math.random().toString(36).slice(2, 6)}`;
+    let sniTag = null;
+    if (socket.servername) {
+      const parts = socket.servername.toLowerCase().split(".");
+      if (parts.length >= 3 && !["amardns", "www", "dns", "dot"].includes(parts[0])) {
+        sniTag = parts[0];
+      }
+    }
 
     socket.on("timeout", () => {
       socket.destroy();
@@ -122,7 +128,6 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
         }
         if (proxyRes.clientIp) {
           clientIp = proxyRes.clientIp;
-          dotDeviceId = `dot-${clientIp}-${socket.remotePort ? (socket.remotePort % 10000) : Math.random().toString(36).slice(2, 6)}`;
         }
         rxBuf = proxyRes.remaining;
         proxyChecked = true;
@@ -150,15 +155,18 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
         (async () => {
           const clientTxId = dnsQuery.length >= 2 ? dnsQuery.readUInt16BE(0) : 0;
           try {
+            const reqHeaders = {
+              "content-type": "application/dns-message",
+              "content-length": String(dnsQuery.length),
+              "x-forwarded-for": clientIp,
+              "x-device-type": "dot",
+            };
+            if (sniTag) {
+              reqHeaders["x-device-id"] = sniTag;
+            }
             const request = new Request("http://127.0.0.1/dns-query", {
               method: "POST",
-              headers: {
-                "content-type": "application/dns-message",
-                "content-length": String(dnsQuery.length),
-                "x-forwarded-for": clientIp,
-                "x-device-id": dotDeviceId,
-                "x-device-type": "dot",
-              },
+              headers: reqHeaders,
               body: dnsQuery,
             });
 

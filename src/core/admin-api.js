@@ -24,7 +24,7 @@ import {
 } from "./state.js";
 import {
   _onlineSince, _log, _action, _aiDecision, generateToken, _getRps, fnv1a32, _utcDay, _getHmacKey,
-  resetTelemetry, bufToHex, getActiveDeviceCount, getActiveIpCount
+  resetTelemetry, bufToHex, getActiveDeviceCount, getActiveIpCount, getActiveDevicesList
 } from "./telemetry.js";
 import {
   alikeDomainCheck, dgaScore, syncThreatFeeds, autoBlockSet,
@@ -141,7 +141,9 @@ export function buildStatus(env, request = null) {
       appName: appName,
       activeDevices: getActiveDeviceCount(),
       activeIps: getActiveIpCount(),
+      deviceList: getActiveDevicesList(),
     },
+    devices: getActiveDevicesList(),
     dnsRequestsTotal: _sh.requests,
     narrative: `${_stress > 0.7 ? "HIGH STRESS" : "Nominal"} · ${rps.toFixed(1)} R/s · ${iqSize} IQ · 20 nets·203k · DTN loss ${_dtn.totalLoss.toFixed(3)} · DTCN:${_nnStats.dtcnClass} · online ${_onlineSince()}`,
     cache: {
@@ -540,9 +542,38 @@ export async function handleApiRoute(request, path, env, method) {
   if (path === "/api/blocklist" || path.startsWith("/api/blocklist?")) {
     const pdb = env?.pulseDb;
     if (method === "GET") {
-      if (!pdb) return jsonResp({ domains: [] });
-      const rows = pdb.listBlocklist(1000);
-      return _streamJson({ domains: rows });
+      const domMap = new Map();
+      if (pdb) {
+        const rows = pdb.listBlocklist(1000);
+        for (const r of rows) {
+          const d = typeof r === "string" ? r : r.domain;
+          if (d) domMap.set(d, r);
+        }
+      }
+      const now = Date.now();
+      for (const [d, v] of _autoBlocks) {
+        if (v && v.exp > now) {
+          domMap.set(d, {
+            domain: d,
+            reason: v.reason || "AI dynamic block",
+            source: "ai",
+            auto: true,
+            ttl: Math.max(1, Math.floor((v.exp - now) / 1000)),
+          });
+        }
+      }
+      if (_memBlacklist) {
+        for (const d of _memBlacklist) {
+          if (!domMap.has(d)) {
+            domMap.set(d, {
+              domain: d,
+              reason: "custom",
+              source: "memory",
+            });
+          }
+        }
+      }
+      return _streamJson({ domains: Array.from(domMap.values()) });
     }
     if (method === "POST") {
       const body = await request.json().catch(() => ({}));
@@ -555,20 +586,61 @@ export async function handleApiRoute(request, path, env, method) {
       if (eligible.length === 0) return jsonResp({ ok: true, added: 0, skipped: [] });
       const reason = typeof body.reason === "string" ? body.reason.slice(0, 100) : "manual";
       const added = pdb ? pdb.addBlocklist(eligible, reason, "admin") : 0;
-      _action("blocklist_added", "admin", { count: added });
-      return jsonResp({ ok: true, added: added, skipped: [] });
+      if (_memBlacklist) {
+        for (const d of eligible) _memBlacklist.add(d);
+      }
+      if (typeof process !== "undefined" && process.env?.FLY_APP_NAME && !request.headers.get("x-peer-sync")) {
+        const port = process.env.PORT || "8080";
+        fetch(`http://${process.env.FLY_APP_NAME}.internal:${port}/api/blocklist`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "authorization": `Bearer ${env.DNS_MASTER_KEY || ""}`,
+            "x-peer-sync": "1",
+          },
+          body: JSON.stringify(body),
+        }).catch(() => {});
+      }
+      _action("blocklist_added", "admin", { count: added || eligible.length });
+      return jsonResp({ ok: true, added: added || eligible.length, skipped: [] });
     }
     if (method === "DELETE") {
       const body = await request.json().catch(() => ({}));
       const domain = sanitizeDomain(body.domain);
       if (!domain) return jsonResp({ ok: false, error: "invalid domain" }, 400);
       if (pdb) pdb.removeBlocklist(domain);
+      _autoBlocks.delete(domain);
+      if (_memBlacklist) _memBlacklist.delete(domain);
+      if (typeof process !== "undefined" && process.env?.FLY_APP_NAME && !request.headers.get("x-peer-sync")) {
+        const port = process.env.PORT || "8080";
+        fetch(`http://${process.env.FLY_APP_NAME}.internal:${port}/api/blocklist`, {
+          method: "DELETE",
+          headers: {
+            "content-type": "application/json",
+            "authorization": `Bearer ${env.DNS_MASTER_KEY || ""}`,
+            "x-peer-sync": "1",
+          },
+          body: JSON.stringify(body),
+        }).catch(() => {});
+      }
       _action("blocklist_removed", "admin", { domain });
       return jsonResp({ ok: true, domain: domain });
     }
   }
   if (path === "/api/blocklist/clear" && method === "POST") {
     if (env?.pulseDb) env.pulseDb.clearBlocklist();
+    _autoBlocks.clear();
+    if (_memBlacklist) _memBlacklist.clear();
+    if (typeof process !== "undefined" && process.env?.FLY_APP_NAME && !request.headers.get("x-peer-sync")) {
+      const port = process.env.PORT || "8080";
+      fetch(`http://${process.env.FLY_APP_NAME}.internal:${port}/api/blocklist/clear`, {
+        method: "POST",
+        headers: {
+          "authorization": `Bearer ${env.DNS_MASTER_KEY || ""}`,
+          "x-peer-sync": "1",
+        },
+      }).catch(() => {});
+    }
     _action("blocklist_cleared", "admin");
     return jsonResp({ ok: true });
   }

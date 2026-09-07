@@ -558,11 +558,51 @@ export function _updateUserEstimate() {
 }
 
 export function getActiveDeviceCount() {
-  return _deviceMap && _deviceMap.size > 0 ? _deviceMap.size : 1;
+  if (!_deviceMap || _deviceMap.size === 0) return 1;
+  const activeCutoff = Date.now() - 300000;
+  let count = 0;
+  for (const [k, v] of _deviceMap) {
+    if (v.lastSeen >= activeCutoff) {
+      count++;
+    } else {
+      _deviceMap.delete(k);
+    }
+  }
+  return Math.max(1, count);
 }
 
 export function getActiveIpCount() {
-  return _userMap && _userMap.size > 0 ? _userMap.size : 1;
+  if (!_userMap || _userMap.size === 0) return 1;
+  const activeCutoff = Date.now() - 300000;
+  let count = 0;
+  for (const [k, ts] of _userMap) {
+    if (typeof ts === "number" && ts >= activeCutoff) {
+      count++;
+    } else {
+      _userMap.delete(k);
+    }
+  }
+  return Math.max(1, count);
+}
+
+export function getActiveDevicesList() {
+  if (!_deviceMap || _deviceMap.size === 0) return [];
+  const activeCutoff = Date.now() - 300000;
+  const list = [];
+  const now = Date.now();
+  for (const [k, v] of _deviceMap) {
+    if (v.lastSeen >= activeCutoff) {
+      list.push({
+        id: k.length > 28 ? k.slice(0, 16) + "…" : k,
+        fullId: k,
+        type: v.type || "doh",
+        ip: v.ip || "0.0.0.0",
+        count: v.count || 1,
+        lastSeenSec: Math.max(0, Math.floor((now - v.lastSeen) / 1000)),
+      });
+    }
+  }
+  return list.sort((a, b) => a.lastSeenSec - b.lastSeenSec).slice(0, 20);
 }
 export function _memCheck() {
   const MAX_MAP_SIZE = 5e3;

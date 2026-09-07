@@ -72,7 +72,7 @@ const FLY_REGION = process.env.FLY_REGION || "sin";
 // HTTP / DoH request handler
 async function requestHandler(req, res) {
   // Health check endpoint — never touches the worker or the master-key check.
-  if (req.method === "GET" && req.url === "/health") {
+  if ((req.method === "GET" || req.method === "HEAD") && req.url === "/health") {
     if (FLY_MACHINE_ID) res.setHeader("fly-machine-id", FLY_MACHINE_ID);
     res.statusCode = 200;
     res.end("ok");
