@@ -439,7 +439,7 @@ export async function autoBlockSet(domain, reason, ttl = AUTO_BLOCK_TTL) {
     }
   }
   const exp = Math.floor(Date.now() / 1e3) + ttl;
-  _autoBlocks.set(domain, { exp: exp, reason: reason, auto: true });
+  _autoBlocks.set(domain, { exp: exp, reason: reason, auto: true, source: "ai", tag: "AI" });
   if (pdb && typeof pdb.addBlocklist === "function") {
     pdb.addBlocklist(domain, reason, "auto");
     return;
@@ -890,7 +890,7 @@ export function checkBlocklist(domain, db) {
     if (hit) {
       // RULE 3: Only display in blocked section those that have been DETECTED!
       if (pdb && pdb.blocklistTrie && pdb.blocklistTrie.size < 1000 && !pdb.blocklistTrie.check(d).matched) {
-        pdb.blocklistTrie.add(d, "threat_feed_abir", "detected", Date.now());
+        pdb.blocklistTrie.add(d, "threat_feed_abir", "feed", Date.now());
       }
       return { blocked: true, reason: "threat_feed_abir", source: "abir_feed" };
     }

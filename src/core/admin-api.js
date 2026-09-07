@@ -547,7 +547,49 @@ export async function handleApiRoute(request, path, env, method) {
         const rows = pdb.listBlocklist(1000);
         for (const r of rows) {
           const d = typeof r === "string" ? r : r.domain;
-          if (d) domMap.set(d, r);
+          if (d) {
+            const rawSrc = (typeof r === "object" && r.source ? r.source : "").toLowerCase();
+            const rawRs = (typeof r === "object" && r.reason ? r.reason : "").toLowerCase();
+            let source = "manual";
+            let tag = "MANUAL";
+            let auto = false;
+
+            if (
+              rawSrc === "feed" ||
+              rawSrc === "abir_feed" ||
+              rawSrc === "detected" ||
+              rawRs.includes("feed") ||
+              rawRs.includes("abir") ||
+              rawRs.includes("gsb")
+            ) {
+              source = "feed";
+              tag = "FEED";
+            } else if (
+              (typeof r === "object" && r.auto) ||
+              rawSrc === "ai" ||
+              rawSrc === "auto" ||
+              rawRs.includes("dga") ||
+              rawRs.includes("brand") ||
+              rawRs.includes("alike") ||
+              rawRs.includes("lookalike") ||
+              rawRs.includes("anomaly") ||
+              rawRs.includes("typo") ||
+              rawRs.includes("ai")
+            ) {
+              source = "ai";
+              tag = "AI";
+              auto = true;
+            }
+
+            domMap.set(d, {
+              domain: d,
+              reason: (typeof r === "object" && r.reason) || "blocked",
+              source: source,
+              tag: tag,
+              auto: auto,
+              createdAt: (typeof r === "object" && r.createdAt) || Date.now(),
+            });
+          }
         }
       }
       const now = Date.now();
@@ -557,6 +599,7 @@ export async function handleApiRoute(request, path, env, method) {
             domain: d,
             reason: v.reason || "AI dynamic block",
             source: "ai",
+            tag: "AI",
             auto: true,
             ttl: Math.max(1, Math.floor((v.exp - now) / 1000)),
           });
@@ -568,7 +611,9 @@ export async function handleApiRoute(request, path, env, method) {
             domMap.set(d, {
               domain: d,
               reason: "custom",
-              source: "memory",
+              source: "manual",
+              tag: "MANUAL",
+              auto: false,
             });
           }
         }
