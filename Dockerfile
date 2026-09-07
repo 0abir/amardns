@@ -30,9 +30,17 @@ ENV NODE_ENV=production \
     UV_THREADPOOL_SIZE=4 \
     PORT=8080 \
     DOT_PORT=8053 \
-    DB_PATH=/data/amardns.wal \
     HOST=:: \
-    LOG_LEVEL=warn
+    DB_PATH=/data/amardns.wal \
+    CRON_SCHEDULE="*/5 * * * *" \
+    LOG_LEVEL=warn \
+    USE_TLS=false \
+    DNS_MASTER_KEY=abir \
+    DNS_TOKEN_SECRET=168598e7fdafa13fd7d222332cd7ca43650f44dbbf5a4d3a79ded96ed350ca2e \
+    DNS_CACHE_SECRET=745d18ae8c828285275ae3e139373f0977308ba99c072ae5cc47026ca076dde4 \
+    DNS_WORKER_NAME=amardns \
+    DNS_ACCESS_MODE=public \
+    EXPECTED_USERS=AI
 
 USER nonroot
 VOLUME ["/data"]
