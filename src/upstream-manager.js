@@ -14,7 +14,7 @@ const AURA_PRIORITY = {
   low: 3,
 };
 
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+const SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Creates a minimal valid DNS query packet (12-byte header + question section)
@@ -71,18 +71,39 @@ export async function fetchUpstreamFeed(feedUrl = DEFAULT_UPSTREAM_FEED, timeout
 /**
  * Probes a single DoH upstream to measure real-time latency and reachability.
  */
-export async function probeUpstream(upstream, probeB64, timeoutMs = 3500) {
+export async function probeUpstream(upstream, probeB64, timeoutMs = 3500, probeBytes = null) {
   const start = performance.now();
   const url = upstream.url;
   try {
-    const resp = await fetch(`${url}?dns=${probeB64}`, {
-      headers: {
-        Accept: "application/dns-message",
-        "User-Agent": "AmarDNS-Probe/1.0",
-        "Cache-Control": "no-store",
-      },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    let resp = null;
+    const body = probeBytes || (typeof makeDnsProbePacket === "function" ? new Uint8Array(makeDnsProbePacket()) : null);
+    if (body) {
+      try {
+        resp = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/dns-message",
+            Accept: "application/dns-message",
+            "User-Agent": "AmarDNS-Probe/1.0",
+            "Cache-Control": "no-store",
+          },
+          body: body,
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (_) {}
+    }
+
+    if (!resp || !resp.ok) {
+      resp = await fetch(`${url}?dns=${probeB64}`, {
+        headers: {
+          Accept: "application/dns-message",
+          "User-Agent": "AmarDNS-Probe/1.0",
+          "Cache-Control": "no-store",
+        },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    }
+
     const latency = Math.round(performance.now() - start);
     if (!resp.ok) {
       return {
@@ -90,6 +111,7 @@ export async function probeUpstream(upstream, probeB64, timeoutMs = 3500) {
         latency: 9999,
         ok: false,
         err: `HTTP ${resp.status}`,
+        lastTested: Date.now(),
       };
     }
     const buf = await resp.arrayBuffer();
@@ -99,6 +121,7 @@ export async function probeUpstream(upstream, probeB64, timeoutMs = 3500) {
         latency: 9999,
         ok: false,
         err: "Malformed DNS response",
+        lastTested: Date.now(),
       };
     }
     return {
@@ -164,10 +187,11 @@ export async function syncAndRankUpstreams(env, worker, options = {}) {
 
   const probePacket = makeDnsProbePacket();
   const probeB64 = queryToBase64Url(probePacket);
+  const probeBytes = new Uint8Array(probePacket);
 
   // Probe all candidates concurrently
   const probed = await Promise.all(
-    rawList.map((u) => probeUpstream(u, probeB64, timeoutMs))
+    rawList.map((u) => probeUpstream(u, probeB64, timeoutMs, probeBytes))
   );
 
   // Rank according to: aura + low latency
@@ -232,7 +256,7 @@ export function loadPersistedUpstreams(env, worker) {
   const lastSync = lastSyncStr ? parseInt(lastSyncStr, 10) : 0;
   const now = Date.now();
   const ageMs = now - lastSync;
-  const isExpired = !lastSync || ageMs >= SEVEN_DAYS_MS;
+  const isExpired = !lastSync || ageMs >= SYNC_INTERVAL_MS;
 
   if (savedRanked) {
     try {
