@@ -630,7 +630,8 @@ export async function handleApiRoute(request, path, env, method) {
       const eligible = rawDomains.map(sanitizeDomain).filter(Boolean);
       if (eligible.length === 0) return jsonResp({ ok: true, added: 0, skipped: [] });
       const reason = typeof body.reason === "string" ? body.reason.slice(0, 100) : "manual";
-      const added = pdb ? pdb.addBlocklist(eligible, reason, "admin") : 0;
+      const source = typeof body.source === "string" ? body.source.slice(0, 20) : "admin";
+      const added = pdb ? pdb.addBlocklist(eligible, reason, source) : 0;
       if (_memBlacklist) {
         for (const d of eligible) _memBlacklist.add(d);
       }
@@ -697,7 +698,21 @@ export async function handleApiRoute(request, path, env, method) {
   if (path === "/api/common/clear" && method === "POST") {
     return jsonResp({ ok: true });
   }
+  if (path === "/api/auto-block" && method === "POST") {
+    const body = await request.json().catch(() => ({}));
+    const domain = sanitizeDomain(body.domain);
+    if (domain) {
+      await autoBlockSet(domain, body.reason || "ai", body.ttl || 300, true);
+    }
+    return jsonResp({ ok: true });
+  }
   if (path === "/api/auto-block" && method === "DELETE") {
+    const body = await request.json().catch(() => ({}));
+    const domain = sanitizeDomain(body.domain);
+    if (domain) {
+      _autoBlocks.delete(domain);
+      if (env?.pulseDb) env.pulseDb.removeBlocklist(domain);
+    }
     return jsonResp({ ok: true });
   }
   if (path === "/api/system/reload" && method === "POST") {

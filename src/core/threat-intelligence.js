@@ -420,7 +420,7 @@ export async function checkGoogleSafeBrowsing(domain) {
   }
   return { threat: false, apiFailure: true, error: lastErr };
 }
-export async function autoBlockSet(domain, reason, ttl = AUTO_BLOCK_TTL) {
+export async function autoBlockSet(domain, reason, ttl = AUTO_BLOCK_TTL, isPeerSync = false) {
   const pdb = _env?.pulseDb;
   const db = pdb || _env?.D1_DB;
   const isSafe = checkWhitelist(domain, db) || checkCommon(domain, db);
@@ -442,7 +442,18 @@ export async function autoBlockSet(domain, reason, ttl = AUTO_BLOCK_TTL) {
   _autoBlocks.set(domain, { exp: exp, reason: reason, auto: true, source: "ai", tag: "AI" });
   if (pdb && typeof pdb.addBlocklist === "function") {
     pdb.addBlocklist(domain, reason, "auto");
-    return;
+  }
+  if (!isPeerSync && typeof process !== "undefined" && process.env?.FLY_APP_NAME) {
+    const port = process.env.PORT || "8080";
+    fetch(`http://${process.env.FLY_APP_NAME}.internal:${port}/api/auto-block`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "authorization": `Bearer ${_env?.DNS_MASTER_KEY || ""}`,
+        "x-peer-sync": "1",
+      },
+      body: JSON.stringify({ domain, reason, ttl }),
+    }).catch(() => {});
   }
   if (_env?.D1_DB && !_d1Throttle && _budgetAI.canWrite(false)) {
     const domainSnap = domain,
@@ -891,6 +902,18 @@ export function checkBlocklist(domain, db) {
       // RULE 3: Only display in blocked section those that have been DETECTED!
       if (pdb && pdb.blocklistTrie && pdb.blocklistTrie.size < 1000 && !pdb.blocklistTrie.check(d).matched) {
         pdb.blocklistTrie.add(d, "threat_feed_abir", "feed", Date.now());
+        if (typeof process !== "undefined" && process.env?.FLY_APP_NAME) {
+          const port = process.env.PORT || "8080";
+          fetch(`http://${process.env.FLY_APP_NAME}.internal:${port}/api/blocklist`, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "authorization": `Bearer ${_env?.DNS_MASTER_KEY || ""}`,
+              "x-peer-sync": "1",
+            },
+            body: JSON.stringify({ domains: [d], reason: "threat_feed_abir", source: "feed" }),
+          }).catch(() => {});
+        }
       }
       return { blocked: true, reason: "threat_feed_abir", source: "abir_feed" };
     }
