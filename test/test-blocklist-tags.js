@@ -72,14 +72,17 @@ async function main() {
 
   const fHtml = renderBlockRow(feedItem);
   assert.ok(fHtml.includes("FEED"), "Rendered chip must display FEED badge");
+  assert.strictEqual(fHtml.includes("·"), false, "Rendered chip must not contain suffix tag separator");
 
   const aHtml = renderBlockRow(aiItem);
   assert.ok(aHtml.includes("AI"), "Rendered chip must display AI badge");
+  assert.strictEqual(aHtml.includes("·"), false, "Rendered chip must not contain suffix tag separator");
 
   const mHtml = renderBlockRow(manualItem);
   assert.ok(mHtml.includes("MANUAL"), "Rendered chip must display MANUAL badge");
+  assert.strictEqual(mHtml.includes("·"), false, "Rendered chip must not contain suffix tag separator");
 
-  console.log("   ✓ UI chips display FEED, AI, and MANUAL tags cleanly!");
+  console.log("   ✓ UI chips display prefix tags (FEED, AI, MANUAL) without suffix tags!");
 
   console.log("-> [3/3] Validating deletion and cleanup...");
   const delReq = new Request("http://localhost/api/blocklist", {
