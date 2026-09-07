@@ -42,10 +42,7 @@ export function makeDnsProbePacket(name = "example.com") {
 }
 
 function queryToBase64Url(buf) {
-  const bytes = new Uint8Array(buf);
-  let str = "";
-  for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
-  return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+  return Buffer.from(buf).toString("base64url");
 }
 
 /**
@@ -196,7 +193,7 @@ export function rankUpstreams(probedList) {
  * 2. Probes all upstreams concurrently
  * 3. Ranks by aura + low latency
  * 4. Persists ranked candidates to PulseDB
- * 5. Hot-reloads top 8 upstreams in the worker
+ * 5. Hot-reloads top 9 upstreams (3xN pool) in the worker
  */
 export async function syncAndRankUpstreams(env, worker, options = {}) {
   const feedUrl = options.feedUrl || env?.UPSTREAM_FEED_URL || DEFAULT_UPSTREAM_FEED;

@@ -184,8 +184,8 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
               const out = Buffer.allocUnsafe(2 + respBuf.length);
               out.writeUInt16BE(respBuf.length, 0);
               respBuf.copy(out, 2);
-              if (!socket.destroyed) {
-                socket.write(out);
+              if (!socket.destroyed && socket.writable) {
+                try { socket.write(out); } catch (_) {}
               }
             } else {
               // Fallback SERVFAIL
@@ -196,13 +196,13 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
               const out = Buffer.allocUnsafe(2 + fail.length);
               out.writeUInt16BE(fail.length, 0);
               fail.copy(out, 2);
-              if (!socket.destroyed) {
-                socket.write(out);
+              if (!socket.destroyed && socket.writable) {
+                try { socket.write(out); } catch (_) {}
               }
             }
           } catch (err) {
             logger.error("[dot] resolve error:", err);
-            if (!socket.destroyed) {
+            if (!socket.destroyed && socket.writable) {
               const fail = makeServfail(dnsQuery);
               if (fail.length >= 2) {
                 fail.writeUInt16BE(clientTxId, 0);
@@ -210,7 +210,7 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
               const out = Buffer.allocUnsafe(2 + fail.length);
               out.writeUInt16BE(fail.length, 0);
               fail.copy(out, 2);
-              socket.write(out);
+              try { socket.write(out); } catch (_) {}
             }
           }
         })();

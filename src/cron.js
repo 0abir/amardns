@@ -13,8 +13,8 @@ function stripQuotes(str) {
 
 export function startCron(worker, env) {
   const schedule = stripQuotes(process.env.CRON_SCHEDULE) || "*/5 * * * *";
-  // Pull upstream DNS list once weekly (default: Sunday at 03:00 UTC)
-  const weeklySchedule = stripQuotes(process.env.UPSTREAM_CRON) || "0 3 * * 0";
+  // Pull upstream DNS list once daily (default: every day at 03:00 UTC)
+  const upstreamSchedule = stripQuotes(process.env.UPSTREAM_CRON) || "0 3 * * *";
   const ctx = {
     waitUntil: (p) =>
       Promise.resolve(p).catch((e) => logger.error("cron waitUntil error:", e)),
@@ -32,14 +32,14 @@ export function startCron(worker, env) {
     }
   }).catch((err) => logger.error("[cron] Failed to load upstream-manager:", err));
 
-  // 2. Weekly Upstream DNS Sync & Aura Ranker
-  const weeklyTask = cron.schedule(weeklySchedule, () => {
-    logger.info("[cron] Running weekly upstream DNS synchronization & aura ranking...");
+  // 2. Daily Upstream DNS Sync & Aura Ranker
+  const upstreamTask = cron.schedule(upstreamSchedule, () => {
+    logger.info("[cron] Running daily upstream DNS synchronization & aura ranking...");
     import("./upstream-manager.js").then(({ syncAndRankUpstreams }) => {
       syncAndRankUpstreams(env, worker).catch((err) => {
-        logger.error("[cron] Weekly upstream sync failed:", err.message);
+        logger.error("[cron] Daily upstream sync failed:", err.message);
       });
-    }).catch((err) => logger.error("[cron] Weekly upstream sync error:", err));
+    }).catch((err) => logger.error("[cron] Daily upstream sync error:", err));
   });
 
   // 3. Main scheduled worker cron (every 5 mins by default)
@@ -76,13 +76,13 @@ export function startCron(worker, env) {
   }, 30000);
   sweepInterval.unref(); // don't prevent clean process shutdown
 
-  logger.info(`[cron] scheduled: "${schedule}" + weekly: "${weeklySchedule}" (upstream sync) + 30s cleaning rotation & memory guard`);
+  logger.info(`[cron] scheduled: "${schedule}" + daily: "${upstreamSchedule}" (upstream sync) + 30s cleaning rotation & memory guard`);
 
   return {
     stop: () => {
       try {
         cronTask.stop();
-        weeklyTask.stop();
+        upstreamTask.stop();
         clearInterval(sweepInterval);
       } catch (e) {
         logger.error("cron stop error:", e.message);

@@ -17,6 +17,14 @@ function getOrCreateClient(origin) {
     sessions.delete(origin);
     try { client.destroy(); } catch (_) {}
   });
+  client.on("goaway", () => {
+    sessions.delete(origin);
+    try { client.destroy(); } catch (_) {}
+  });
+  client.on("frameError", () => {
+    sessions.delete(origin);
+    try { client.destroy(); } catch (_) {}
+  });
   client.on("close", () => {
     sessions.delete(origin);
   });
@@ -47,20 +55,34 @@ if (typeof setInterval !== "undefined") {
  */
 export function queryHttp2(urlStr, queryBuf, timeoutMs = 3500) {
   return new Promise((resolve, reject) => {
+    let timer = null;
+    let req = null;
+    let settled = false;
+
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
+
     try {
       const u = new URL(urlStr);
       const client = getOrCreateClient(u.origin);
-      let settled = false;
 
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         if (!settled) {
           settled = true;
+          if (req) {
+            try { req.close(http2.constants.NGHTTP2_CANCEL); } catch (_) {}
+          }
           reject(new Error("Timeout"));
         }
       }, timeoutMs);
+      if (timer.unref) timer.unref();
 
       const payload = Buffer.isBuffer(queryBuf) ? queryBuf : Buffer.from(queryBuf);
-      const req = client.request({
+      req = client.request({
         ":method": "POST",
         ":path": u.pathname + (u.search || ""),
         "content-type": "application/dns-message",
@@ -75,7 +97,7 @@ export function queryHttp2(urlStr, queryBuf, timeoutMs = 3500) {
         if (status !== 200) {
           if (!settled) {
             settled = true;
-            clearTimeout(timer);
+            cleanup();
             reject(new Error(`HTTP ${status}`));
           }
         }
@@ -85,14 +107,14 @@ export function queryHttp2(urlStr, queryBuf, timeoutMs = 3500) {
       req.on("end", () => {
         if (!settled) {
           settled = true;
-          clearTimeout(timer);
+          cleanup();
           resolve(Buffer.concat(chunks));
         }
       });
       req.on("error", (err) => {
         if (!settled) {
           settled = true;
-          clearTimeout(timer);
+          cleanup();
           reject(err);
         }
       });
@@ -100,7 +122,11 @@ export function queryHttp2(urlStr, queryBuf, timeoutMs = 3500) {
       req.write(payload);
       req.end();
     } catch (err) {
-      reject(err);
+      if (!settled) {
+        settled = true;
+        cleanup();
+        reject(err);
+      }
     }
   });
 }
