@@ -4,6 +4,7 @@
 // Prioritizes "aura" (high > medium > low), ranked by aura + low latency.
 
 import logger from "./logger.js";
+import { queryHttp2 } from "./core/http2-doh.js";
 
 export const DEFAULT_UPSTREAM_FEED =
   "https://cdn.jsdelivr.net/gh/abir614/-@latest/dns-upstream.json";
@@ -94,23 +95,43 @@ export async function probeUpstream(upstream, probeB64, timeoutMs = 3500, probeB
     }
 
     if (!resp || !resp.ok) {
-      resp = await fetch(`${url}?dns=${probeB64}`, {
-        headers: {
-          Accept: "application/dns-message",
-          "User-Agent": "AmarDNS-Probe/1.0",
-          "Cache-Control": "no-store",
-        },
-        signal: AbortSignal.timeout(timeoutMs),
-      });
+      try {
+        resp = await fetch(`${url}?dns=${probeB64}`, {
+          headers: {
+            Accept: "application/dns-message",
+            "User-Agent": "AmarDNS-Probe/1.0",
+            "Cache-Control": "no-store",
+          },
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (_) {}
+    }
+
+    // Fallback to native HTTP/2 for resolvers enforcing HTTP/2 (e.g. Quad9 Anycast POPs)
+    if ((!resp || !resp.ok || resp.status === 505) && body) {
+      try {
+        const h2Start = performance.now();
+        const h2Buf = await queryHttp2(url, body, timeoutMs);
+        if (h2Buf && h2Buf.byteLength >= 12) {
+          const latency = Math.round(performance.now() - h2Start);
+          return {
+            ...upstream,
+            latency: Math.max(1, latency),
+            ok: true,
+            protocol: "h2",
+            lastTested: Date.now(),
+          };
+        }
+      } catch (_) {}
     }
 
     const latency = Math.round(performance.now() - start);
-    if (!resp.ok) {
+    if (!resp || !resp.ok) {
       return {
         ...upstream,
         latency: 9999,
         ok: false,
-        err: `HTTP ${resp.status}`,
+        err: resp ? `HTTP ${resp.status}` : "fetch failed",
         lastTested: Date.now(),
       };
     }

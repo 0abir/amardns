@@ -27,6 +27,7 @@ import {
   nnThreatScore, nnSelectUpstream, nnCacheTTL, nnCacheSignal,
   _perpetualLearnTick, _contextFusion, _charSummary4, _nnStats
 } from "./neural-engine.js";
+import { queryHttp2 } from "./http2-doh.js";
 
 export let _ups = [];
 export let _upScores = [];
@@ -365,21 +366,36 @@ export async function fetchUpstream(dnsQuery, upIdx, signal) {
   if (signal?.aborted) return null;
   const start = Date.now();
   try {
-    // Prefer binary POST (application/dns-message): 3x-8x lower latency and better HTTP/2 multiplexing
-    const resp = await fetch(base, {
-      method: "POST",
-      headers: {
-        "Content-Type": DNS_CT,
-        Accept: DNS_CT,
-        "User-Agent": _rndData(),
-        "Cache-Control": "no-store",
-      },
-      body: dnsQuery,
-      signal: signal || AbortSignal.timeout(_runtimeConfig.fetchTimeoutMs),
-      cf: { cacheEverything: false },
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const buf = await resp.arrayBuffer();
+    let resp = null;
+    let buf = null;
+    try {
+      resp = await fetch(base, {
+        method: "POST",
+        headers: {
+          "Content-Type": DNS_CT,
+          Accept: DNS_CT,
+          "User-Agent": _rndData(),
+          "Cache-Control": "no-store",
+        },
+        body: dnsQuery,
+        signal: signal || AbortSignal.timeout(_runtimeConfig.fetchTimeoutMs),
+        cf: { cacheEverything: false },
+      });
+    } catch (fetchErr) {
+      if (signal?.aborted) return null;
+    }
+
+    if (resp && resp.ok) {
+      buf = await resp.arrayBuffer();
+    } else {
+      // Fallback to native HTTP/2 for resolvers enforcing HTTP/2 (e.g. Quad9 Anycast POPs)
+      const h2Buf = await queryHttp2(base, dnsQuery, _runtimeConfig.fetchTimeoutMs);
+      if (h2Buf && h2Buf.byteLength >= 12) {
+        buf = h2Buf.buffer.slice(h2Buf.byteOffset, h2Buf.byteOffset + h2Buf.byteLength);
+      } else {
+        throw new Error(resp ? `HTTP ${resp.status}` : "Resolution failed");
+      }
+    }
     const latency = Date.now() - start;
     const scores = _upScores[upIdx];
     if (scores) {
