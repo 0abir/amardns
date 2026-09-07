@@ -47,8 +47,8 @@ async function run() {
     assert.ok(aeroCache.getStats().hits >= 1);
     assert.ok(aeroCache.getStats().bytes > 0);
 
-    // 2. Populate PulseDB with blocklists, whitelists, and custom KV
-    console.log("-> 2. Populating PulseDB with blocklists, whitelists, and KV...");
+    // 2. Populate PulseDB with blocklists, whitelists, and custom AERO
+    console.log("-> 2. Populating PulseDB with blocklists, whitelists, and AERO...");
     pulseDb.addBlocklist(["malicious.com", "phishing.net", "tracker.org"], "adware");
     pulseDb.addWhitelist("goodsite.org");
     pulseDb.set("custom:setting", "foo-bar");
@@ -201,8 +201,8 @@ async function run() {
 
     // 11. Verify PulseDB and threat feeds were wiped of old state and reloaded fresh
     console.log("-> 11. Verifying active upstreams and customized feeds loaded right after nuking...");
-    assert.strictEqual(pulseDb.get("custom:setting"), null, "Old custom KV must be wiped");
-    assert.strictEqual(pulseDb.get("user:token"), null, "Old user KV must be wiped");
+    assert.strictEqual(pulseDb.get("custom:setting"), null, "Old custom AERO must be wiped");
+    assert.strictEqual(pulseDb.get("user:token"), null, "Old user AERO must be wiped");
     assert.strictEqual(pulseDb.get("config:dns_mode"), "public", "DNS mode must default to public");
     assert.strictEqual(pulseDb.get("config:auto_heal"), "true");
     assert.ok(pulseDb.get("upstreams:active_urls"), "Baseline active upstreams must be populated");

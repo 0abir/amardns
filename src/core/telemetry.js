@@ -2,7 +2,7 @@
 // Logging, rate tracking, stress metrics, HMAC authentication tokens, and system adaptation loops.
 
 import {
-  OPEN_ACCESS, _enc, KV_BUCKET_CAP, KV_REFILL_PER_MIN,
+  OPEN_ACCESS, _enc, AERO_BUCKET_CAP, AERO_REFILL_PER_MIN,
   HMAC_WINDOW_S, HEATMAP_MAX, FEED_CACHE_MAX, NEG_MAX, EWMA_FAST,
   GSB_CACHE_MAX
 } from "./constants.js";
@@ -21,13 +21,13 @@ import { _clientNX, _cacheTimings, _ttlHistory, _swarmMap, _gsbCache } from "./t
 import { _brainPrune } from "./neural-engine.js";
 
 import {
-  resetStorageQuotas, accountKvWrite, _dayStr, _kvW, _kvR, _d1W, _d1R, _kvThrottle, _d1Throttle,
-  kvPut
+  resetStorageQuotas, accountAeroWrite, _dayStr, _aeroW, _aeroR, _pulseW, _pulseR, _aeroThrottle, _pulseThrottle,
+  aeroPut
 } from "./storage-adapter.js";
 import logger from "../logger.js";
 
-export let _kvBucket = 10;
-export let _kvBucketTs = 0;
+export let _aeroBucket = 10;
+export let _aeroBucketTs = 0;
 export let _rpsSmooth = 0;
 export let _rpsPeak = 0;
 export let _rpsIdx = 0;
@@ -124,17 +124,17 @@ export function _aiDecision(decision, factors) {
   _aiDecisions.push({ t: Date.now(), decision: decision, factors: factors });
   if (_aiDecisions.length > 100) _aiDecisions.shift();
 }
-export function _kvBucketRefill() {
+export function _aeroBucketRefill() {
   const now = Date.now();
-  const elapsed = (now - _kvBucketTs) / 6e4;
-  _kvBucket = Math.min(KV_BUCKET_CAP, _kvBucket + elapsed * KV_REFILL_PER_MIN);
-  _kvBucketTs = now;
+  const elapsed = (now - _aeroBucketTs) / 6e4;
+  _aeroBucket = Math.min(AERO_BUCKET_CAP, _aeroBucket + elapsed * AERO_REFILL_PER_MIN);
+  _aeroBucketTs = now;
 }
-export function _kvCanWrite() {
+export function _aeroCanWrite() {
   return true;
 }
-export function _kvAccountWrite() {
-  accountKvWrite();
+export function _aeroAccountWrite() {
+  accountAeroWrite();
 }
 let _lastDayCheck = 0;
 export function _checkDayReset() {
@@ -360,13 +360,13 @@ export async function checkAuth(path, env, request = null) {
   const hmacKey = await _getHmacKey(env);
 
   // 1. Check VIEW_ONLY scope: Allows dashboard and any GET/HEAD endpoints
-  const okView = await crypto.subtle.verify(
+  const tokenValid = await crypto.subtle.verify(
     "HMAC",
     hmacKey,
     sigBuf,
     _enc.encode(tsHex + (ttlHex || "") + "VIEW_ONLY"),
   );
-  if (okView) {
+  if (tokenValid) {
     if (request) request.authRole = "view";
     return base;
   }
@@ -549,7 +549,7 @@ export function _updateUserEstimate() {
     _anomaly.update(deviceCount);
   }
   _ctx?.waitUntil(
-    kvPut(
+    aeroPut(
       "ai:user:state",
       { kf: { x: _kf.x, P: _kf.P }, estimate: _userEstimate, devices: deviceCount },
       300,

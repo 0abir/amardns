@@ -79,12 +79,12 @@ export const _dtn = _lazy(() => ({
     this.Rp2.bwd(d4pre, this.lr);
     const d2 = this.L3.bwd(d3, this.lr);
     const d2bn = this.BN3.bwd(d2, this.lr * 8);
-    const d1 = this.L2.bwd(d2bn, this.lr);
-    const d1pre = new Float32Array(64);
-    for (let i = 0; i < 64; i++) d1pre[i] = this._a2[i] > 0 ? d1[i] : 0;
-    const d1bn = this.BN2.bwd(d1pre, this.lr * 8);
-    const dIn = this.L1.bwd(d1bn, this.lr);
-    this.Rp1.bwd(d1pre, this.lr);
+    const gOne = this.L2.bwd(d2bn, this.lr);
+    const gOnePre = new Float32Array(64);
+    for (let i = 0; i < 64; i++) gOnePre[i] = this._a2[i] > 0 ? gOne[i] : 0;
+    const gOneBn = this.BN2.bwd(gOnePre, this.lr * 8);
+    const dIn = this.L1.bwd(gOneBn, this.lr);
+    this.Rp1.bwd(gOnePre, this.lr);
     this.calls++;
     const bce = -(
       label * Math.log(p + eps) +
@@ -249,7 +249,7 @@ export const _mha = _lazy(() => ({
       const attnScores = new Float32Array(n);
       const Vs = [];
       for (let i = 0; i < n; i++) {
-        const kv = new Float32Array(this.DIM),
+        const keyVec = new Float32Array(this.DIM),
           vv = new Float32Array(this.DIM);
         for (let j = 0; j < this.DIM; j++) {
           let sk = 0,
@@ -258,11 +258,11 @@ export const _mha = _lazy(() => ({
             sk += this.WK[h2 * 8 * 4 + (j % 16) + l] * (F[i][l] || 0);
             sv += this.WV[h2 * 8 * 4 + (j % 16) + l] * (F[i][l] || 0);
           }
-          kv[j] = sk;
+          keyVec[j] = sk;
           vv[j] = sv;
         }
         let qk = 0;
-        for (let j = 0; j < this.DIM; j++) qk += q[j] * kv[j];
+        for (let j = 0; j < this.DIM; j++) qk += q[j] * keyVec[j];
         attnScores[i] = qk / Math.sqrt(this.DIM) + (this.posBias[i] || 0);
         Vs.push(vv);
       }
@@ -579,8 +579,8 @@ export const _ae = _lazy(() => ({
     this._lastMu = mu;
     this._lastLv = lv;
     this._lastZ = z;
-    const d1 = this.Dec1.fwd(z);
-    const d2 = this.Dec2.fwd(d1);
+    const decA = this.Dec1.fwd(z);
+    const d2 = this.Dec2.fwd(decA);
     const recon = this.Dec3.fwd(d2);
     this._lastRecon = recon;
     let mse = 0;
@@ -624,8 +624,8 @@ export const _ae = _lazy(() => ({
     this.klLoss = 0.997 * this.klLoss + 0.003 * kl;
     this.threshold = Math.max(0.05, this.mseLoss * 3 + this.klLoss * 0.1);
     const d2 = this.Dec3.bwd(dRecon, this.lr);
-    const d1 = this.Dec2.bwd(d2, this.lr);
-    const dz = this.Dec1.bwd(d1, this.lr);
+    const gDec = this.Dec2.bwd(d2, this.lr);
+    const dz = this.Dec1.bwd(gDec, this.lr);
     const dMu = new Float32Array(8),
       dLv = new Float32Array(8);
     for (let i = 0; i < 8; i++) {
@@ -648,7 +648,7 @@ export const _ae = _lazy(() => ({
       E2: this.Enc2.export(),
       EMu: this.EncMu.export(),
       ELv: this.EncLv.export(),
-      D1: this.Dec1.export(),
+      Dec1: this.Dec1.export(),
       D2: this.Dec2.export(),
       D3: this.Dec3.export(),
       thr: this.threshold,
@@ -663,7 +663,7 @@ export const _ae = _lazy(() => ({
     if (d.E2) this.Enc2.import(d.E2);
     if (d.EMu) this.EncMu.import(d.EMu);
     if (d.ELv) this.EncLv.import(d.ELv);
-    if (d.D1) this.Dec1.import(d.D1);
+    if (d.Dec1) this.Dec1.import(d.Dec1);
     if (d.D2) this.Dec2.import(d.D2);
     if (d.D3) this.Dec3.import(d.D3);
     if (d.thr) this.threshold = d.thr;
@@ -810,8 +810,8 @@ export const _rl = _lazy(() => ({
       dLogits[i] =
         (probs[i] - (i === this._lastAction ? 1 : 0)) * -advantage * 0.005;
     const d2 = this.A3.bwd(dLogits, this.lr);
-    const d1 = this.A2.bwd(d2, this.lr);
-    this.A1.bwd(d1, this.lr);
+    const gOne = this.A2.bwd(d2, this.lr);
+    this.A1.bwd(gOne, this.lr);
     const v1 = this.V1.fwd(this._lastState);
     const v2 = this.V2.fwd(v1);
     const vOut = this.V3.fwd(v2);
@@ -961,8 +961,8 @@ export const _neuron = _lazy(() => ({
     const dL = new Float32Array(1);
     dL[0] = out[0] - label;
     const d2 = this.L3.bwd(dL, this.lr);
-    const d1 = this.L2.bwd(d2, this.lr);
-    this.L1.bwd(d1, this.lr);
+    const gOne = this.L2.bwd(d2, this.lr);
+    this.L1.bwd(gOne, this.lr);
     this.calls++;
   },
   export() {
@@ -1000,8 +1000,8 @@ export const _finalNeuron = _lazy(() => ({
     const dL = new Float32Array(1);
     dL[0] = out[0] - label;
     const d2 = this.L3.bwd(dL, this.lr);
-    const d1 = this.L2.bwd(d2, this.lr);
-    this.L1.bwd(d1, this.lr);
+    const gOne = this.L2.bwd(d2, this.lr);
+    this.L1.bwd(gOne, this.lr);
     this.calls++;
   },
   export() {
@@ -1061,8 +1061,8 @@ export const _bnn = _lazy(() => ({
     const dL = new Float32Array(1);
     dL[0] = out - label;
     const d2 = this.L3.bwd(dL, this.lr);
-    const d1 = this.L2.bwd(d2, this.lr);
-    this.L1.bwd(d1, this.lr);
+    const gOne = this.L2.bwd(d2, this.lr);
+    this.L1.bwd(gOne, this.lr);
     this.calls++;
   },
   export() {

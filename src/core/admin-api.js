@@ -3,7 +3,7 @@
 
 import {
   VERSION, ADMIN_CORS_H, NO_CACHE_H, CORS_H, _SEC_H, _enc,
-  D1_WRITE_LIMIT, D1_SOFT_CAP, MAX_CACHE_TTL, MIN_CACHE_TTL,
+  PULSE_WRITE_LIMIT, PULSE_SOFT_CAP, MAX_CACHE_TTL, MIN_CACHE_TTL,
   CB_WINDOW, CB_THRESHOLD, DGA_FLAG_SCORE, DGA_BLOCK_SCORE, DOMAIN_IQ_MAX
 } from "./constants.js";
 import { sanitizeDomain, sanitizePath, sanitizeTtl, escapeHtml } from "./sanitizer.js";
@@ -18,8 +18,8 @@ import {
   _answerHistory, _featCache, _stress, _stressHistory, _rpsSmooth,
   _rpsPeak, _brainDirty, _brainLastSync, _brainSyncBytes, _brainLoadedAt,
   _brainLoaded, _brainInitializing, _listsPreloaded,
-  SAFE_BROWSING_KEYS, BRANDS_LIST, _runtimeConfig, _d1W, _d1R,
-  _kvW, _kvR, _env, _ctx, _dnsMode, _setDnsMode, _blockingEnabled, _setBlockingEnabled, _ups, _bgEnqueue,
+  SAFE_BROWSING_KEYS, BRANDS_LIST, _runtimeConfig, _pulseW, _pulseR,
+  _aeroW, _aeroR, _env, _ctx, _dnsMode, _setDnsMode, _blockingEnabled, _setBlockingEnabled, _ups, _bgEnqueue,
   resetSh, _memBlacklist, _memWhitelist, _memCommon, _feedCache, _userMap, _deviceMap, _bgQueue, _bgQueueHi
 } from "./state.js";
 import {
@@ -44,8 +44,8 @@ import {
   _dtcn, _symbolic, _embNet, _finalNeuron, _rl, clearNeuralModelStates
 } from "./neural-models.js";
 import {
-  kvGet, kvPut, d1Get, d1Put, d1Del, brainSync, brainLoad,
-  setBrainDirty, accountD1Read, _brainExport, _brainImport, _d1Throttle
+  aeroGet, aeroPut, pulseGet, pulsePut, pulseDel, brainSync, brainLoad,
+  setBrainDirty, accountPulseRead, _brainExport, _brainImport, _pulseThrottle
 } from "./storage-adapter.js";
 import { setUpstreams, _lastLbMode, _loadUpstreams } from "./dns-protocol.js";
 
@@ -145,6 +145,25 @@ export function buildStatus(env, request = null) {
     },
     devices: getActiveDevicesList(),
     dnsRequestsTotal: _sh.requests,
+    avgLatency: (() => {
+      const validL = upstreams.map((u) => u.latencyMs).filter((l) => l > 0);
+      return validL.length > 0
+        ? Math.round(validL.reduce((a, b) => a + b, 0) / validL.length)
+        : 14;
+    })(),
+    upstreamsActive: upstreams.filter((u) => u.healthy).length,
+    upstreamsTotal: upstreams.length,
+    blockRate: (() => {
+      const totalBlocks =
+        (_sh.repBlocks || 0) +
+        (_sh.dgaBlocked || 0) +
+        (_sh.rebindBlocks || 0) +
+        (_sh.alikeBlocks || 0) +
+        (_sh.abirBlocks || 0) +
+        (autoBlockActive || 0) +
+        (_sh.crlBlocks || 0);
+      return totalReqs > 0 ? ((totalBlocks / totalReqs) * 100).toFixed(1) + "%" : "0.0%";
+    })(),
     narrative: `${_stress > 0.7 ? "HIGH STRESS" : "Nominal"} · ${rps.toFixed(1)} R/s · ${iqSize} IQ · 20 nets·203k · DTN loss ${_dtn.totalLoss.toFixed(3)} · DTCN:${_nnStats.dtcnClass} · online ${_onlineSince()}`,
     cache: {
       hits: _sh.cacheHits,
@@ -235,8 +254,8 @@ export function buildStatus(env, request = null) {
       recentDecisions: _aiDecisions.slice(-20),
       configDecisions: _configDecisions.slice(-50),
       lbModeChanges: [],
-      dailyUsed: _d1W,
-      dailyCap: D1_WRITE_LIMIT,
+      dailyUsed: _pulseW,
+      dailyCap: PULSE_WRITE_LIMIT,
       alwRemediations: 0,
       rebindLog: [],
       homoglyphLog: [],
@@ -259,17 +278,17 @@ export function buildStatus(env, request = null) {
       emergencyMode: _sh.emergencyMode,
       dailyLimits: "None (Uncapped Dedicated)",
       throttled: false,
-      d1DayWrites: _d1W,
-      d1DayReads: _d1R,
-      d1DayPct: 0,
-      d1ReadPct: 0,
-      d1Throttled: false,
-      d1SoftCapped: false,
-      kvDayWrites: _kvW,
-      kvDayPct: 0,
-      kvThrottled: false,
-      d1ReadThrottled: false,
-      d1ReadSoftCap: false,
+      pulseDayWrites: _pulseW,
+      pulseDayReads: _pulseR,
+      pulseDayPct: 0,
+      pulseReadPct: 0,
+      pulseThrottled: false,
+      pulseSoftCapped: false,
+      aeroDayWrites: _aeroW,
+      aeroDayPct: 0,
+      aeroThrottled: false,
+      pulseReadThrottled: false,
+      pulseReadSoftCap: false,
       recentActions: _actions.slice(-50),
       recentAnomalies: _anomalies.slice(-50),
       selfHealActions: _actions,
@@ -448,7 +467,7 @@ export function _streamJson(data) {
   });
 }
 export async function handleApiRoute(request, path, env, method) {
-  const db = env?.pulseDb || env?.D1_DB;
+  const db = env?.pulseDb || env?.PULSE_DB;
 
   // View-Only Protection: Generated tokens cannot modify settings or generate more tokens
   if (request?.authRole === "view") {
@@ -882,11 +901,11 @@ export async function handleApiRoute(request, path, env, method) {
   }
   if (path === "/api/ai/prune" && method === "POST") {
     _brainPrune();
-    if (db && !_d1Throttle) {
+    if (db && !_pulseThrottle) {
       const now = Math.floor(Date.now() / 1e3);
       await db
         .prepare(
-          "DELETE FROM d1_generic WHERE exp > 0 AND exp < ? AND key NOT LIKE 'ai:brain%'",
+          "DELETE FROM pulse_generic WHERE exp > 0 AND exp < ? AND key NOT LIKE 'ai:brain%'",
         )
         .bind(now)
         .run();
@@ -898,14 +917,14 @@ export async function handleApiRoute(request, path, env, method) {
       markov: _markov.transitions.size,
     });
   }
-  if (path.startsWith("/api/d1-usage")) {
+  if (path.startsWith("/api/pulse-usage")) {
     const url2 = new URL(request.url);
     const days = parseInt(url2.searchParams.get("days") || "30");
     let rows = [];
-    if (db && !_d1Throttle) {
-      accountD1Read();
+    if (db && !_pulseThrottle) {
+      accountPulseRead();
       const res = await db
-        .prepare("SELECT * FROM d1_usage ORDER BY day DESC LIMIT ?")
+        .prepare("SELECT * FROM pulse_usage ORDER BY day DESC LIMIT ?")
         .bind(days)
         .all()
         .catch(() => ({ results: [] }));
@@ -915,22 +934,22 @@ export async function handleApiRoute(request, path, env, method) {
       rows: rows,
       today: {
         day: _utcDay(),
-        writes: _d1W,
-        reads: _d1R,
-        errors: _sh.d1Errors,
-        throttled: _d1Throttle ? 1 : 0,
-        soft_capped: _d1W > D1_WRITE_LIMIT * D1_SOFT_CAP ? 1 : 0,
-        mode: _d1Throttle ? "THROTTLED" : "NORMAL",
+        writes: _pulseW,
+        reads: _pulseR,
+        errors: _sh.pulseErrors,
+        throttled: _pulseThrottle ? 1 : 0,
+        soft_capped: _pulseW > PULSE_WRITE_LIMIT * PULSE_SOFT_CAP ? 1 : 0,
+        mode: _pulseThrottle ? "THROTTLED" : "NORMAL",
         eod_drained: 0,
       },
     });
   }
   if (path.startsWith("/api/ai-learning")) {
     let rows = [];
-    if (db && !_d1Throttle) {
-      accountD1Read();
+    if (db && !_pulseThrottle) {
+      accountPulseRead();
       const res = await db
-        .prepare("SELECT * FROM d1_ai_learning ORDER BY day DESC LIMIT 90")
+        .prepare("SELECT * FROM pulse_ai_learning ORDER BY day DESC LIMIT 90")
         .all()
         .catch(() => ({ results: [] }));
       rows = res.results || [];
@@ -1054,7 +1073,7 @@ export async function handleApiRoute(request, path, env, method) {
         env.aeroCache.clear();
       }
 
-      // 2. Wipe PulseDB storage on disk and in memory (clears tries, kvStore, and truncates WAL to 0 bytes)
+      // 2. Wipe PulseDB storage on disk and in memory (clears tries, aeroStore, and truncates WAL to 0 bytes)
       if (env?.pulseDb && typeof env.pulseDb.wipe === "function") {
         env.pulseDb.wipe();
       }
@@ -1187,7 +1206,7 @@ export async function handleApiRoute(request, path, env, method) {
           database: {
             blocklistDomains: env?.pulseDb?.blocklistTrie?.size || 0,
             whitelistDomains: env?.pulseDb?.whitelistTrie?.size || 0,
-            kvKeys: env?.pulseDb?.kvStore?.size || 0,
+            aeroKeys: env?.pulseDb?.aeroStore?.size || 0,
           },
           upstreams: {
             count: _ups.length,

@@ -4,11 +4,11 @@
 import {
   _BG_SET1, _BG_SET2, _RE_VOWELS, _RE_DIGITS,
   _RE_CONSONANT_RUN, _RE_HYPHENS, FEAT_CACHE_MAX,
-  KV_WRITE_LIMIT, D1_WRITE_LIMIT, CB_THRESHOLD, DGA_FLAG_SCORE, DGA_BLOCK_SCORE, DOMAIN_IQ_MAX
+  AERO_WRITE_LIMIT, PULSE_WRITE_LIMIT, CB_THRESHOLD, DGA_FLAG_SCORE, DGA_BLOCK_SCORE, DOMAIN_IQ_MAX
 } from "./constants.js";
 import {
   _featCache, BRANDS_LIST, _env, _bgEnqueue,
-  _kvThrottle, _domainIQ, _markov, _runtimeConfig, _sh, _rhythm, _budgetAI,
+  _aeroThrottle, _domainIQ, _markov, _runtimeConfig, _sh, _rhythm, _budgetAI,
   _rpsHistory, _anomaly, _cb, _dgaLegit, _ucb, _ups, setBrainDirty
 } from "./state.js";
 import {
@@ -21,10 +21,10 @@ import {
   _meta, _dtcn, _symbolic, _embNet, _finalNeuron, _rl
 } from "./neural-models.js";
 import {
-  _d1Throttle, _d1W, _kvW
+  _pulseThrottle, _pulseW, _aeroW
 } from "./storage-adapter.js";
 import {
-  _kvCanWrite, _kvAccountWrite, _log, _aiDecision,
+  _aeroCanWrite, _aeroAccountWrite, _log, _aiDecision,
   _adaptiveConfigTick, _updateUserEstimate, _memCheck, _stress, _rpsSmooth
 } from "./telemetry.js";
 
@@ -226,8 +226,8 @@ export const _manifold = _lazy(() => ({
     const out = this.fuse(scores17);
     const dL = new Float32Array([out - label]);
     const d2 = this.L3.bwd(dL, this.lr);
-    const d1 = this.L2.bwd(d2, this.lr);
-    this.L1.bwd(d1, this.lr);
+    const gOne = this.L2.bwd(d2, this.lr);
+    this.L1.bwd(gOne, this.lr);
   },
   export() {
     return { L1: this.L1.export(), L2: this.L2.export(), L3: this.L3.export() };
@@ -590,8 +590,8 @@ export const _episodic = (() => {
   function _persistAsync() {
     if (!_dirty) return;
     _dirty = false;
-    const kv = _env?.DNS_KV;
-    if (!kv || _kvThrottle) return;
+    const aero = _env?.DNS_AERO;
+    if (!aero || _aeroThrottle) return;
     const toSave = buffer
       .slice(-200)
       .map((ev) => ({
@@ -601,20 +601,20 @@ export const _episodic = (() => {
         t: ev.ts,
       }));
     _bgEnqueue(async () => {
-      if (_kvThrottle || !_kvCanWrite()) return;
+      if (_aeroThrottle || !_aeroCanWrite()) return;
       try {
-        await _env.DNS_KV.put("ai:episodic", JSON.stringify(toSave), {
+        await _env.DNS_AERO.put("ai:episodic", JSON.stringify(toSave), {
           expirationTtl: 86400,
         });
-        _kvAccountWrite();
+        _aeroAccountWrite();
       } catch (_) {}
     });
   }
   async function load() {
-    const kv = _env?.DNS_KV;
-    if (!kv) return;
+    const aero = _env?.DNS_AERO;
+    if (!aero) return;
     try {
-      const raw = await kv.get("ai:episodic", "text");
+      const raw = await aero.get("ai:episodic", "text");
       if (!raw) return;
       const saved = JSON.parse(raw);
       for (const ev of saved) {
@@ -724,8 +724,8 @@ export const _contextFusion = _lazy(() => ({
     const dL = new Float32Array(1);
     dL[0] = out - label;
     const d2 = this.L3.bwd(dL, this.lr);
-    const d1 = this.L2.bwd(d2, this.lr);
-    this.L1.bwd(d1, this.lr);
+    const gOne = this.L2.bwd(d2, this.lr);
+    this.L1.bwd(gOne, this.lr);
     this.calls++;
   },
   export() {
@@ -900,8 +900,8 @@ export function nnCacheTTL(
     _nnStats.bnnUncertainty,
     Math.min(_rpsSmooth / 100, 1),
     _anomaly.score,
-    _d1W / D1_WRITE_LIMIT,
-    _kvW / KV_WRITE_LIMIT,
+    _pulseW / PULSE_WRITE_LIMIT,
+    _aeroW / AERO_WRITE_LIMIT,
   ]);
   const ttl = _rl.act(state16);
   _nnStats.rlDecisions++;
@@ -1037,12 +1037,12 @@ export function nnLearn(
   }
   if (upIdx !== undefined && latencyMs !== undefined)
     _mha.reward(upIdx, latencyMs, _ups.length);
-  const isThrottled = _d1Throttle || _kvThrottle;
+  const isThrottled = _pulseThrottle || _aeroThrottle;
   if (_nnStats.dtnCalls % 30 === 0) {
     const x8 = new Float32Array([
       _stress,
-      _d1W / D1_WRITE_LIMIT,
-      _kvW / KV_WRITE_LIMIT,
+      _pulseW / PULSE_WRITE_LIMIT,
+      _aeroW / AERO_WRITE_LIMIT,
       Math.min(_rpsSmooth / 100, 1),
       _anomaly.score,
       _domainIQ.map.size / DOMAIN_IQ_MAX,

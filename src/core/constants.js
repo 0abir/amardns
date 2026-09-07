@@ -42,11 +42,11 @@ export const ADMIN_CORS_H = Object.freeze({
   "access-control-max-age": "3600",
   "vary": "Origin",
 });
-export const KV_WRITE_LIMIT = Infinity;
-export const KV_READ_LIMIT = Infinity;
-export const D1_WRITE_LIMIT = Infinity;
-export const D1_READ_LIMIT = Infinity;
-export const D1_SOFT_CAP = 1.0;
+export const AERO_WRITE_LIMIT = Infinity;
+export const AERO_READ_LIMIT = Infinity;
+export const PULSE_WRITE_LIMIT = Infinity;
+export const PULSE_READ_LIMIT = Infinity;
+export const PULSE_SOFT_CAP = 1.0;
 export const BRAIN_SYNC_INTERVAL = 2 * 60 * 1e3;
 export const BRAIN_CHUNK_SIZE = 1e4;
 export const MAX_BODY = 65535;
@@ -152,8 +152,8 @@ export const PRIVATE_SUFFIXES = new Set([
   ".localhost",
 ]);
 
-export const KV_BUCKET_CAP = 10;
-export const KV_REFILL_PER_MIN = 1;
+export const AERO_BUCKET_CAP = 10;
+export const AERO_REFILL_PER_MIN = 1;
 export const DOMAIN_IQ_MAX = 2e3;
 export const HEATMAP_MAX = 2e3;
 export const LEDGER_MAX = 200;

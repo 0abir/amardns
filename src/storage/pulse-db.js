@@ -35,8 +35,8 @@ const OP_BLOCKLIST_DEL = 2;
 const OP_BLOCKLIST_CLEAR = 3;
 const OP_WHITELIST_ADD = 4;
 const OP_WHITELIST_DEL = 5;
-const OP_KV_SET = 6;
-const OP_KV_DEL = 7;
+const OP_AERO_SET = 6;
+const OP_AERO_DEL = 7;
 
 export const NO_MATCH = Object.freeze({ matched: false });
 export const NOT_BLOCKED = Object.freeze({ blocked: false });
@@ -358,7 +358,7 @@ export class PulseDB {
     this.whitelistTrie = new SuffixTrie();
 
     /** @type {Map<string, { value: any, exp: number }>} */
-    this.kvStore = new Map();
+    this.aeroStore = new Map();
 
     this.writeQueue = new AsyncWriteQueue(this);
 
@@ -456,12 +456,12 @@ export class PulseDB {
             this.whitelistTrie.remove(data.domain);
             this.deadRecords++;
             break;
-          case OP_KV_SET:
-            if (this.kvStore.has(data.k)) this.deadRecords++;
-            this.kvStore.set(data.k, { value: data.v, exp: data.exp || 0 });
+          case OP_AERO_SET:
+            if (this.aeroStore.has(data.k)) this.deadRecords++;
+            this.aeroStore.set(data.k, { value: data.v, exp: data.exp || 0 });
             break;
-          case OP_KV_DEL:
-            this.kvStore.delete(data.k);
+          case OP_AERO_DEL:
+            this.aeroStore.delete(data.k);
             this.deadRecords++;
             break;
         }
@@ -607,13 +607,13 @@ export class PulseDB {
    * @returns {any}
    */
   get(key, fallback = null) {
-    const entry = this.kvStore.get(key);
+    const entry = this.aeroStore.get(key);
     if (!entry) return fallback;
     const nowMs = Date.now();
     const nowSec = Math.floor(nowMs / 1000);
     const isExpired = entry.exp > 0 && (entry.exp > 1e11 ? nowMs >= entry.exp : nowSec >= entry.exp);
     if (isExpired) {
-      this.kvStore.delete(key);
+      this.aeroStore.delete(key);
       this.deadRecords++;
       return fallback;
     }
@@ -628,18 +628,18 @@ export class PulseDB {
    */
   set(key, value, ttlSeconds = 0) {
     const exp = ttlSeconds > 0 ? Date.now() + ttlSeconds * 1000 : 0;
-    if (this.kvStore.has(key)) this.deadRecords++;
-    this.kvStore.set(key, { value, exp });
-    this._append(OP_KV_SET, { k: key, v: value, exp });
+    if (this.aeroStore.has(key)) this.deadRecords++;
+    this.aeroStore.set(key, { value, exp });
+    this._append(OP_AERO_SET, { k: key, v: value, exp });
   }
 
   /**
-   * Deletes a key from KV store.
+   * Deletes a key from Aero store.
    * @param {string} key
    */
   delete(key) {
-    if (this.kvStore.delete(key)) {
-      this._append(OP_KV_DEL, { k: key });
+    if (this.aeroStore.delete(key)) {
+      this._append(OP_AERO_DEL, { k: key });
       this.deadRecords++;
       return true;
     }
@@ -654,19 +654,19 @@ export class PulseDB {
   }
 
   /**
-   * Proactively cleans expired keys from in-memory KV store to rotate out stale records.
+   * Proactively cleans expired keys from in-memory Aero store to rotate out stale records.
    * @param {number} [limit=200] Max entries to check/purge per sweep
    * @returns {number} Count of keys cleaned
    */
-  sweepExpiredKV(limit = 200) {
+  sweepExpiredAero(limit = 200) {
     const nowMs = Date.now();
     const nowSec = Math.floor(nowMs / 1000);
     let purged = 0;
-    for (const [k, v] of this.kvStore) {
+    for (const [k, v] of this.aeroStore) {
       if (purged >= limit) break;
       const isExpired = v.exp > 0 && (v.exp > 1e11 ? nowMs >= v.exp : nowSec >= v.exp);
       if (isExpired) {
-        this.kvStore.delete(k);
+        this.aeroStore.delete(k);
         this.deadRecords++;
         purged++;
       }
@@ -740,13 +740,13 @@ export class PulseDB {
         writeFrame(OP_WHITELIST_ADD, w);
       }
 
-      // 3. Write active KV entries (omit expired)
+      // 3. Write active Aero entries (omit expired)
       const nowMs = Date.now();
       const nowSec = Math.floor(nowMs / 1000);
-      for (const [k, v] of this.kvStore) {
+      for (const [k, v] of this.aeroStore) {
         const isExpired = v.exp > 0 && (v.exp > 1e11 ? nowMs >= v.exp : nowSec >= v.exp);
         if (!isExpired) {
-          writeFrame(OP_KV_SET, { k, v: v.value, exp: v.exp });
+          writeFrame(OP_AERO_SET, { k, v: v.value, exp: v.exp });
         }
       }
 
@@ -764,7 +764,7 @@ export class PulseDB {
       // Re-open WAL handle
       this.fd = fs.openSync(this.filePath, "a+");
       this.deadRecords = 0;
-      this.totalRecords = this.blocklistTrie.size + this.whitelistTrie.size + this.kvStore.size;
+      this.totalRecords = this.blocklistTrie.size + this.whitelistTrie.size + this.aeroStore.size;
 
       logger.debug(`[pulsedb] Compaction completed successfully. Total active records: ${this.totalRecords}`);
     } catch (err) {
@@ -777,7 +777,7 @@ export class PulseDB {
 
   /**
    * Completely wipes all records from memory and truncates the WAL file on disk.
-   * Resets blocklist, whitelist, and KV store to zero, then leaves a fresh handle ready for writes.
+   * Resets blocklist, whitelist, and Aero store to zero, then leaves a fresh handle ready for writes.
    */
   wipe() {
     this.writeQueue.queue = [];
@@ -786,7 +786,7 @@ export class PulseDB {
     this.writeQueue.droppedFrames = 0;
     this.blocklistTrie.clear();
     this.whitelistTrie.clear();
-    this.kvStore.clear();
+    this.aeroStore.clear();
     this.deadRecords = 0;
     this.totalRecords = 0;
 
@@ -823,7 +823,7 @@ export class PulseDB {
     return {
       blocklistDomains: this.blocklistTrie.size,
       whitelistDomains: this.whitelistTrie.size,
-      kvKeys: this.kvStore.size,
+      aeroKeys: this.aeroStore.size,
       totalRecords: this.totalRecords,
       deadRecords: this.deadRecords,
       walBytes,

@@ -2,7 +2,7 @@
 // Global runtime state, telemetry containers, queues, and caches.
 
 import {
-  BG_CONCURRENCY, FEED_CACHE_MAX, D1_WRITE_LIMIT
+  BG_CONCURRENCY, FEED_CACHE_MAX, PULSE_WRITE_LIMIT
 } from "./constants.js";
 import logger from "../logger.js";
 
@@ -242,17 +242,17 @@ export const _rndData = () => {
   return ua;
 };
 export let _ISOLATE_ID = null;
-export let _kvW = 0,
-  _kvR = 0,
-  _d1W = 0,
-  _d1R = 0;
-export let _kvThrottle = false,
-  _d1Throttle = false;
+export let _aeroW = 0,
+  _aeroR = 0,
+  _pulseW = 0,
+  _pulseR = 0;
+export let _aeroThrottle = false,
+  _pulseThrottle = false;
 export let _dayStr = "";
-export let _kvBucket = 10;
-export const KV_BUCKET_CAP = 10;
-export const KV_REFILL_PER_MIN = 1;
-export let _kvBucketTs = 0;
+export let _aeroBucket = 10;
+export const AERO_BUCKET_CAP = 10;
+export const AERO_REFILL_PER_MIN = 1;
+export let _aeroBucketTs = 0;
 export const _negCache = new Map();
 export const _autoBlocks = new Map();
 export const _burstMap = new Map();
@@ -288,7 +288,7 @@ export const _sh = {
   panicCount: 0,
   memPressure: false,
   emergencyMode: false,
-  d1Errors: 0,
+  pulseErrors: 0,
   authFails: 0,
   gcCycles: 0,
   answerDrifts: 0,
@@ -707,7 +707,7 @@ export const _ledger = {
 };
 export const _budgetAI = {
   used: 0,
-  limit: D1_WRITE_LIMIT,
+  limit: PULSE_WRITE_LIMIT,
   hourlyBurn: new Float32Array(24),
   learnedBurn: new Float32Array(24),
   learnedBurnN: new Uint16Array(24),

@@ -57,14 +57,14 @@ export function startCron(worker, env) {
   });
 
   // 4. Active Cleaning Rotation Micro-Sweeper & Proactive Memory Guard (every 30 seconds):
-  // - Proactively purges expired DNS wire cache entries and expired KV store keys
+  // - Proactively purges expired DNS wire cache entries and expired Aero store keys
   // - Monitors heap memory; triggers deep sweep if approaching budget to prevent OOM
   const sweepInterval = setInterval(() => {
     if (env.aeroCache && typeof env.aeroCache.sweep === "function") {
       env.aeroCache.sweep(1000);
     }
-    if (env.pulseDb && typeof env.pulseDb.sweepExpiredKV === "function") {
-      env.pulseDb.sweepExpiredKV(200);
+    if (env.pulseDb && typeof env.pulseDb.sweepExpiredAero === "function") {
+      env.pulseDb.sweepExpiredAero(200);
     }
 
     const mem = process.memoryUsage();

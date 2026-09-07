@@ -20,7 +20,7 @@ import {
   _listsPreloaded, setListsPreloaded } from "./state.js";
 import { _log, _action, _aiDecision, _getRps } from "./telemetry.js";
 import { deLeet, _getCandidates } from "./neural-math.js";
-import { kvGet, kvPut, _feedCacheGet, _feedCacheSet, _d1Throttle, _d1W } from "./storage-adapter.js";
+import { aeroGet, aeroPut, _feedCacheGet, _feedCacheSet, _pulseThrottle, _pulseW } from "./storage-adapter.js";
 import { BloomFilter } from "./bloom-filter.js";
 import { NOT_BLOCKED } from "../storage/pulse-db.js";
 
@@ -337,7 +337,7 @@ export async function checkThreatFeeds(domain) {
   _feedCacheSet(cleanDomain, aiBlocked, "ai_fallback");
   return r;
 }
-const KV_CHUNK_BYTES = 1e4;
+const AERO_CHUNK_BYTES = 1e4;
 export const _gsbCache = new Map();
 
 export function _gsbCacheGet(domain) {
@@ -422,7 +422,7 @@ export async function checkGoogleSafeBrowsing(domain) {
 }
 export async function autoBlockSet(domain, reason, ttl = AUTO_BLOCK_TTL, isPeerSync = false) {
   const pdb = _env?.pulseDb;
-  const db = pdb || _env?.D1_DB;
+  const db = pdb || _env?.PULSE_DB;
   const isSafe = checkWhitelist(domain, db) || checkCommon(domain, db);
   if (isSafe) {
     _log("auto_block_skipped_safe", { domain: domain, reason: reason });
@@ -455,18 +455,18 @@ export async function autoBlockSet(domain, reason, ttl = AUTO_BLOCK_TTL, isPeerS
       body: JSON.stringify({ domain, reason, ttl }),
     }).catch(() => {});
   }
-  if (_env?.D1_DB && !_d1Throttle && _budgetAI.canWrite(false)) {
+  if (_env?.PULSE_DB && !_pulseThrottle && _budgetAI.canWrite(false)) {
     const domainSnap = domain,
       reasonSnap = reason,
       expSnap = exp;
     _bgEnqueue(async () => {
-      if (_d1Throttle || !_budgetAI.canWrite(false)) return;
-      _d1W++;
+      if (_pulseThrottle || !_budgetAI.canWrite(false)) return;
+      _pulseW++;
       _budgetAI.track();
       try {
-        await _env.D1_DB
+        await _env.PULSE_DB
           .prepare(
-            "INSERT OR REPLACE INTO d1_autoblock(domain,reason,created_at,exp) VALUES(?,?,?,?)",
+            "INSERT OR REPLACE INTO pulse_autoblock(domain,reason,created_at,exp) VALUES(?,?,?,?)",
           )
           .bind(domainSnap, reasonSnap, Math.floor(Date.now() / 1e3), expSnap)
           .run();
@@ -793,7 +793,7 @@ export async function aiThreatAugment(domain, baseScore) {
   if (dev > 0.35) boost += 5;
   const rhythmFactor = _rhythm.anomalyFactor(_getRps());
   if (rhythmFactor > 2) boost += 8;
-  const rep = await kvGet(`ai:rep:${domain}`, null);
+  const rep = await aeroGet(`ai:rep:${domain}`, null);
   if (rep?.score < 30) boost += 15;
   return Math.min(100, Math.max(0, baseScore + boost));
 }

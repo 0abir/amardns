@@ -77,15 +77,15 @@ async function run() {
     assert.strictEqual(db.checkBlocklist("sub.track.com").blocked, true);
     assert.strictEqual(db.checkBlocklist("allowed.track.com").blocked, false, "Whitelist takes precedence");
 
-    // Key-Value operations & TTL rotation
+    // Aero operations & TTL rotation
     db.set("config:dns_mode", "public");
     assert.strictEqual(db.get("config:dns_mode"), "public");
     db.set("config:test_num", 12345);
     assert.strictEqual(db.get("config:test_num"), 12345);
     db.set("temp:key", "to-be-purged", 1);
     await new Promise((r) => setTimeout(r, 1100));
-    const kvPurged = db.sweepExpiredKV(50);
-    assert.strictEqual(kvPurged, 1, "PulseDB sweepExpiredKV must purge expired KV keys");
+    const aeroPurged = db.sweepExpiredAero(50);
+    assert.strictEqual(aeroPurged, 1, "PulseDB sweepExpiredAero must purge expired Aero keys");
     assert.strictEqual(db.get("temp:key"), null);
 
     const stats = db.getStats();
@@ -102,7 +102,7 @@ async function run() {
     assert.strictEqual(db2.checkBlocklist("track.com").blocked, true, "Blocklist must survive restart");
     assert.strictEqual(db2.checkBlocklist("sub.track.com").blocked, true);
     assert.strictEqual(db2.checkBlocklist("allowed.track.com").blocked, false);
-    assert.strictEqual(db2.get("config:dns_mode"), "public", "KV must survive restart");
+    assert.strictEqual(db2.get("config:dns_mode"), "public", "Aero must survive restart");
     assert.strictEqual(db2.get("config:test_num"), 12345);
 
     // Compaction test

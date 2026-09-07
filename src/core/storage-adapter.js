@@ -1,5 +1,5 @@
 // src/core/storage-adapter.js
-// Key-Value and SQL database compatibility adapters, brain serialization, chunking, and persistence.
+// Aero and Pulse storage compatibility adapters, brain serialization, chunking, and persistence.
 
 import {
   BRAIN_SYNC_INTERVAL, BRAIN_CHUNK_SIZE, IMPORT_CHUNK_CHARS,
@@ -14,7 +14,7 @@ import {
   setBrainLoaded, setBrainLoadedAt, setBrainInitializing, setBrainSyncCount,
   _bgEnqueue, _dgaLegit, _autoBlocks, _ctx, _feedCache
 } from "./state.js";
-import { _kvCanWrite, _kvAccountWrite, _log, _action, setUserEstimate, setStress, _stress, _userEstimate, _userSamples } from "./telemetry.js";
+import { _aeroCanWrite, _aeroAccountWrite, _log, _action, setUserEstimate, setStress, _stress, _userEstimate, _userSamples } from "./telemetry.js";
 import { nnExport, nnImport, _charTransformer, _episodic, _nnStats, _brainPrune } from "./neural-engine.js";
 import {
   _dtn, _moe, _gru, _ae, _spiking, _liquid, _mha, _bnn,
@@ -24,8 +24,8 @@ import {
 
 import { preloadLists as _preloadLists } from "./threat-intelligence.js";
 
-export let _kvW = 0, _kvR = 0, _d1W = 0, _d1R = 0;
-export let _kvThrottle = false, _d1Throttle = false;
+export let _aeroW = 0, _aeroR = 0, _pulseW = 0, _pulseR = 0;
+export let _aeroThrottle = false, _pulseThrottle = false;
 export let _dayStr = "";
 export let _brainDirty = false;
 export let _brainLastSync = 0;
@@ -38,108 +38,108 @@ export let _brainSyncCount = 0;
 export function setBrainDirty(b = true) { _brainDirty = b; }
 export function resetStorageQuotas(today) {
   _dayStr = today;
-  _kvW = 0;
-  _kvR = 0;
-  _d1W = 0;
-  _d1R = 0;
-  _kvThrottle = false;
-  _d1Throttle = false;
+  _aeroW = 0;
+  _aeroR = 0;
+  _pulseW = 0;
+  _pulseR = 0;
+  _aeroThrottle = false;
+  _pulseThrottle = false;
 }
-export function accountKvWrite() { _kvW++; }
-export function accountD1Read() { _d1R++; }
+export function accountAeroWrite() { _aeroW++; }
+export function accountPulseRead() { _pulseR++; }
 
 
-export async function kvGet(key, fallback = null) {
+export async function aeroGet(key, fallback = null) {
   const pdb = _env?.pulseDb;
   if (pdb && typeof pdb.get === "function") {
-    _kvR++;
+    _aeroR++;
     return pdb.get(key, fallback);
   }
-  const kv = _env?.DNS_KV;
-  if (!kv || _kvThrottle) return fallback;
+  const aero = _env?.DNS_AERO;
+  if (!aero || _aeroThrottle) return fallback;
   try {
-    _kvR++;
-    const val = await kv.get(key, "json");
+    _aeroR++;
+    const val = await aero.get(key, "json");
     return val !== null ? val : fallback;
   } catch (e) {
     if (e.message?.includes("limit") || e.message?.includes("quota"))
-      _kvThrottle = true;
+      _aeroThrottle = true;
     return fallback;
   }
 }
-export async function kvPut(key, value, ttl = 3600) {
+export async function aeroPut(key, value, ttl = 3600) {
   const pdb = _env?.pulseDb;
   if (pdb && typeof pdb.set === "function") {
     pdb.set(key, value, ttl);
-    _kvAccountWrite();
+    _aeroAccountWrite();
     return;
   }
-  const kv = _env?.DNS_KV;
-  if (!kv || !_kvCanWrite()) return;
+  const aero = _env?.DNS_AERO;
+  if (!aero || !_aeroCanWrite()) return;
   try {
-    await kv.put(key, JSON.stringify(value), { expirationTtl: ttl });
-    _kvAccountWrite();
+    await aero.put(key, JSON.stringify(value), { expirationTtl: ttl });
+    _aeroAccountWrite();
   } catch (e) {
     if (e.message?.includes("limit") || e.message?.includes("quota"))
-      _kvThrottle = true;
-    _sh.d1Errors++;
+      _aeroThrottle = true;
+    _sh.pulseErrors++;
   }
 }
-export async function d1Get(key, fallback = null) {
+export async function pulseGet(key, fallback = null) {
   const pdb = _env?.pulseDb;
   if (pdb && typeof pdb.get === "function") {
-    _d1R++;
+    _pulseR++;
     return pdb.get(key, fallback);
   }
-  const db = _env?.D1_DB;
-  if (!db || _d1Throttle) return fallback;
+  const db = _env?.PULSE_DB;
+  if (!db || _pulseThrottle) return fallback;
   try {
-    _d1R++;
+    _pulseR++;
     const row = await db
       .prepare(
-        "SELECT value FROM d1_generic WHERE key=? AND (exp=0 OR exp>?) LIMIT 1",
+        "SELECT value FROM pulse_generic WHERE key=? AND (exp=0 OR exp>?) LIMIT 1",
       )
       .bind(key, Math.floor(Date.now() / 1e3))
       .first();
     return row?.value ? JSON.parse(row.value) : fallback;
   } catch (e) {
-    _sh.d1Errors++;
-    if (e.message?.includes("limit")) _d1Throttle = true;
+    _sh.pulseErrors++;
+    if (e.message?.includes("limit")) _pulseThrottle = true;
     return fallback;
   }
 }
-export async function d1Put(key, value, ttlSeconds = 3600) {
+export async function pulsePut(key, value, ttlSeconds = 3600) {
   const pdb = _env?.pulseDb;
   if (pdb && typeof pdb.set === "function") {
     pdb.set(key, value, ttlSeconds);
-    _d1W++;
+    _pulseW++;
     return;
   }
-  const db = _env?.D1_DB;
-  if (!db || _d1Throttle || !_budgetAI.canWrite()) return;
+  const db = _env?.PULSE_DB;
+  if (!db || _pulseThrottle || !_budgetAI.canWrite()) return;
   const exp = ttlSeconds > 0 ? Math.floor(Date.now() / 1e3) + ttlSeconds : 0;
-  _d1W++;
+  _pulseW++;
   _budgetAI.track();
   try {
     await db
-      .prepare("INSERT OR REPLACE INTO d1_generic(key,value,exp) VALUES(?,?,?)")
+      .prepare("INSERT OR REPLACE INTO pulse_generic(key,value,exp) VALUES(?,?,?)")
       .bind(key, typeof value === "string" ? value : JSON.stringify(value), exp)
       .run();
   } catch (e) {
-    _sh.d1Errors++;
-    if (e.message?.includes("limit")) _d1Throttle = true;
+    _sh.pulseErrors++;
+    if (e.message?.includes("limit")) _pulseThrottle = true;
   }
 }
-export async function d1Del(key) {
+export async function pulseDel(key) {
   const pdb = _env?.pulseDb;
   if (pdb && typeof pdb.delete === "function") {
     pdb.delete(key);
     return;
   }
-  const db = _env?.D1_DB;
-  if (!db || _d1Throttle) return;
+  const db = _env?.PULSE_DB;
+  if (!db || _pulseThrottle) return;
   try {
-    await db.prepare("DELETE FROM d1_generic WHERE key=?").bind(key).run();
+    await db.prepare("DELETE FROM pulse_generic WHERE key=?").bind(key).run();
   } catch (_) {}
 }
 export function _brainExportParts() {
@@ -334,11 +334,11 @@ export async function _brainImport(hotStr, markovStr) {
     return false;
   }
 }
-export async function _brainImportParts(kv) {
+export async function _brainImportParts(aero) {
   try {
     const get = async (k) => {
       try {
-        const v = await kvGetChunked(kv, `ai:brain:${k}`);
+        const v = await aeroGetChunked(aero, `ai:brain:${k}`);
         return v || "";
       } catch (_) {
         return "";
@@ -467,13 +467,13 @@ export async function brainLoad(env) {
   if (_brainLoaded || _brainInitializing) return;
   _brainInitializing = true;
   try {
-    const db = env?.D1_DB;
-    if (db && !_d1Throttle) {
+    const db = env?.PULSE_DB;
+    if (db && !_pulseThrottle) {
       try {
         const now = Math.floor(Date.now() / 1e3);
         const abRows = await db
           .prepare(
-            "SELECT domain, reason, exp FROM d1_autoblock WHERE exp=0 OR exp>? LIMIT 500",
+            "SELECT domain, reason, exp FROM pulse_autoblock WHERE exp=0 OR exp>? LIMIT 500",
           )
           .bind(now)
           .all()
@@ -487,23 +487,23 @@ export async function brainLoad(env) {
         }
       } catch (_) {}
     }
-    let d1Loaded = false;
-    if (db && !_d1Throttle) {
-      const hot = await d1Get("ai:brain:hot", null);
+    let pulseLoaded = false;
+    if (db && !_pulseThrottle) {
+      const hot = await pulseGet("ai:brain:hot", null);
       if (hot) {
-        let markovRaw = await d1Get("ai:brain:markov", null);
+        let markovRaw = await pulseGet("ai:brain:markov", null);
         if (!markovRaw) {
           const nChunks = parseInt(
-            await d1Get("ai:brain:markov_chunks", "0"),
+            await pulseGet("ai:brain:markov_chunks", "0"),
             10,
           );
           if (nChunks > 0) {
-            const chunkVals = await Promise.all(
+            const rawChunks = await Promise.all(
               Array.from({ length: nChunks }, (_, i) =>
-                d1Get(`ai:brain:markov_${i}`, ""),
+                pulseGet(`ai:brain:markov_${i}`, ""),
               ),
             );
-            markovRaw = chunkVals
+            markovRaw = rawChunks
               .map((v) => (typeof v === "string" ? v : JSON.stringify(v)))
               .join("");
           }
@@ -544,10 +544,10 @@ export async function brainLoad(env) {
         ];
         const [nnResults, statsStr, rhythmStr, iqChunksStr] = await Promise.all(
           [
-            Promise.all(NN_KEYS.map((k) => d1Get("ai:brain:nn_" + k, null))),
-            d1Get("ai:brain:nn_stats", null),
-            d1Get("ai:brain:rhythm", null),
-            d1Get("ai:brain:iq_chunks", null),
+            Promise.all(NN_KEYS.map((k) => pulseGet("ai:brain:nn_" + k, null))),
+            pulseGet("ai:brain:nn_stats", null),
+            pulseGet("ai:brain:rhythm", null),
+            pulseGet("ai:brain:iq_chunks", null),
           ],
         );
         const nn = {};
@@ -577,7 +577,7 @@ export async function brainLoad(env) {
           if (!isNaN(n) && n > 0) {
             const iqParts = await Promise.all(
               Array.from({ length: n }, (_, i) =>
-                d1Get("ai:brain:iq_" + i, ""),
+                pulseGet("ai:brain:iq_" + i, ""),
               ),
             );
             const iq = iqParts.join("");
@@ -587,7 +587,7 @@ export async function brainLoad(env) {
               } catch (_) {}
           }
         } else {
-          const iqStr = await d1Get("ai:brain:iq", null);
+          const iqStr = await pulseGet("ai:brain:iq", null);
           if (iqStr)
             try {
               _domainIQ.import(
@@ -595,7 +595,7 @@ export async function brainLoad(env) {
               );
             } catch (_) {}
         }
-        d1Loaded = true;
+        pulseLoaded = true;
         if (!_brainLoadedAt) _brainLoadedAt = Date.now();
         if (_brainSyncBytes === 0) {
           const _loadParts = _brainExportParts();
@@ -604,39 +604,39 @@ export async function brainLoad(env) {
             0,
           );
         }
-        _log("brain_loaded_d1", {
+        _log("brain_loaded_pulse", {
           iq: _domainIQ.map.size,
           markov: _markov.transitions.size,
           bytes: _brainSyncBytes,
         });
       }
     }
-    if (!d1Loaded) {
-      const kv = env?.DNS_KV;
-      if (kv && !_kvThrottle) {
+    if (!pulseLoaded) {
+      const aero = env?.DNS_AERO;
+      if (aero && !_aeroThrottle) {
         try {
-          const metaProbe = await kv.get("ai:brain:meta", "text");
+          const metaProbe = await aero.get("ai:brain:meta", "text");
           if (metaProbe && metaProbe !== "1") {
-            await _brainImportParts(kv);
+            await _brainImportParts(aero);
           }
         } catch (_) {}
       }
-      if (!d1Loaded) {
-        const hot = await d1Get("ai:brain:hot", null);
+      if (!pulseLoaded) {
+        const hot = await pulseGet("ai:brain:hot", null);
         if (hot) {
-          let markovRaw2 = await d1Get("ai:brain:markov", null);
+          let markovRaw2 = await pulseGet("ai:brain:markov", null);
           if (!markovRaw2) {
             const nChunks2 = parseInt(
-              await d1Get("ai:brain:markov_chunks", "0"),
+              await pulseGet("ai:brain:markov_chunks", "0"),
               10,
             );
             if (nChunks2 > 0) {
-              const chunkVals2 = await Promise.all(
+              const rawChunks2 = await Promise.all(
                 Array.from({ length: nChunks2 }, (_, i) =>
-                  d1Get(`ai:brain:markov_${i}`, ""),
+                  pulseGet(`ai:brain:markov_${i}`, ""),
                 ),
               );
-              markovRaw2 = chunkVals2
+              markovRaw2 = rawChunks2
                 .map((v) => (typeof v === "string" ? v : JSON.stringify(v)))
                 .join("");
             }
@@ -654,7 +654,7 @@ export async function brainLoad(env) {
       }
     }
     _ctx?.waitUntil(_episodic.load());
-    if (!_listsPreloaded && (env?.pulseDb || env?.D1_DB)) {
+    if (!_listsPreloaded && (env?.pulseDb || env?.PULSE_DB)) {
       await _preloadLists(env).catch(() => {});
     }
     _brainLoaded = true;
@@ -683,58 +683,58 @@ export function _feedCacheSet(domain, blocked, source) {
   _feedCache.set(domain, { blocked: blocked, source: source, ts: Date.now() });
 }
 
-export async function kvPutChunked(kv, key, value, ttl) {
-  if (!kv || !_kvCanWrite()) return;
+export async function aeroPutChunked(aero, key, value, ttl) {
+  if (!aero || !_aeroCanWrite()) return;
   const str = typeof value === "string" ? value : JSON.stringify(value);
-  if (str.length <= KV_CHUNK_BYTES) {
+  if (str.length <= AERO_CHUNK_BYTES) {
     try {
-      await kv.put(key, str, { expirationTtl: ttl });
-      _kvAccountWrite();
+      await aero.put(key, str, { expirationTtl: ttl });
+      _aeroAccountWrite();
     } catch (e) {
       if (e.message?.includes("limit") || e.message?.includes("quota"))
-        _kvThrottle = true;
+        _aeroThrottle = true;
     }
     return;
   }
-  const n = Math.ceil(str.length / KV_CHUNK_BYTES);
+  const n = Math.ceil(str.length / AERO_CHUNK_BYTES);
   _bgEnqueue(async () => {
-    if (!_kvCanWrite()) return;
+    if (!_aeroCanWrite()) return;
     try {
-      await kv.put(`${key}:__n`, String(n), { expirationTtl: ttl });
-      _kvAccountWrite();
+      await aero.put(`${key}:__n`, String(n), { expirationTtl: ttl });
+      _aeroAccountWrite();
     } catch (e) {
       if (e.message?.includes("limit") || e.message?.includes("quota"))
-        _kvThrottle = true;
+        _aeroThrottle = true;
     }
   });
   for (let i = 0; i < n; i++) {
-    const chunk = str.slice(i * KV_CHUNK_BYTES, (i + 1) * KV_CHUNK_BYTES);
+    const chunk = str.slice(i * AERO_CHUNK_BYTES, (i + 1) * AERO_CHUNK_BYTES);
     const chunkKey = `${key}:__c${i}`;
     _bgEnqueue(async () => {
-      if (!_kvCanWrite()) return;
+      if (!_aeroCanWrite()) return;
       try {
-        await kv.put(chunkKey, chunk, { expirationTtl: ttl });
-        _kvAccountWrite();
+        await aero.put(chunkKey, chunk, { expirationTtl: ttl });
+        _aeroAccountWrite();
       } catch (e) {
         if (e.message?.includes("limit") || e.message?.includes("quota"))
-          _kvThrottle = true;
+          _aeroThrottle = true;
       }
     });
   }
 }
-export async function kvGetChunked(kv, key) {
-  if (!kv) return null;
+export async function aeroGetChunked(aero, key) {
+  if (!aero) return null;
   try {
-    const manifest = await kv.get(`${key}:__n`, "text");
+    const manifest = await aero.get(`${key}:__n`, "text");
     if (manifest) {
       const n = parseInt(manifest, 10);
       if (isNaN(n) || n < 1) return null;
       const parts = await Promise.all(
-        Array.from({ length: n }, (_, i) => kv.get(`${key}:__c${i}`, "text")),
+        Array.from({ length: n }, (_, i) => aero.get(`${key}:__c${i}`, "text")),
       );
       return parts.join("") || null;
     }
-    return await kv.get(key, "text");
+    return await aero.get(key, "text");
   } catch (_) {
     return null;
   }
@@ -743,11 +743,11 @@ export async function brainSync(force = false) {
   const now = Date.now();
   if (!force && now - _brainLastSync < BRAIN_SYNC_INTERVAL) return;
   if (!force && !_brainDirty) return;
-  if (_d1Throttle && _kvThrottle) {
-    _log("brain_sync_skipped_throttled", { d1: _d1Throttle, kv: _kvThrottle });
+  if (_pulseThrottle && _aeroThrottle) {
+    _log("brain_sync_skipped_throttled", { pulse: _pulseThrottle, aero: _aeroThrottle });
     return;
   }
-  const db = _env?.pulseDb || _env?.D1_DB;
+  const db = _env?.pulseDb || _env?.PULSE_DB;
   if (!_listsPreloaded && db) _bgEnqueue(() => _preloadLists(_env), true);
   if (!force && !_budgetAI.canWrite(true)) return;
   _brainLastSync = now;
@@ -759,35 +759,35 @@ export async function brainSync(force = false) {
   if (_brainSyncBytes > 9e5) {
     _log("brain_size_warn", {
       bytes: _brainSyncBytes,
-      note: "approaching D1 1MB row limit — consider manual prune",
+      note: "approaching Pulse 1MB row limit — consider manual prune",
     });
   }
   _bgEnqueue(async () => {
     try {
-      if (!_d1Throttle && _budgetAI.canWrite(true)) {
+      if (!_pulseThrottle && _budgetAI.canWrite(true)) {
         const metaVal = parts["meta"] || "";
         if (metaVal) {
-          _d1W++;
+          _pulseW++;
           _budgetAI.track();
-          await d1Put("ai:brain:hot", metaVal, 0).catch(() => {});
+          await pulsePut("ai:brain:hot", metaVal, 0).catch(() => {});
         }
         const statsVal = parts["nn_stats"] || "";
         if (statsVal && statsVal.length < 2e4 && _budgetAI.canWrite(true)) {
-          _d1W++;
+          _pulseW++;
           _budgetAI.track();
-          await d1Put("ai:brain:nn_stats", statsVal, 0).catch(() => {});
+          await pulsePut("ai:brain:nn_stats", statsVal, 0).catch(() => {});
         }
         const markovPlain = parts["markov"] || "";
         const markovChunkCount = parseInt(parts["markov_chunks"] || "0", 10);
         if (markovPlain && _budgetAI.canWrite(true)) {
-          _d1W++;
+          _pulseW++;
           _budgetAI.track();
-          await d1Put("ai:brain:markov", markovPlain, 0).catch(() => {});
+          await pulsePut("ai:brain:markov", markovPlain, 0).catch(() => {});
         } else if (markovChunkCount > 0) {
           if (_budgetAI.canWrite(true)) {
-            _d1W++;
+            _pulseW++;
             _budgetAI.track();
-            await d1Put(
+            await pulsePut(
               "ai:brain:markov_chunks",
               String(markovChunkCount),
               0,
@@ -797,9 +797,9 @@ export async function brainSync(force = false) {
             Array.from({ length: markovChunkCount }, async (_, i) => {
               const chunk = parts[`markov_${i}`] || "";
               if (chunk && _budgetAI.canWrite(true)) {
-                _d1W++;
+                _pulseW++;
                 _budgetAI.track();
-                await d1Put(`ai:brain:markov_${i}`, chunk, 0).catch(() => {});
+                await pulsePut(`ai:brain:markov_${i}`, chunk, 0).catch(() => {});
               }
             }),
           );
@@ -833,54 +833,54 @@ export async function brainSync(force = false) {
           NN_SYNC_KEYS.map(async (k) => {
             const val = parts["nn_" + k];
             if (val && val.length < 5e4 && _budgetAI.canWrite(true)) {
-              _d1W++;
+              _pulseW++;
               _budgetAI.track();
-              await d1Put("ai:brain:nn_" + k, val, 0).catch(() => {});
+              await pulsePut("ai:brain:nn_" + k, val, 0).catch(() => {});
             }
           }),
         );
         const rhythmVal = parts["rhythm"] || "";
         if (rhythmVal && _budgetAI.canWrite(true)) {
-          _d1W++;
+          _pulseW++;
           _budgetAI.track();
-          await d1Put("ai:brain:rhythm", rhythmVal, 0).catch(() => {});
+          await pulsePut("ai:brain:rhythm", rhythmVal, 0).catch(() => {});
         }
         const iqChunks = parts["iq_chunks"] || "";
         const iqWrites = [];
         if (iqChunks && _budgetAI.canWrite(true)) {
-          _d1W++;
+          _pulseW++;
           _budgetAI.track();
           iqWrites.push(
-            d1Put("ai:brain:iq_chunks", iqChunks, 0).catch(() => {}),
+            pulsePut("ai:brain:iq_chunks", iqChunks, 0).catch(() => {}),
           );
         }
         for (let i = 0; i < 5; i++) {
           const iqPart = parts["iq_" + i];
           if (iqPart && _budgetAI.canWrite(true)) {
-            _d1W++;
+            _pulseW++;
             _budgetAI.track();
-            iqWrites.push(d1Put("ai:brain:iq_" + i, iqPart, 0).catch(() => {}));
+            iqWrites.push(pulsePut("ai:brain:iq_" + i, iqPart, 0).catch(() => {}));
           }
         }
         const iqPlain = parts["iq"] || "";
         if (iqPlain && _budgetAI.canWrite(true)) {
-          _d1W++;
+          _pulseW++;
           _budgetAI.track();
-          iqWrites.push(d1Put("ai:brain:iq", iqPlain, 0).catch(() => {}));
+          iqWrites.push(pulsePut("ai:brain:iq", iqPlain, 0).catch(() => {}));
         }
         await Promise.all(iqWrites);
-        const kv = _env?.DNS_KV;
-        if (kv && !_kvThrottle && _kvCanWrite()) {
+        const aero = _env?.DNS_AERO;
+        if (aero && !_aeroThrottle && _aeroCanWrite()) {
           try {
-            await kv.put("ai:brain:probe", "1", { expirationTtl: 172800 });
-            _kvAccountWrite();
+            await aero.put("ai:brain:probe", "1", { expirationTtl: 172800 });
+            _aeroAccountWrite();
           } catch (_) {}
         }
       }
       _log("brain_synced", {
         parts: Object.keys(parts).length,
         bytes: _brainSyncBytes,
-        store: "d1-primary",
+        store: "pulse-primary",
       });
     } catch (e) {
       _log("brain_sync_error", { err: e.message });
