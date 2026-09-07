@@ -2,10 +2,19 @@
 import cron from "node-cron";
 import logger from "./logger.js";
 
+function stripQuotes(str) {
+  if (!str) return str;
+  const s = String(str).trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    return s.slice(1, -1).trim();
+  }
+  return s;
+}
+
 export function startCron(worker, env) {
-  const schedule = process.env.CRON_SCHEDULE || "*/5 * * * *";
+  const schedule = stripQuotes(process.env.CRON_SCHEDULE) || "*/5 * * * *";
   // Pull upstream DNS list once weekly (default: Sunday at 03:00 UTC)
-  const weeklySchedule = process.env.UPSTREAM_CRON || "0 3 * * 0";
+  const weeklySchedule = stripQuotes(process.env.UPSTREAM_CRON) || "0 3 * * 0";
   const ctx = {
     waitUntil: (p) =>
       Promise.resolve(p).catch((e) => logger.error("cron waitUntil error:", e)),
