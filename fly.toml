@@ -1,4 +1,4 @@
-app = "dns"
+app = "amardns"
 primary_region = "sin"
 
 [build]
