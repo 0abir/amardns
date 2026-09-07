@@ -16,6 +16,7 @@ import {
 } from "./telemetry.js";
 import { preloadLists, syncThreatFeeds, checkBlocklist, checkWhitelist } from "./threat-intelligence.js";
 import { setUpstreams, _loadUpstreams, resolveDns } from "./dns-protocol.js";
+import logger from "../logger.js";
 
 let _lastBrandsRaw = null;
 let _lastKeysRaw = null;
@@ -56,7 +57,7 @@ const workerInstance = {
     try {
       return await _handleRequest(request, env, ctx);
     } catch (e) {
-      console.error(
+      logger.error(
         JSON.stringify({
           event: "unhandled_exception",
           err: e?.message,
@@ -81,7 +82,7 @@ export default workerInstance;
 export async function _handleRequest(request, env, ctx) {
   const key = env.DNS_MASTER_KEY;
   if (!key || key.length < 3 || key.length > 50) {
-    console.error(
+    logger.error(
       `Config Error: DNS_MASTER_KEY is ${key ? `length ${key.length}` : "missing"}.`,
     );
     return new Response("WRONG KEY", {

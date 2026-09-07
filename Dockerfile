@@ -31,7 +31,8 @@ ENV NODE_ENV=production \
     PORT=8080 \
     DOT_PORT=8053 \
     DB_PATH=/data/amardns.wal \
-    HOST=::
+    HOST=:: \
+    LOG_LEVEL=warn
 
 USER nonroot
 VOLUME ["/data"]

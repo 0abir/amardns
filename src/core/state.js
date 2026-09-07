@@ -4,6 +4,7 @@
 import {
   BG_CONCURRENCY, FEED_CACHE_MAX, D1_WRITE_LIMIT
 } from "./constants.js";
+import logger from "../logger.js";
 
 // Context & Environment
 export let _env = null;
@@ -26,10 +27,10 @@ export function _setDnsMode(mode, db) {
     try {
       pdb.set("config:dns_mode", m);
     } catch (e) {
-      console.error("Failed to persist dns_mode:", e.message);
+      logger.error("Failed to persist dns_mode:", e.message);
     }
   }
-  console.log(`[settings] DNS access mode set to: ${m.toUpperCase()}`);
+  logger.debug(`[settings] DNS access mode set to: ${m.toUpperCase()}`);
   return _dnsMode;
 }
 export function getDnsMode() { return _dnsMode; }
@@ -46,10 +47,10 @@ export function _setBlockingEnabled(enabled, db) {
     try {
       pdb.set("config:blocking_enabled", _blockingEnabled ? "true" : "false");
     } catch (e) {
-      console.error("Failed to persist blocking_enabled:", e.message);
+      logger.error("Failed to persist blocking_enabled:", e.message);
     }
   }
-  console.log(`[settings] Threat & Ad blocking set to: ${_blockingEnabled ? "ACTIVE" : "DEACTIVATED (PASSTHROUGH)"}`);
+  logger.debug(`[settings] Threat & Ad blocking set to: ${_blockingEnabled ? "ACTIVE" : "DEACTIVATED (PASSTHROUGH)"}`);
   return _blockingEnabled;
 }
 export function getBlockingEnabled() { return _blockingEnabled; }

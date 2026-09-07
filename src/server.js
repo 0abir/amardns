@@ -6,12 +6,13 @@ import fs from "node:fs";
 import { Readable } from "node:stream";
 import core from "./core.js";
 import { buildEnv } from "./env-shim.js";
+import logger from "./logger.js";
 
 const env = buildEnv();
 if (env.pulseDb) {
   core.preloadLists?.(env);
   if (env.pulseDb.whitelistTrie?.size === 0) {
-    core.syncThreatFeeds?.(false, env).catch((e) => console.warn("[feed] Initial threat feed sync deferred:", e.message));
+    core.syncThreatFeeds?.(false, env).catch((e) => logger.warn("[feed] Initial threat feed sync deferred:", e.message));
   }
 }
 core._loadUpstreams?.(env);
@@ -24,7 +25,7 @@ let dotInstance = null;
 
 const ctx = {
   waitUntil: (p) => {
-    Promise.resolve(p).catch((err) => console.error("waitUntil error:", err));
+    Promise.resolve(p).catch((err) => logger.error("waitUntil error:", err));
   },
 };
 
@@ -53,7 +54,7 @@ if (certPath && keyPath && fs.existsSync(certPath) && fs.existsSync(keyPath)) {
     cert: fs.readFileSync(certPath),
     key: fs.readFileSync(keyPath),
   };
-  console.log(`[tls] Loaded TLS certificate from ${certPath}`);
+  logger.info(`[tls] Loaded TLS certificate from ${certPath}`);
 }
 
 // Start DoT Server dynamically if enabled
@@ -62,7 +63,7 @@ if (env.DOT_ENABLED) {
     .then(({ startDotServer }) => {
       dotInstance = startDotServer(core, env, ctx, DOT_PORT, tlsOptions);
     })
-    .catch((err) => console.error("[dot] Failed to start DoT server:", err));
+    .catch((err) => logger.error("[dot] Failed to start DoT server:", err));
 }
 
 // HTTP / DoH request handler
@@ -76,9 +77,6 @@ async function requestHandler(req, res) {
 
   try {
     const proto = tlsOptions ? "https" : "http";
-    if (req.url === "/") {
-      console.log(`[web] Gateway Portal served on "/". To unlock dashboard, enter Master Key or visit: ${proto}://localhost:${PORT}/${env.DNS_MASTER_KEY}`);
-    }
     const url = `${proto}://${req.headers.host || "localhost"}${req.url}`;
     const headers = new Headers(req.headers);
 
@@ -103,7 +101,7 @@ async function requestHandler(req, res) {
       res.end();
     }
   } catch (err) {
-    console.error("adapter_error", err);
+    logger.error("adapter_error", err);
     if (!res.headersSent) res.statusCode = 500;
     res.end("Internal Server Error");
   }
@@ -127,28 +125,28 @@ server.on("connection", (socket) => {
 
 server.on("error", (err) => {
   if (err.code === "EACCES") {
-    console.error(`\n[ERROR] Permission denied binding HTTP/DoH to port ${PORT}.`);
-    console.error(`Ports < 1024 are privileged on Linux and require elevated permissions.`);
-    console.error(`To fix, either:`);
-    console.error(`  1. Run with sudo: sudo npm start`);
-    console.error(`  2. Or grant node permission: sudo setcap 'cap_net_bind_service=+ep' $(which node)`);
-    console.error(`  3. Or specify unprivileged ports: PORT=8080 DOT_PORT=8053 npm start\n`);
+    logger.error(`\n[ERROR] Permission denied binding HTTP/DoH to port ${PORT}.`);
+    logger.error(`Ports < 1024 are privileged on Linux and require elevated permissions.`);
+    logger.error(`To fix, either:`);
+    logger.error(`  1. Run with sudo: sudo npm start`);
+    logger.error(`  2. Or grant node permission: sudo setcap 'cap_net_bind_service=+ep' $(which node)`);
+    logger.error(`  3. Or specify unprivileged ports: PORT=8080 DOT_PORT=8053 npm start\n`);
   } else {
-    console.error("[server] error:", err);
+    logger.error("[server] error:", err);
   }
   process.exit(1);
 });
 
 const HOST = process.env.HOST || "0.0.0.0";
 server.listen(PORT, HOST, () => {
-  console.log(`AmarDNS HTTP/DoH ${tlsOptions ? "(HTTPS)" : "(HTTP)"} listening on ${HOST}:${PORT}`);
+  logger.system(`AmarDNS HTTP/DoH ${tlsOptions ? "(HTTPS)" : "(HTTP)"} listening on ${HOST}:${PORT}`);
 
   // Dynamically start background cron scheduler without blocking port binding
   import("./cron.js")
     .then(({ startCron }) => {
       cronController = startCron(core, env);
     })
-    .catch((err) => console.error("[cron] Failed to start cron scheduler:", err));
+    .catch((err) => logger.error("[cron] Failed to start cron scheduler:", err));
 });
 
 let isShuttingDown = false;
@@ -156,11 +154,11 @@ let isShuttingDown = false;
 function shutdown(signal = "SIGTERM") {
   if (isShuttingDown) return;
   isShuttingDown = true;
-  console.log(`[system] Shutdown signal (${signal}) received, tearing down resources cleanly...`);
+  logger.system(`[system] Shutdown signal (${signal}) received, tearing down resources cleanly...`);
 
   // Hard safety exit watchdog: guarantees the process never hangs indefinitely
   const forceExitTimer = setTimeout(() => {
-    console.warn("[system] Force exit watchdog triggered after 3.5s timeout");
+    logger.warn("[system] Force exit watchdog triggered after 3.5s timeout");
     process.exit(0);
   }, 3500);
   forceExitTimer.unref();
@@ -175,7 +173,7 @@ function shutdown(signal = "SIGTERM") {
     try {
       env.pulseDb.close();
     } catch (e) {
-      console.error("[system] Error closing PulseDB:", e.message);
+      logger.error("[system] Error closing PulseDB:", e.message);
     }
   }
 
@@ -191,7 +189,7 @@ function shutdown(signal = "SIGTERM") {
 
   server.close(() => {
     clearTimeout(forceExitTimer);
-    console.log("[system] All servers and resources closed cleanly. Exiting.");
+    logger.system("[system] All servers and resources closed cleanly. Exiting.");
     process.exit(0);
   });
 
@@ -211,10 +209,10 @@ process.on("SIGHUP", () => shutdown("SIGHUP"));
 
 // Self-Healing Process Protections: catch unexpected errors so the server never hangs
 process.on("uncaughtException", (err) => {
-  console.error("[system] Uncaught Exception caught by self-heal guard:", err);
+  logger.error("[system] Uncaught Exception caught by self-heal guard:", err);
   shutdown("UNCAUGHT_EXCEPTION");
 });
 
 process.on("unhandledRejection", (reason) => {
-  console.error("[system] Unhandled Promise Rejection:", reason);
+  logger.error("[system] Unhandled Promise Rejection:", reason);
 });

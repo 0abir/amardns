@@ -3,6 +3,8 @@
 // Source feed: https://cdn.jsdelivr.net/gh/abir614/-@latest/dns-upstream.json
 // Prioritizes "aura" (high > medium > low), ranked by aura + low latency.
 
+import logger from "./logger.js";
+
 export const DEFAULT_UPSTREAM_FEED =
   "https://cdn.jsdelivr.net/gh/abir614/-@latest/dns-upstream.json";
 
@@ -155,10 +157,10 @@ export function rankUpstreams(probedList) {
 export async function syncAndRankUpstreams(env, worker, options = {}) {
   const feedUrl = options.feedUrl || env?.UPSTREAM_FEED_URL || DEFAULT_UPSTREAM_FEED;
   const timeoutMs = options.probeTimeoutMs || 3500;
-  console.log(`[upstream-syncer] Pulling upstream DNS list from ${feedUrl}...`);
+  logger.debug(`[upstream-syncer] Pulling upstream DNS list from ${feedUrl}...`);
 
   const rawList = await fetchUpstreamFeed(feedUrl);
-  console.log(`[upstream-syncer] Probing ${rawList.length} DoH upstreams in parallel...`);
+  logger.debug(`[upstream-syncer] Probing ${rawList.length} DoH upstreams in parallel...`);
 
   const probePacket = makeDnsProbePacket();
   const probeB64 = queryToBase64Url(probePacket);
@@ -182,9 +184,9 @@ export async function syncAndRankUpstreams(env, worker, options = {}) {
   const activeUpstreams = ranked.slice(0, activeCount);
   const activeUrls = activeUpstreams.map((u) => u.url);
 
-  console.log(`[upstream-syncer] Ranked top ${activeUpstreams.length} active upstreams (3xN pool):`);
+  logger.debug(`[upstream-syncer] Ranked top ${activeUpstreams.length} active upstreams (3xN pool):`);
   activeUpstreams.forEach((u, i) => {
-    console.log(
+    logger.debug(
       `   ${i + 1}. [${(u.aura || "unknown").toUpperCase()}] ${u.provider.padEnd(24)} -> ${u.latency}ms (${u.url})`
     );
   });
@@ -197,7 +199,7 @@ export async function syncAndRankUpstreams(env, worker, options = {}) {
       pdb.set("upstreams:last_sync", String(Date.now()));
       pdb.set("upstreams:active_urls", JSON.stringify(activeUrls));
     } catch (e) {
-      console.error("[upstream-syncer] Failed to persist upstreams to PulseDB:", e.message);
+      logger.error("[upstream-syncer] Failed to persist upstreams to PulseDB:", e.message);
     }
   }
 
@@ -241,13 +243,13 @@ export function loadPersistedUpstreams(env, worker) {
         const activeUrls = ranked.slice(0, activeCount).map((u) => u.url);
         if (worker && typeof worker.setUpstreams === "function") {
           worker.setUpstreams(activeUrls, ranked);
-          console.log(`[upstream-syncer] Loaded ${activeUrls.length} persisted upstreams (3xN pool) from PulseDB (age: ${(ageMs / 86400000).toFixed(1)} days).`);
+          logger.debug(`[upstream-syncer] Loaded ${activeUrls.length} persisted upstreams (3xN pool) from PulseDB (age: ${(ageMs / 86400000).toFixed(1)} days).`);
         }
         const needsSync = isExpired || activeUrls.length < 9 || activeUrls.length % 3 !== 0;
         return { shouldSync: needsSync, loaded: true, count: ranked.length };
       }
     } catch (e) {
-      console.error("[upstream-syncer] Failed to parse saved upstreams:", e.message);
+      logger.error("[upstream-syncer] Failed to parse saved upstreams:", e.message);
     }
   }
 

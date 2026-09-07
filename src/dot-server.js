@@ -6,6 +6,7 @@
 
 import net from "node:net";
 import tls from "node:tls";
+import logger from "./logger.js";
 
 const MAX_DNS_QUERY = 4096;
 
@@ -98,7 +99,7 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
 
     socket.on("error", (err) => {
       if (err.code !== "ECONNRESET" && err.code !== "EPIPE") {
-        console.error("[dot] socket error:", err.message);
+        logger.warn("[dot] socket error:", err.message);
       }
       socket.destroy();
     });
@@ -129,7 +130,7 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
         const msgLen = rxBuf.readUInt16BE(0);
 
         if (msgLen > MAX_DNS_QUERY) {
-          console.warn(`[dot] query size ${msgLen} exceeds max ${MAX_DNS_QUERY}`);
+          logger.warn(`[dot] query size ${msgLen} exceeds max ${MAX_DNS_QUERY}`);
           socket.destroy();
           return;
         }
@@ -184,7 +185,7 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
               }
             }
           } catch (err) {
-            console.error("[dot] resolve error:", err);
+            logger.error("[dot] resolve error:", err);
             if (!socket.destroyed) {
               const fail = makeServfail(dnsQuery);
               if (fail.length >= 2) {
@@ -207,20 +208,20 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
 
   server.on("error", (err) => {
     if (err.code === "EACCES") {
-      console.error(`\n[ERROR] Permission denied binding DoT to port ${port}.`);
-      console.error(`Ports < 1024 are privileged on Linux and require elevated permissions.`);
-      console.error(`To fix, either:`);
-      console.error(`  1. Run with sudo: sudo npm start`);
-      console.error(`  2. Or grant node permission: sudo setcap 'cap_net_bind_service=+ep' $(which node)`);
-      console.error(`  3. Or specify unprivileged ports: PORT=8080 DOT_PORT=8053 npm start\n`);
+      logger.error(`\n[ERROR] Permission denied binding DoT to port ${port}.`);
+      logger.error(`Ports < 1024 are privileged on Linux and require elevated permissions.`);
+      logger.error(`To fix, either:`);
+      logger.error(`  1. Run with sudo: sudo npm start`);
+      logger.error(`  2. Or grant node permission: sudo setcap 'cap_net_bind_service=+ep' $(which node)`);
+      logger.error(`  3. Or specify unprivileged ports: PORT=8080 DOT_PORT=8053 npm start\n`);
     } else {
-      console.error("[dot] server error:", err);
+      logger.error("[dot] server error:", err);
     }
   });
 
   const host = process.env.HOST || "0.0.0.0";
   server.listen(port, host, () => {
-    console.log(`AmarDNS DoT ${tlsOptions ? "(TLS)" : "(TCP)"} listening on ${host}:${port}`);
+    logger.system(`AmarDNS DoT ${tlsOptions ? "(TLS)" : "(TCP)"} listening on ${host}:${port}`);
   });
 
   return {

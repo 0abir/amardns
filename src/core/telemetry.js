@@ -24,6 +24,7 @@ import {
   resetStorageQuotas, accountKvWrite, _dayStr, _kvW, _kvR, _d1W, _d1R, _kvThrottle, _d1Throttle,
   kvPut
 } from "./storage-adapter.js";
+import logger from "../logger.js";
 
 export let _kvBucket = 10;
 export let _kvBucketTs = 0;
@@ -109,7 +110,7 @@ export function _action(action, reason, data = {}) {
   const entry = { t: Date.now(), action: action, reason: reason, ...data };
   _actions.push(entry);
   if (_actions.length > 100) _actions.splice(0, 50);
-  console.log(
+  logger.debug(
     JSON.stringify({
       event: "action",
       action: action,

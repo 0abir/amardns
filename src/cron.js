@@ -1,5 +1,6 @@
 // src/cron.js
 import cron from "node-cron";
+import logger from "./logger.js";
 
 export function startCron(worker, env) {
   const schedule = process.env.CRON_SCHEDULE || "*/5 * * * *";
@@ -7,7 +8,7 @@ export function startCron(worker, env) {
   const weeklySchedule = process.env.UPSTREAM_CRON || "0 3 * * 0";
   const ctx = {
     waitUntil: (p) =>
-      Promise.resolve(p).catch((e) => console.error("cron waitUntil error:", e)),
+      Promise.resolve(p).catch((e) => logger.error("cron waitUntil error:", e)),
   };
 
   // 1. Initial boot check: load persisted upstreams or trigger initial sync asynchronously
@@ -16,27 +17,27 @@ export function startCron(worker, env) {
     if (initStatus.shouldSync && process.env.AUTO_UPSTREAM_SYNC !== "false") {
       setImmediate(() => {
         syncAndRankUpstreams(env, worker).catch((err) => {
-          console.warn("[cron] Initial upstream sync deferred/failed:", err.message);
+          logger.warn("[cron] Initial upstream sync deferred/failed:", err.message);
         });
       });
     }
-  }).catch((err) => console.error("[cron] Failed to load upstream-manager:", err));
+  }).catch((err) => logger.error("[cron] Failed to load upstream-manager:", err));
 
   // 2. Weekly Upstream DNS Sync & Aura Ranker
   const weeklyTask = cron.schedule(weeklySchedule, () => {
-    console.log("[cron] Running weekly upstream DNS synchronization & aura ranking...");
+    logger.info("[cron] Running weekly upstream DNS synchronization & aura ranking...");
     import("./upstream-manager.js").then(({ syncAndRankUpstreams }) => {
       syncAndRankUpstreams(env, worker).catch((err) => {
-        console.error("[cron] Weekly upstream sync failed:", err.message);
+        logger.error("[cron] Weekly upstream sync failed:", err.message);
       });
-    }).catch(console.error);
+    }).catch((err) => logger.error("[cron] Weekly upstream sync error:", err));
   });
 
   // 3. Main scheduled worker cron (every 5 mins by default)
   const cronTask = cron.schedule(schedule, () => {
     worker
       .scheduled({ cron: schedule }, env, ctx)
-      .catch((err) => console.error("scheduled() error:", err));
+      .catch((err) => logger.error("scheduled() error:", err));
 
     // Check PulseDB compaction
     if (env.pulseDb && typeof env.pulseDb.shouldCompact === "function") {
@@ -59,14 +60,14 @@ export function startCron(worker, env) {
 
     const mem = process.memoryUsage();
     if (mem.heapUsed > 140 * 1024 * 1024) {
-      console.warn(`[memory-guard] Elevated heap (${(mem.heapUsed / 1048576).toFixed(1)}MB), executing deep sweep`);
+      logger.warn(`[memory-guard] Elevated heap (${(mem.heapUsed / 1048576).toFixed(1)}MB), executing deep sweep`);
       if (env.aeroCache) env.aeroCache.sweep(5000);
       if (typeof global.gc === "function") global.gc();
     }
   }, 30000);
   sweepInterval.unref(); // don't prevent clean process shutdown
 
-  console.log(`[cron] scheduled: "${schedule}" + weekly: "${weeklySchedule}" (upstream sync) + 30s cleaning rotation & memory guard`);
+  logger.info(`[cron] scheduled: "${schedule}" + weekly: "${weeklySchedule}" (upstream sync) + 30s cleaning rotation & memory guard`);
 
   return {
     stop: () => {
@@ -75,7 +76,7 @@ export function startCron(worker, env) {
         weeklyTask.stop();
         clearInterval(sweepInterval);
       } catch (e) {
-        console.error("cron stop error:", e.message);
+        logger.error("cron stop error:", e.message);
       }
     },
   };

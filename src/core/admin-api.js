@@ -7,6 +7,7 @@ import {
   CB_WINDOW, CB_THRESHOLD, DGA_FLAG_SCORE, DGA_BLOCK_SCORE, DOMAIN_IQ_MAX
 } from "./constants.js";
 import { sanitizeDomain, sanitizePath, sanitizeTtl, escapeHtml } from "./sanitizer.js";
+import logger from "../logger.js";
 // ADMIN_HTML is dynamically imported on demand when /dashboard is requested
 import {
   _upScores, _cb, _upMetadata, _ISOLATE_ID, _userEstimate,
@@ -1005,13 +1006,13 @@ export async function handleApiRoute(request, path, env, method) {
       try {
         await syncThreatFeeds(true, env);
       } catch (feedErr) {
-        console.warn("[nuke] Customized threat feed load deferred:", feedErr.message);
+        logger.warn("[nuke] Customized threat feed load deferred:", feedErr.message);
       }
 
       // Live upstream probing runs asynchronously in the background
       import("../upstream-manager.js").then(({ syncAndRankUpstreams }) => {
         syncAndRankUpstreams(env, { setUpstreams }).catch((err) => {
-          console.warn("[nuke] Upstream live sync error:", err.message);
+          logger.warn("[nuke] Upstream live sync error:", err.message);
         });
       }).catch(() => {});
 

@@ -8,6 +8,7 @@ primary_region = "sin"
   DOT_PORT = "8053"
   CRON_SCHEDULE = "*/5 * * * *"
   DB_PATH = "/data/amardns.wal"
+  LOG_LEVEL = "warn"
 
 [[mounts]]
   source = "amardns_data"

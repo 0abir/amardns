@@ -9,6 +9,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import logger from "../logger.js";
 
 // CRC32 IEEE 802.3 table
 const CRC32_TABLE = new Uint32Array(256);
@@ -304,7 +305,7 @@ class AsyncWriteQueue {
         });
       }
     } catch (err) {
-      console.error("[pulsedb-queue] Background disk write error:", err.message);
+      logger.error("[pulsedb-queue] Background disk write error:", err.message);
     } finally {
       this.isDraining = false;
       if (this.queue.length > 0 && !this.db.isCompacting) {
@@ -326,7 +327,7 @@ class AsyncWriteQueue {
         this.totalBatches++;
         this.totalBytesWritten += combined.length;
       } catch (e) {
-        console.error("[pulsedb-queue] flushSync error:", e.message);
+        logger.error("[pulsedb-queue] flushSync error:", e.message);
         break;
       }
     }
@@ -426,7 +427,7 @@ export class PulseDB {
       const actualCrc = crc32(payloadBuf);
 
       if (actualCrc !== expectedCrc) {
-        console.warn(`[pulsedb] CRC mismatch at offset ${offset}, skipping record`);
+        logger.warn(`[pulsedb] CRC mismatch at offset ${offset}, skipping record`);
         offset += 7 + payloadLen + 4;
         this.deadRecords++;
         continue;
@@ -465,7 +466,7 @@ export class PulseDB {
             break;
         }
       } catch (err) {
-        console.warn(`[pulsedb] Failed parsing payload at offset ${offset}:`, err.message);
+        logger.warn(`[pulsedb] Failed parsing payload at offset ${offset}:`, err.message);
       }
 
       this.totalRecords++;
@@ -765,9 +766,9 @@ export class PulseDB {
       this.deadRecords = 0;
       this.totalRecords = this.blocklistTrie.size + this.whitelistTrie.size + this.kvStore.size;
 
-      console.log(`[pulsedb] Compaction completed successfully. Total active records: ${this.totalRecords}`);
+      logger.debug(`[pulsedb] Compaction completed successfully. Total active records: ${this.totalRecords}`);
     } catch (err) {
-      console.error("[pulsedb] Compaction failed:", err);
+      logger.error("[pulsedb] Compaction failed:", err);
     } finally {
       this.isCompacting = false;
       this.writeQueue.scheduleDrain();
@@ -807,7 +808,7 @@ export class PulseDB {
     fs.writeFileSync(this.filePath, Buffer.alloc(0), { mode: 0o666 });
     this.fd = fs.openSync(this.filePath, "a+", 0o666);
     try { fs.chmodSync(this.filePath, 0o666); } catch (_) {}
-    console.log("[pulsedb] Database wiped clean and reset to zero.");
+    logger.debug("[pulsedb] Database wiped clean and reset to zero.");
   }
 
   /**
