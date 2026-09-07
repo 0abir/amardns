@@ -1,0 +1,47 @@
+# Git and version control
+.git
+.gitignore
+.github
+
+# Environment variables and secrets
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.cert
+certs
+
+# Dependencies (installed inside container via npm install)
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+logs
+
+# Runtime data, storage WALs, and databases
+data
+*.wal
+*.compact
+*.sqlite*
+*.db*
+
+# Local run scripts and deployment manifests
+run.sh
+fly.toml
+Dockerfile*
+.dockerignore
+
+# Test suites and developer documentation
+test
+*.md
+
+# Editor and OS noise
+.idea
+.vscode
+.DS_Store
+Thumbs.db
+tmp
+temp
+scratch

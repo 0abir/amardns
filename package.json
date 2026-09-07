@@ -1,0 +1,16 @@
+{
+  "name": "amardns",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file=.env src/server.js",
+    "test": "node test/test-storage.js && node test/test-access-mode.js && node test/test-dot-doh.js && node test/test-neural-ai.js && node test/test-upstream-sync.js && node test/test-nuke.js"
+  },
+  "dependencies": {
+    "node-cron": "^3.0.3"
+  }
+}
