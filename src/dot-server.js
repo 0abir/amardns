@@ -87,7 +87,7 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
   function onConnection(socket) {
     activeSockets.add(socket);
     socket.setKeepAlive(true, 15000);
-    socket.setTimeout(60000); // 60s idle timeout
+    socket.setTimeout(120000); // 120s idle timeout (RFC 7858)
 
     let rxBuf = Buffer.alloc(0);
     let proxyChecked = false;
@@ -102,7 +102,10 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
     }
 
     socket.on("timeout", () => {
-      socket.destroy();
+      socket.end();
+      setTimeout(() => {
+        if (!socket.destroyed) socket.destroy();
+      }, 1000).unref();
     });
 
     socket.on("error", (err) => {
