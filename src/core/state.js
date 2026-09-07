@@ -633,6 +633,7 @@ export let _brainInitializing = false;
 export let _stressHistory = new Float32Array(10);
 export let _rpsHistory = new Float64Array(60);
 export let _userMap = new Map();
+export let _deviceMap = new Map();
 export let _userRing = new Float32Array(20);
 export {
   _stress, setStress, _stressIdx,

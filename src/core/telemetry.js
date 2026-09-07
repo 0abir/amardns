@@ -11,7 +11,7 @@ import {
   _aiDecisions, _rpsHistory,
   _stressHistory,
   _hmacCache, _sh, _heatmap, _heatmapFlushTs,
-  _runtimeConfig, _lastLbMode, setLastLbMode, _userMap,
+  _runtimeConfig, _lastLbMode, setLastLbMode, _userMap, _deviceMap,
   _userRing, _featCache, _autoBlocks,
   _burstMap, _fpMap, _domainIQ,
   _configDecisions, _kf, _anomaly, _ctx, _feedCache, _negCache, _answerHistory,
@@ -75,6 +75,7 @@ export function resetTelemetry() {
   if (_stressHistory?.fill) _stressHistory.fill(0);
   if (_userRing?.fill) _userRing.fill(0);
   if (_userMap?.clear) _userMap.clear();
+  if (_deviceMap?.clear) _deviceMap.clear();
   if (_heatmap?.clear) _heatmap.clear();
 }
 
@@ -148,10 +149,22 @@ export function _checkDayReset() {
 export function _getRps() {
   return _rpsSmooth;
 }
-export function _trackRequest(clientIp) {
+export function _trackRequest(clientIp, deviceId, deviceType) {
   _sh.requests++;
-  if (clientIp && _userMap.size < 10000) _userMap.set(clientIp, 1);
   const now = Date.now();
+  const devKey = deviceId || clientIp || "device_unknown";
+  if (_deviceMap && _deviceMap.size < 10000) {
+    const existing = _deviceMap.get(devKey);
+    _deviceMap.set(devKey, {
+      lastSeen: now,
+      ip: clientIp || "0.0.0.0",
+      type: deviceType || "doh",
+      count: (existing?.count || 0) + 1,
+    });
+  }
+  if (clientIp && _userMap.size < 10000) _userMap.set(clientIp, now);
+
+  // Observational telemetry only: never blocks or throttles user traffic
   const bucket = Math.floor(now / 1e3);
   if (bucket !== _rpsIdx) {
     const prevCount = _rpsHistory[_rpsIdx % 60] || 0;
@@ -497,39 +510,59 @@ export function _adaptiveConfigTick() {
 }
 export function _updateUserEstimate() {
   const now = Date.now();
-  if (now - _userWinStart < 6e4) return;
-  const count = _userMap.size;
-  _userMap.clear();
+  if (now - _userWinStart < 3e4) return;
   _userWinStart = now;
-  if (count === 0) return;
-  _userRing[_userRingIdx] = count;
+
+  // Active sliding window: 5 minutes (300,000 ms) for active devices
+  const activeCutoff = now - 300000;
+  if (_deviceMap) {
+    for (const [k, v] of _deviceMap) {
+      if (v.lastSeen < activeCutoff) _deviceMap.delete(k);
+    }
+  }
+  if (_userMap) {
+    for (const [k, ts] of _userMap) {
+      if (typeof ts === "number" && ts < activeCutoff) _userMap.delete(k);
+    }
+  }
+
+  const deviceCount = _deviceMap && _deviceMap.size > 0 ? _deviceMap.size : (_userMap?.size || 1);
+  _userRing[_userRingIdx] = deviceCount;
   _userRingIdx = (_userRingIdx + 1) % 20;
   _userSamples++;
   if (!_userRingFull && _userRingIdx === 0) _userRingFull = true;
   _userEwmaFast =
-    _userEwmaFast === 0 ? count : 0.35 * count + 0.65 * _userEwmaFast;
+    _userEwmaFast === 0 ? deviceCount : 0.35 * deviceCount + 0.65 * _userEwmaFast;
   _userEwmaSlow =
-    _userEwmaSlow === 0 ? count : 0.04 * count + 0.96 * _userEwmaSlow;
-  _userPeak = Math.max(_userPeak * 0.997, count);
-  if (_userModeAuto && _userSamples >= 3) {
-    const kfEst = _kf.update(count);
-    const n = _userRingFull ? 20 : _userRingIdx;
+    _userEwmaSlow === 0 ? deviceCount : 0.04 * deviceCount + 0.96 * _userEwmaSlow;
+  _userPeak = Math.max(_userPeak * 0.997, deviceCount);
+  if (_userModeAuto) {
+    const kfEst = _kf.update(deviceCount);
+    const n = _userRingFull ? 20 : Math.max(1, _userRingIdx);
     const sorted = [..._userRing.slice(0, n)].sort((a, b) => a - b);
-    const median = sorted[Math.floor(n / 2)] || count;
-    const blend = Math.min(0.8, _userSamples / 50);
+    const median = sorted[Math.floor(n / 2)] || deviceCount;
+    const blend = Math.min(0.8, _userSamples / 20);
     _userEstimate = Math.max(
       1,
       Math.round(blend * kfEst + (1 - blend) * median),
     );
-    _anomaly.update(count);
+    _anomaly.update(deviceCount);
   }
   _ctx?.waitUntil(
     kvPut(
       "ai:user:state",
-      { kf: { x: _kf.x, P: _kf.P }, estimate: _userEstimate },
+      { kf: { x: _kf.x, P: _kf.P }, estimate: _userEstimate, devices: deviceCount },
       300,
     ),
   );
+}
+
+export function getActiveDeviceCount() {
+  return _deviceMap && _deviceMap.size > 0 ? _deviceMap.size : 1;
+}
+
+export function getActiveIpCount() {
+  return _userMap && _userMap.size > 0 ? _userMap.size : 1;
 }
 export function _memCheck() {
   const MAX_MAP_SIZE = 5e3;

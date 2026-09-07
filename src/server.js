@@ -66,13 +66,32 @@ if (env.DOT_ENABLED) {
     .catch((err) => logger.error("[dot] Failed to start DoT server:", err));
 }
 
+const FLY_MACHINE_ID = process.env.FLY_MACHINE_ID || "";
+const FLY_REGION = process.env.FLY_REGION || "sin";
+
 // HTTP / DoH request handler
 async function requestHandler(req, res) {
   // Health check endpoint — never touches the worker or the master-key check.
   if (req.method === "GET" && req.url === "/health") {
+    if (FLY_MACHINE_ID) res.setHeader("fly-machine-id", FLY_MACHINE_ID);
     res.statusCode = 200;
     res.end("ok");
     return;
+  }
+
+  // Fly.io instance routing / sticky session replay support
+  if (FLY_MACHINE_ID) {
+    const targetInstance =
+      req.headers["fly-force-instance-id"] ||
+      req.headers["cookie"]?.match(/fly_instance=([a-f0-9]+)/)?.[1] ||
+      req.url?.match(/[?&]instance=([a-f0-9]+)/)?.[1];
+
+    if (targetInstance && targetInstance !== FLY_MACHINE_ID) {
+      res.setHeader("fly-replay", `instance=${targetInstance}`);
+      res.statusCode = 200;
+      res.end();
+      return;
+    }
   }
 
   try {
@@ -93,6 +112,11 @@ async function requestHandler(req, res) {
     res.statusCode = response.status;
     for (const [key, value] of response.headers) {
       res.setHeader(key, value);
+    }
+    if (FLY_MACHINE_ID) {
+      res.setHeader("fly-machine-id", FLY_MACHINE_ID);
+      res.setHeader("fly-region", FLY_REGION);
+      res.setHeader("Set-Cookie", `fly_instance=${FLY_MACHINE_ID}; Path=/; SameSite=Lax`);
     }
 
     if (response.body) {

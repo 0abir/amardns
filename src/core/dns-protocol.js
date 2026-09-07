@@ -89,6 +89,40 @@ export function parseDnsQuestion(buf) {
     return null;
   }
 }
+export function extractEdnsBufSize(buf) {
+  try {
+    const view = _view(buf);
+    if (!view || buf.byteLength < 12) return 0;
+    const qdcount = view.getUint16(4);
+    const arcount = view.getUint16(10);
+    if (arcount === 0) return 0;
+    let offset = 12;
+    for (let q = 0; q < qdcount; q++) {
+      while (offset < buf.byteLength) {
+        const len = view.getUint8(offset++);
+        if (len === 0) break;
+        if ((len & 192) === 192) {
+          offset++;
+          break;
+        }
+        offset += len;
+      }
+      offset += 4;
+    }
+    if (offset + 11 <= buf.byteLength) {
+      if (view.getUint8(offset) === 0) {
+        offset++;
+        const rtype = view.getUint16(offset);
+        if (rtype === 41) {
+          return view.getUint16(offset + 2);
+        }
+      }
+    }
+    return 0;
+  } catch (_) {
+    return 0;
+  }
+}
 export function extractAnswerIPs(buf) {
   try {
     const view = _view(buf);
@@ -481,11 +515,13 @@ export async function queryUpstreams(dnsQuery, rps) {
   if (result) ac.abort();
   return result;
 }
-export async function resolveDns(dnsQuery, clientIp, env) {
+export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
   const parsed = parseDnsQuestion(dnsQuery);
   if (!parsed) return new Response(null, { status: 400 });
   const { name: name, qtype: qtype, qdcount: qdcount } = parsed;
-  const rps = _trackRequest(clientIp);
+  const deviceId = clientMeta?.deviceId || clientIp;
+  const deviceType = clientMeta?.deviceType || "generic";
+  const rps = _trackRequest(clientIp, deviceId, deviceType);
   _calcStress(rps);
   const cached = cacheGet(name, qtype);
   if (cached) {

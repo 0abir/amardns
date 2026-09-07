@@ -93,6 +93,8 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
     let proxyChecked = false;
     let clientIp = socket.remoteAddress?.replace(/^::ffff:/, "") || "127.0.0.1";
 
+    let dotDeviceId = `dot-${clientIp}-${socket.remotePort ? (socket.remotePort % 10000) : Math.random().toString(36).slice(2, 6)}`;
+
     socket.on("timeout", () => {
       socket.destroy();
     });
@@ -120,6 +122,7 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
         }
         if (proxyRes.clientIp) {
           clientIp = proxyRes.clientIp;
+          dotDeviceId = `dot-${clientIp}-${socket.remotePort ? (socket.remotePort % 10000) : Math.random().toString(36).slice(2, 6)}`;
         }
         rxBuf = proxyRes.remaining;
         proxyChecked = true;
@@ -153,6 +156,8 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
                 "content-type": "application/dns-message",
                 "content-length": String(dnsQuery.length),
                 "x-forwarded-for": clientIp,
+                "x-device-id": dotDeviceId,
+                "x-device-type": "dot",
               },
               body: dnsQuery,
             });

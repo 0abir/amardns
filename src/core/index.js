@@ -15,11 +15,25 @@ import {
   checkAuthRateLimit, recordAuthFailure, resetAuthFailure
 } from "./telemetry.js";
 import { preloadLists, syncThreatFeeds, checkBlocklist, checkWhitelist } from "./threat-intelligence.js";
-import { setUpstreams, _loadUpstreams, resolveDns } from "./dns-protocol.js";
+import { setUpstreams, _loadUpstreams, resolveDns, extractEdnsBufSize } from "./dns-protocol.js";
 import logger from "../logger.js";
 
 let _lastBrandsRaw = null;
 let _lastKeysRaw = null;
+
+export function detectDevicePlatform(ua) {
+  if (!ua || typeof ua !== "string") return "unknown";
+  const s = ua.toLowerCase();
+  if (s.includes("android")) return "android";
+  if (s.includes("iphone") || s.includes("ipad") || s.includes("ipod") || s.includes("cfnetwork") || s.includes("darwin")) return "ios";
+  if (s.includes("macintosh") || s.includes("mac os")) return "mac";
+  if (s.includes("windows")) return "windows";
+  if (s.includes("cros")) return "chromeos";
+  if (s.includes("linux")) return "linux";
+  if (s.includes("firefox")) return "firefox";
+  if (s.includes("chrome")) return "chrome";
+  return "generic";
+}
 
 const workerInstance = {
   setUpstreams,
@@ -276,9 +290,47 @@ export async function _handleRequest(request, env, ctx) {
     const rawIp =
       request.headers.get("cf-connecting-ip") ||
       request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      request.headers.get("x-real-ip") ||
       "0.0.0.0";
     const clientIp = fnv1a32(rawIp);
-    return await resolveDns(dnsQuery, clientIp, env);
+
+    // Extract device identification (explicit tag or implicit fingerprint)
+    let explicitDev =
+      url.searchParams.get("device") ||
+      url.searchParams.get("client") ||
+      url.searchParams.get("dev") ||
+      url.searchParams.get("name") ||
+      request.headers.get("x-device-id") ||
+      request.headers.get("x-client-id");
+
+    if (!explicitDev && pathname.startsWith("/dns-query/")) {
+      const segs = pathname.slice(11).split("/").filter(Boolean);
+      for (const seg of segs) {
+        if (seg.length !== 72 && seg.length !== 80 && (!env.DNS_MASTER_KEY || seg !== env.DNS_MASTER_KEY)) {
+          explicitDev = seg;
+          break;
+        }
+      }
+    }
+
+    const ua = request.headers.get("user-agent") || "";
+    const devTypeHeader = request.headers.get("x-device-type");
+    const platform = devTypeHeader || detectDevicePlatform(ua);
+    const ednsSize = extractEdnsBufSize(dnsQuery);
+    const uaHash = ua ? fnv1a32(ua.slice(0, 80)) : "";
+
+    const deviceId = explicitDev
+      ? String(explicitDev).slice(0, 64)
+      : fnv1a32(`${rawIp}|${platform}|${ednsSize}|${uaHash}`);
+
+    const clientMeta = {
+      clientIp,
+      deviceId,
+      deviceType: platform,
+      rawIp,
+    };
+
+    return await resolveDns(dnsQuery, clientIp, env, clientMeta);
   }
   const rawIp =
     request.headers.get("cf-connecting-ip") ||

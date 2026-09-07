@@ -20,11 +20,11 @@ import {
   _brainLoaded, _brainInitializing, _listsPreloaded,
   SAFE_BROWSING_KEYS, BRANDS_LIST, _runtimeConfig, _d1W, _d1R,
   _kvW, _kvR, _env, _ctx, _dnsMode, _setDnsMode, _blockingEnabled, _setBlockingEnabled, _ups, _bgEnqueue,
-  resetSh, _memBlacklist, _memWhitelist, _memCommon, _feedCache, _userMap, _bgQueue, _bgQueueHi
+  resetSh, _memBlacklist, _memWhitelist, _memCommon, _feedCache, _userMap, _deviceMap, _bgQueue, _bgQueueHi
 } from "./state.js";
 import {
   _onlineSince, _log, _action, _aiDecision, generateToken, _getRps, fnv1a32, _utcDay, _getHmacKey,
-  resetTelemetry, bufToHex
+  resetTelemetry, bufToHex, getActiveDeviceCount, getActiveIpCount
 } from "./telemetry.js";
 import {
   alikeDomainCheck, dgaScore, syncThreatFeeds, autoBlockSet,
@@ -130,8 +130,18 @@ export function buildStatus(env, request = null) {
         (_sh.repBlocks > 10 ? 25 : 0),
     ),
   );
+  const machineId = (typeof process !== "undefined" && process.env?.FLY_MACHINE_ID) || _ISOLATE_ID;
+  const flyRegion = (typeof process !== "undefined" && process.env?.FLY_REGION) || "sin";
+  const appName = (typeof process !== "undefined" && process.env?.FLY_APP_NAME) || "amardns";
   return {
-    isolateId: _ISOLATE_ID,
+    isolateId: machineId,
+    node: {
+      machineId: machineId,
+      region: flyRegion,
+      appName: appName,
+      activeDevices: getActiveDeviceCount(),
+      activeIps: getActiveIpCount(),
+    },
     dnsRequestsTotal: _sh.requests,
     narrative: `${_stress > 0.7 ? "HIGH STRESS" : "Nominal"} · ${rps.toFixed(1)} R/s · ${iqSize} IQ · 20 nets·203k · DTN loss ${_dtn.totalLoss.toFixed(3)} · DTCN:${_nnStats.dtcnClass} · online ${_onlineSince()}`,
     cache: {
@@ -215,6 +225,8 @@ export function buildStatus(env, request = null) {
       upstreamScores: upstreamScores,
       cts: cts,
       expectedUsers: _userEstimate,
+      activeDevices: getActiveDeviceCount(),
+      activeIps: getActiveIpCount(),
       userScale: (_userEstimate / 10).toFixed(2),
       brainVersion: _nnStats.brainVersion,
       learningCycles: _nnStats.learningCycles,
@@ -385,11 +397,15 @@ export async function handleAdmin(request, url, env, authedPath) {
     }
     const { nonce: nonce, csp: csp } = await _makeAdminCspHeader();
     const { ADMIN_HTML } = await import("./dashboard-html.js");
+    const machineId = (typeof process !== "undefined" && process.env?.FLY_MACHINE_ID) || _ISOLATE_ID;
+    const flyRegion = (typeof process !== "undefined" && process.env?.FLY_REGION) || "sin";
     const html = ADMIN_HTML.replace(
       "var BASE='',",
       "var BASE=" + JSON.stringify(_workerBase) + ",",
     )
       .replace("var _KEY='';", "var _KEY=" + JSON.stringify(_key) + ";")
+      .replace("var _CURRENT_MACHINE_ID='';", "var _CURRENT_MACHINE_ID=" + JSON.stringify(machineId) + ";")
+      .replace("var _FLY_REGION='';", "var _FLY_REGION=" + JSON.stringify(flyRegion) + ";")
       .replace(/<script>/g, `<script nonce="${nonce}">`)
       .replace(/<style>/g, `<style nonce="${nonce}">`);
     return new Response(html, {
@@ -926,6 +942,7 @@ export async function handleApiRoute(request, path, env, method) {
       _memCommon.clear();
       _dgaLegit.clear();
       if (_userMap?.clear) _userMap.clear();
+      if (_deviceMap?.clear) _deviceMap.clear();
       if (_heatmap?.clear) _heatmap.clear();
       _bgQueue.length = 0;
       _bgQueueHi.length = 0;
