@@ -355,6 +355,15 @@ export async function _handleRequest(request, env, ctx) {
     return new Response("Request too large", { status: 413 });
   const authedPath = await checkAuth(pathname, env, request);
   if (authedPath === null || authedPath === OPEN_ACCESS) {
+    if (pathname === "/favicon.ico") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "cache-control": "public, max-age=86400",
+          ...SECURITY_H,
+        },
+      });
+    }
     if (pathname === "/dns-query" || pathname === "/resolve") {
       return new Response("Not Found", { status: 404 });
     }

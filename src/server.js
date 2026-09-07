@@ -79,6 +79,14 @@ async function requestHandler(req, res) {
     return;
   }
 
+  // Favicon handler — prevent 401/404 log noise and CSP issues
+  if (req.url === "/favicon.ico") {
+    res.statusCode = 204;
+    res.setHeader("cache-control", "public, max-age=86400");
+    res.end();
+    return;
+  }
+
   // Fly.io instance routing / sticky session replay support
   if (FLY_MACHINE_ID) {
     const targetInstance =

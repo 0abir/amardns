@@ -1158,11 +1158,11 @@ export async function _makeAdminCspHeader() {
   const nonce = btoa(String.fromCharCode(...raw));
   const csp = [
     "default-src 'none'",
-    `script-src 'nonce-${nonce}'`,
-    `style-src 'unsafe-inline'`,
+    `script-src 'self' 'unsafe-inline' 'unsafe-eval' 'nonce-${nonce}' 'sha256-GnAkdM4av7pyUXIs0Ef48zRcJUVxXgrN5xpfzFfJ9dQ='`,
+    "style-src 'self' 'unsafe-inline'",
     "font-src 'self' data:",
     "connect-src 'self'",
-    "img-src 'none'",
+    "img-src 'self' data:",
     "object-src 'none'",
     "base-uri 'none'",
     "form-action 'none'",
