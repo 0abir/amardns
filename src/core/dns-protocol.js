@@ -539,6 +539,7 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
   const cached = cacheGet(name, qtype);
   if (cached) {
     if (cached.negative) {
+      if (cached.rcode === 3) clientNxCheck(rawClientIp, 3);
       return new Response(
         cached.rcode === 3
           ? makeNxResponse(dnsQuery)
@@ -546,6 +547,7 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
         { headers: { "content-type": DNS_CT, ...DNS_H } },
       );
     }
+    clientNxCheck(rawClientIp, 0);
     nnCacheSignal(true);
     if (clientIp) {
       _ctx?.waitUntil(
@@ -732,9 +734,11 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
     });
   }
   if (rcode !== 0) {
+    clientNxCheck(rawClientIp, rcode);
     negCacheSet(name, qtype, rcode);
     return new Response(buf, { headers: { "content-type": DNS_CT, ...DNS_H } });
   }
+  clientNxCheck(rawClientIp, 0);
   const ips = extractAnswerIPs(buf);
   const ttl = extractTTL(buf) || DEF_CACHE_TTL;
   ttlCheck(name, ttl);

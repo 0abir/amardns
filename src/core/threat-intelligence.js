@@ -761,9 +761,10 @@ export function burstCheck(clientIp) {
   return false;
 }
 const FP_WINDOW_MS = 15000,
-  FP_SCAN_UNIQ = 25,
+  FP_SCAN_UNIQ = 30,
   FP_FLOOD_COUNT = 100,
-  FP_ENTROPY_THR = 3.8;
+  FP_TUNNEL_PAYLOAD_LEN = 28,
+  FP_TUNNEL_ENTROPY = 3.9;
 
 export function fpCheck(clientIp, domain, rps) {
   if (!clientIp) return null;
@@ -774,6 +775,7 @@ export function fpCheck(clientIp, domain, rps) {
     fp = {
       uniqDomains: new Set(),
       queries: 0,
+      tunnelHits: 0,
       firstSeen: now,
       windowStart: now,
       flagged: null,
@@ -784,13 +786,16 @@ export function fpCheck(clientIp, domain, rps) {
   if (now - fp.windowStart > FP_WINDOW_MS) {
     fp.uniqDomains.clear();
     fp.queries = 0;
+    fp.tunnelHits = 0;
     fp.windowStart = now;
-    if (fp.flagged && now - fp.flaggedAt > 60000) {
-      fp.flagged = null;
-    }
+  }
+  if (fp.flagged && now - fp.flaggedAt > 60000) {
+    fp.flagged = null;
+    fp.tunnelHits = 0;
   }
   fp.queries++;
-  if (domain && !isKnownLegitDomain(domain)) {
+  const isLegit = domain ? isKnownLegitDomain(domain) : false;
+  if (domain && !isLegit) {
     fp.uniqDomains.add(domain);
   }
   if (fp.uniqDomains.size > FP_SCAN_UNIQ && !fp.flagged) {
@@ -804,19 +809,25 @@ export function fpCheck(clientIp, domain, rps) {
     _sh.fpEvents++;
     _log("rogue_client_detected", { client: clientIp, type: "QUERY_STRESS", queries: fp.queries });
   }
-  if (domain && domain.length > 25 && !fp.flagged && rps > 3) {
-    const freq = {};
-    for (const c of domain) freq[c] = (freq[c] || 0) + 1;
-    let entropy = 0;
-    for (const c in freq) {
-      const p = freq[c] / domain.length;
-      entropy -= p * Math.log2(p);
-    }
-    if (entropy > FP_ENTROPY_THR) {
-      fp.flagged = "DNS_TUNNEL_SUSPECT";
-      fp.flaggedAt = now;
-      _sh.fpEvents++;
-      _log("rogue_client_detected", { client: clientIp, type: "DNS_TUNNEL_SUSPECT", domain: domain });
+  if (domain && !isLegit && domain.length >= 35 && !fp.flagged) {
+    const label = domain.split(".")[0];
+    if (label && label.length >= FP_TUNNEL_PAYLOAD_LEN) {
+      const freq = {};
+      for (const c of label) freq[c] = (freq[c] || 0) + 1;
+      let entropy = 0;
+      for (const c in freq) {
+        const p = freq[c] / label.length;
+        entropy -= p * Math.log2(p);
+      }
+      if (entropy >= FP_TUNNEL_ENTROPY) {
+        fp.tunnelHits = (fp.tunnelHits || 0) + 1;
+        if (entropy >= 4.2 || fp.tunnelHits >= 2) {
+          fp.flagged = "DNS_TUNNEL_SUSPECT";
+          fp.flaggedAt = now;
+          _sh.fpEvents++;
+          _log("rogue_client_detected", { client: clientIp, type: "DNS_TUNNEL_SUSPECT", domain: domain, entropy: entropy.toFixed(2) });
+        }
+      }
     }
   }
   return fp.flagged;
@@ -836,7 +847,7 @@ export function swarmCheck(domain, clientIp) {
 export const _clientNX = new Map();
 const _CLIENT_NX_MAX = 8e3;
 export function clientNxCheck(clientIp, rcode) {
-  if (rcode !== 3 || !clientIp) return false;
+  if (!clientIp) return false;
   let rec = _clientNX.get(clientIp);
   if (!rec) {
     if (_clientNX.size >= _CLIENT_NX_MAX)
@@ -850,10 +861,10 @@ export function clientNxCheck(clientIp, rcode) {
     rec.total = 0;
     rec.windowStart = now;
   }
-  rec.nx++;
   rec.total++;
-  const rate = rec.total > 10 ? rec.nx / rec.total : 0;
-  if (rate > 0.6) {
+  if (rcode === 3) rec.nx++;
+  const rate = rec.total >= 12 ? rec.nx / rec.total : 0;
+  if (rate >= 0.7) {
     _sh.cnxfAlarms++;
     let fp = _fpMap.get(clientIp);
     if (fp && !fp.flagged) {

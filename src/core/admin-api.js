@@ -197,7 +197,14 @@ export function buildStatus(env, request = null) {
       nxAlarms: _sh.nxAlarms,
       crlHardBlocks: _sh.crlBlocks,
       fpSuspicious: [..._fpMap.entries()]
-        .filter(([, v]) => v.flagged)
+        .filter(([, v]) => {
+          if (!v.flagged) return false;
+          if (Date.now() - v.flaggedAt > 60000) {
+            v.flagged = null;
+            return false;
+          }
+          return true;
+        })
         .map(([ip, v]) => ({ ip: ip, type: v.flagged, queries: v.queries }))
         .slice(0, 20),
       pcbEvents: _sh.pcbEvents,
