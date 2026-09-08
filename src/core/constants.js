@@ -66,6 +66,8 @@ export const _RE_CONSONANT_RUN = /[^aeiou\d\-_]{4,}/g;
 export const _RE_HYPHENS = /-/g;
 export const FEAT_CACHE_MAX = 1e3;
 export const GSB_CACHE_MAX = 5e3;
+export const GSB_CACHE_THREAT_TTL = 24 * 60 * 60 * 1e3;
+export const GSB_CACHE_CLEAN_TTL = 60 * 60 * 1e3;
 
 export const ABIR_FEED = "https://cdn.jsdelivr.net/gh/abir614/-@latest/blocklist.txt";
 export const ABIR_TOTAL_URL =
