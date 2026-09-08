@@ -4,7 +4,7 @@
 import assert from "node:assert";
 import fs from "node:fs";
 import { PulseDB } from "../src/storage/pulse-db.js";
-import { syncThreatFeeds, _abirOk, _commonOk, _abirSet, _commonSet, _abirCrossMatched, _commonCrossMatched } from "../src/core/threat-intelligence.js";
+import { syncThreatFeeds, _abirOk, _commonOk, _abirSet, _commonSet, _abirCrossMatched, _commonCrossMatched, _abirTotalEntries, _commonTotalEntries } from "../src/core/threat-intelligence.js";
 import { setEnv } from "../src/core/state.js";
 
 async function main() {
@@ -27,8 +27,8 @@ async function main() {
   assert.strictEqual(_commonOk, true, "Common whitelist feed must be OK on startup");
   assert.strictEqual(_abirCrossMatched, true, "ABIR blocklist must be 100% cross-matched with total_blocked.txt");
   assert.strictEqual(_commonCrossMatched, true, "Common whitelist must be 100% cross-matched with total_whitelisted.txt");
-  assert.strictEqual(_abirSet.size, 398911, `ABIR blocklist set must match total_blocked.txt exactly (398,911), got ${_abirSet.size}`);
-  assert.strictEqual(_commonSet.size, 2819, `Common whitelist set must match total_whitelisted.txt exactly (2,819), got ${_commonSet.size}`);
+  assert.strictEqual(_abirSet.size, _abirTotalEntries, `ABIR blocklist set (${_abirSet.size}) must match total_blocked.txt (${_abirTotalEntries})`);
+  assert.strictEqual(_commonSet.size, _commonTotalEntries, `Common whitelist set (${_commonSet.size}) must match total_whitelisted.txt (${_commonTotalEntries})`);
 
   console.log(`   ✓ Successfully cross-matched ${_abirSet.size} blocklist and ${_commonSet.size} whitelist domains!`);
 
