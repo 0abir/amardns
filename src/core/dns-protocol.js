@@ -21,7 +21,8 @@ import {
   alikeDomainCheck, checkThreatFeeds, checkGoogleSafeBrowsing,
   autoBlockSet, dgaScore, burstCheck, rebindCheck, qtypeAbuseCheck,
   ttlCheck, answerDriftCheck, swarmCheck, fpCheck, clientNxCheck,
-  aiThreatAugment, poisonGuardCheck, multiQuestionCheck, cbCheck
+  aiThreatAugment, poisonGuardCheck, multiQuestionCheck, cbCheck,
+  isKnownLegitDomain
 } from "./threat-intelligence.js";
 import {
   nnThreatScore, nnSelectUpstream, nnCacheTTL, nnCacheSignal,
@@ -592,7 +593,7 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
     });
   }
   const db = env?.pulseDb;
-  if (checkWhitelist(name, db)) {
+  if (isKnownLegitDomain(name) || checkWhitelist(name, db)) {
     _domainIQ.see(name, "good");
     const result = await queryUpstreams(dnsQuery, rps);
     if (!result?.buf)
@@ -632,7 +633,7 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
     }
 
     // Alike / Homoglyph Brand Impersonation check
-    const alike = alikeDomainCheck(name);
+    const alike = alikeDomainCheck(name, db);
     if (alike.detected) {
       _sh.alikeBlocks++;
       _domainIQ.see(name, "dga");

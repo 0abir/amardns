@@ -54,6 +54,11 @@ export function startCron(worker, env) {
         env.pulseDb.compact();
       }
     }
+
+    // Periodic GC reclaim during maintenance cycle
+    if (typeof global.gc === "function") {
+      try { global.gc(); } catch (_) {}
+    }
   });
 
   // 4. Active Cleaning Rotation Micro-Sweeper & Proactive Memory Guard (every 30 seconds):
@@ -68,10 +73,12 @@ export function startCron(worker, env) {
     }
 
     const mem = process.memoryUsage();
-    if (mem.heapUsed > 140 * 1024 * 1024) {
+    if (mem.heapUsed > 60 * 1024 * 1024) {
       logger.warn(`[memory-guard] Elevated heap (${(mem.heapUsed / 1048576).toFixed(1)}MB), executing deep sweep`);
       if (env.aeroCache) env.aeroCache.sweep(5000);
-      if (typeof global.gc === "function") global.gc();
+      if (typeof global.gc === "function") {
+        try { global.gc(); } catch (_) {}
+      }
     }
   }, 30000);
   sweepInterval.unref(); // don't prevent clean process shutdown

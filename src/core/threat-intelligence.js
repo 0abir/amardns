@@ -37,6 +37,46 @@ export let _whitelistWildcards = new Set();
 export let _abirOk = true;
 export let _commonOk = true;
 
+// Known legitimate root domains of major tech, cloud, CDN, and finance services.
+// Subdomains and compound services of these domains are 100% immune to lookalike false positives.
+export const KNOWN_LEGIT_DOMAINS = new Set([
+  // Google
+  "google.com", "googlesource.com", "googleapis.com", "googleusercontent.com",
+  "googlevideo.com", "googleblog.com", "googlecode.com", "googlecommerce.com",
+  "googleplay.com", "gstatic.com", "ggpht.com", "g.co", "goo.gl", "android.com",
+  "chromium.org", "youtube.com", "ytimg.com", "youtu.be", "gmail.com",
+  // Apple
+  "apple.com", "icloud.com", "mzstatic.com", "aaplimg.com", "apple-dns.net",
+  "apple-mapkit.com", "cdn-apple.com", "apple-cloudkit.com", "apple-livephotoskit.com",
+  // Microsoft
+  "microsoft.com", "live.com", "office.com", "office365.com", "windows.com",
+  "microsoftonline.com", "msftconnecttest.com", "azure.com", "azureedge.net",
+  "skype.com", "bing.com", "msn.com", "xbox.com", "github.com", "githubassets.com",
+  "githubusercontent.com", "github.io",
+  // Amazon
+  "amazon.com", "amazonaws.com", "media-amazon.com", "primevideo.com", "a2z.com",
+  "amazonpay.com", "cloudfront.net",
+  // Meta
+  "facebook.com", "fbcdn.net", "instagram.com", "cdninstagram.com", "whatsapp.com",
+  "whatsapp.net", "meta.com",
+  // Other major tech, finance, CDN & information
+  "twitter.com", "x.com", "twimg.com", "netflix.com", "nflxvideo.net", "nflximg.net",
+  "paypal.com", "paypalobjects.com", "chase.com", "bankofamerica.com", "wellsfargo.com",
+  "citibank.com", "citi.com", "coinbase.com", "binance.com", "openai.com", "anthropic.com",
+  "cloudflare.com", "cloudflare-dns.com", "akamai.net", "akamaized.net", "fastly.net",
+  "wikipedia.org", "wikimedia.org"
+]);
+
+export function isKnownLegitDomain(domain) {
+  if (!domain) return false;
+  let d = domain.toLowerCase();
+  if (d.endsWith(".")) d = d.slice(0, -1);
+  if (KNOWN_LEGIT_DOMAINS.has(d)) return true;
+  for (const root of KNOWN_LEGIT_DOMAINS) {
+    if (d.endsWith("." + root)) return true;
+  }
+  return false;
+}
 
 export async function syncThreatFeeds(force = false, env = null, options = {}) {
   const now = Date.now();
@@ -423,7 +463,7 @@ export async function checkGoogleSafeBrowsing(domain) {
 export async function autoBlockSet(domain, reason, ttl = AUTO_BLOCK_TTL, isPeerSync = false) {
   const pdb = _env?.pulseDb;
   const db = pdb || _env?.PULSE_DB;
-  const isSafe = checkWhitelist(domain, db) || checkCommon(domain, db);
+  const isSafe = isKnownLegitDomain(domain) || checkWhitelist(domain, db) || checkCommon(domain, db);
   if (isSafe) {
     _log("auto_block_skipped_safe", { domain: domain, reason: reason });
     return;
@@ -494,79 +534,72 @@ export function _levenshtein(s1, s2) {
   }
   return prev[n];
 }
-export function alikeDomainCheck(domain) {
+export function alikeDomainCheck(domain, db = null) {
   if (!domain) return { detected: false };
-  const parts = domain.split(".");
+  let d = domain.toLowerCase();
+  if (d.endsWith(".")) d = d.slice(0, -1);
+
+  // 1. Mandatory Whitelist & Known Legit Domains immunity
+  if (isKnownLegitDomain(d)) return { detected: false };
+  const pdb = _env?.pulseDb || db;
+  if (checkWhitelist(d, pdb)) return { detected: false };
+
+  const parts = d.split(".");
   if (parts.length < 2) return { detected: false };
-  const label = parts[parts.length - 2].toLowerCase();
-  if (/xn--/.test(domain)) {
-    return { detected: true, reason: "idn_lookalike" };
-  }
+  const label = parts[parts.length - 2];
+
+  // 2. Homoglyph Script Mixing Check (e.g. Latin + Cyrillic/Greek in the same label)
   const hasLatin = /[a-z]/.test(label);
   const hasCyrillic = /[\u0400-\u04ff]/.test(label);
   const hasGreek = /[\u0370-\u03ff]/.test(label);
   if ((hasCyrillic || hasGreek) && hasLatin) {
     return { detected: true, reason: "script_mix_lookalike" };
   }
+
   const normalized = label.replace(/[^a-z0-9]/g, "");
   const deLeeted = deLeet(label).replace(/[^a-z0-9]/g, "");
-  const SAFE_EXT = [
-    "apis",
-    "static",
-    "cdn",
-    "content",
-    "usercontent",
-    "status",
-    "analytics",
+
+  const PHISH_KEYWORDS = [
+    "-login", "-signin", "-verify", "-verification", "-security", "-secure",
+    "-account", "-billing", "-support", "-auth", "-portal", "-update"
   ];
+
   for (const brand of BRANDS_LIST) {
+    // 3. Leet lookalike: exact brand matches when leet substitutions are reversed
+    // e.g. "paypa1" -> deLeet is "paypal", but normalized is "paypa1"
     if (deLeeted === brand && normalized !== brand) {
-      return { detected: true, reason: "leet_lookalike", brand: brand };
+      return { detected: true, reason: "typosquatting", brand: brand };
     }
-    const dist = _levenshtein(normalized, brand);
-    if (
-      dist > 0 &&
-      dist <= 2 &&
-      normalized.length >= 4 &&
-      normalized.length >= brand.length - 1
-    ) {
-      let isSafeExt = false;
-      for (const ext of SAFE_EXT) {
-        if (normalized === brand + ext) {
-          isSafeExt = true;
-          break;
-        }
-      }
-      if (!isSafeExt && parts.length <= 2)
+
+    // 4. Typosquatting: edit distance of 1 on 2-level domains (e.g. paypall.com, gogle.com)
+    if (parts.length <= 2 && Math.abs(normalized.length - brand.length) <= 1) {
+      const dist = _levenshtein(normalized, brand);
+      if (dist === 1 && normalized !== brand) {
         return { detected: true, reason: "typosquatting", brand: brand };
-    }
-    if (normalized !== brand && normalized.includes(brand)) {
-      let isSafeExt = false;
-      for (const ext of SAFE_EXT) {
-        if (normalized === brand + ext) {
-          isSafeExt = true;
-          break;
-        }
       }
-      if (isSafeExt) continue;
-      if (normalized.length <= brand.length + 7) {
+    }
+
+    // 5. De-leeted typosquatting
+    if (parts.length <= 2 && Math.abs(deLeeted.length - brand.length) <= 1 && normalized !== deLeeted) {
+      const dist = _levenshtein(deLeeted, brand);
+      if (dist === 1 && deLeeted !== brand) {
+        return { detected: true, reason: "typosquatting", brand: brand };
+      }
+    }
+
+    // 6. Phishing compound domain with suspicious action keywords (e.g. paypal-login-verify.com)
+    for (const kw of PHISH_KEYWORDS) {
+      if (label.includes(brand + kw) || label.includes(kw.slice(1) + "-" + brand)) {
         return { detected: true, reason: "brand_impersonation", brand: brand };
       }
     }
-    if (
-      deLeeted !== brand &&
-      deLeeted.includes(brand) &&
-      normalized !== deLeeted
-    ) {
-      if (deLeeted.length <= brand.length + 7) {
-        return { detected: true, reason: "leet_impersonation", brand: brand };
-      }
-    }
   }
+
   return { detected: false };
 }
 export function dgaScore(domain) {
   if (!domain) return 0;
+  if (isKnownLegitDomain(domain) || checkWhitelist(domain, _env?.pulseDb)) return 0;
   const parts = domain.split(".");
   if (parts.length < 2) return 100;
   const label = parts[parts.length - 2];
@@ -874,8 +907,8 @@ export function checkBlocklist(domain, db) {
   if (d.endsWith(".")) d = d.slice(0, -1);
   const pdb = _env?.pulseDb || db;
 
-  // RULE 1: Whitelist ALWAYS prioritizes! If it is in whitelist (exact or wildcard), PASS!
-  if (checkWhitelist(d, pdb)) {
+  // RULE 1: Whitelist & Known Legit Domains ALWAYS prioritize! If in whitelist, PASS!
+  if (isKnownLegitDomain(d) || checkWhitelist(d, pdb)) {
     return NOT_BLOCKED;
   }
 

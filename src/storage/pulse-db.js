@@ -72,7 +72,10 @@ export class SuffixTrie {
    * @returns {string[]}
    */
   _reversedLabels(domain) {
-    return domain.toLowerCase().replace(/\.$/, "").split(".").reverse();
+    let clean = domain.toLowerCase().replace(/\.$/, "");
+    if (clean.startsWith("*.")) clean = clean.slice(2);
+    else if (clean.startsWith(".")) clean = clean.slice(1);
+    return clean.split(".").reverse();
   }
 
   /**
@@ -534,6 +537,10 @@ export class PulseDB {
     for (const d of arr) {
       const clean = d.trim().toLowerCase();
       if (!clean) continue;
+      // Never add a whitelisted domain to the blocklist
+      if (this.whitelistTrie && this.whitelistTrie.check(clean).matched) {
+        continue;
+      }
       this.blocklistTrie.add(clean, reason, source, now);
       this._append(OP_BLOCKLIST_ADD, { domain: clean, reason, source, createdAt: now });
       count++;
@@ -574,24 +581,32 @@ export class PulseDB {
     return this.blocklistTrie.list(limit);
   }
 
-  // --- Whitelist API ---
-
   addWhitelist(domain) {
-    const clean = domain.trim().toLowerCase();
-    if (!clean) return;
+    const list = Array.isArray(domain) ? domain : [domain];
     const now = Date.now();
-    this.whitelistTrie.add(clean, "whitelist", "admin", now);
-    this._append(OP_WHITELIST_ADD, { domain: clean, createdAt: now });
+    for (const d of list) {
+      if (typeof d !== "string") continue;
+      const clean = d.trim().toLowerCase();
+      if (!clean) continue;
+      this.whitelistTrie.add(clean, "whitelist", "admin", now);
+      this._append(OP_WHITELIST_ADD, { domain: clean, createdAt: now });
+    }
   }
 
   removeWhitelist(domain) {
-    const clean = domain.trim().toLowerCase();
-    const removed = this.whitelistTrie.remove(clean);
-    if (removed) {
-      this._append(OP_WHITELIST_DEL, { domain: clean });
-      this.deadRecords++;
+    const list = Array.isArray(domain) ? domain : [domain];
+    let removedAny = false;
+    for (const d of list) {
+      if (typeof d !== "string") continue;
+      const clean = d.trim().toLowerCase();
+      const removed = this.whitelistTrie.remove(clean);
+      if (removed) {
+        this._append(OP_WHITELIST_DEL, { domain: clean });
+        this.deadRecords++;
+        removedAny = true;
+      }
     }
-    return removed;
+    return removedAny;
   }
 
   listWhitelist(limit = 1000) {
