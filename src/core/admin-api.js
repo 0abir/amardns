@@ -1074,22 +1074,38 @@ export async function handleApiRoute(request, path, env, method) {
       const isPeerSync = request.headers.get("x-peer-sync") === "1";
       if (!isPeerSync && process.env.FLY_APP_NAME) {
         const port = process.env.PORT || 8080;
-        const peerHost = `http://${process.env.FLY_APP_NAME}.internal:${port}/api/nuke`;
+        const masterKey = env?.DNS_MASTER_KEY || "abir";
         const syncHdrs = {
           "x-peer-sync": "1",
+          "x-auth-key": masterKey,
+          "authorization": "Bearer " + masterKey,
           "content-type": "application/json"
         };
-        const auth = request.headers.get("authorization");
-        if (auth) syncHdrs["authorization"] = auth;
-        const xKey = request.headers.get("x-admin-key") || request.headers.get("x-request-key");
-        if (xKey) syncHdrs["x-admin-key"] = xKey;
-        fetch(peerHost, {
-          method: "POST",
-          headers: syncHdrs,
-          body: JSON.stringify({ confirm: "NUKE" })
-        }).catch((err) => {
-          logger.warn("[nuke] Peer sync broadcast notice:", err.message);
-        });
+        (async () => {
+          try {
+            const dns = await import("node:dns/promises");
+            const ips = await dns.resolve6(`${process.env.FLY_APP_NAME}.internal`).catch(() => []);
+            if (ips && ips.length > 0) {
+              for (const ip of ips) {
+                const targetUrl = `http://[${ip}]:${port}/api/nuke/${masterKey}`;
+                fetch(targetUrl, {
+                  method: "POST",
+                  headers: syncHdrs,
+                  body: JSON.stringify({ confirm: "NUKE" })
+                }).catch(() => {});
+              }
+            } else {
+              const peerHost = `http://${process.env.FLY_APP_NAME}.internal:${port}/api/nuke/${masterKey}`;
+              fetch(peerHost, {
+                method: "POST",
+                headers: syncHdrs,
+                body: JSON.stringify({ confirm: "NUKE" })
+              }).catch(() => {});
+            }
+          } catch (peerErr) {
+            logger.warn("[nuke] Peer sync broadcast notice:", peerErr.message);
+          }
+        })();
       }
 
       // 1. Clear in-memory AeroCache (entries, ghost queue, memory counters, and stats)
@@ -1189,9 +1205,9 @@ export async function handleApiRoute(request, path, env, method) {
         logger.warn("[nuke] Customized threat feed load deferred:", feedErr.message);
       }
 
-      // Live upstream probing runs asynchronously in the background
+      // Live upstream probing runs asynchronously in the background (skipPersist to maintain 100% hollow PulseDB)
       import("../upstream-manager.js").then(({ syncAndRankUpstreams }) => {
-        syncAndRankUpstreams(env, { setUpstreams }).catch((err) => {
+        syncAndRankUpstreams(env, { setUpstreams, skipPersist: true }).catch((err) => {
           logger.warn("[nuke] Upstream live sync error:", err.message);
         });
       }).catch(() => {});

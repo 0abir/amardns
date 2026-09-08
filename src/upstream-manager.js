@@ -233,9 +233,9 @@ export async function syncAndRankUpstreams(env, worker, options = {}) {
     );
   });
 
-  // Persist to PulseDB if available
+  // Persist to PulseDB if available and not skipped (e.g. during hollow NUKE reset)
   const pdb = env?.pulseDb;
-  if (pdb && typeof pdb.set === "function") {
+  if (pdb && typeof pdb.set === "function" && !options?.skipPersist) {
     try {
       pdb.set("upstreams:ranked", JSON.stringify(ranked));
       pdb.set("upstreams:last_sync", String(Date.now()));
