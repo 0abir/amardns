@@ -22,7 +22,7 @@ import {
   autoBlockSet, dgaScore, burstCheck, rebindCheck, qtypeAbuseCheck,
   ttlCheck, answerDriftCheck, swarmCheck, fpCheck, clientNxCheck,
   aiThreatAugment, poisonGuardCheck, multiQuestionCheck, cbCheck,
-  isKnownLegitDomain
+  isKnownLegitDomain, dccClassify
 } from "./threat-intelligence.js";
 import {
   nnThreatScore, nnSelectUpstream, nnCacheTTL, nnCacheSignal,
@@ -621,7 +621,13 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
   if (_blockingEnabled) {
     const blockResult = checkBlocklist(name, db);
     if (blockResult.blocked) {
-      _sh.repBlocks++;
+      if (blockResult.reason === "threat_feed_abir" || blockResult.source === "abir_feed" || blockResult.source === "feed") {
+        _sh.abirBlocks++;
+      } else {
+        _sh.repBlocks++;
+      }
+      const cat = dccClassify(name);
+      if (cat) _sh.dccHits++;
       _domainIQ.see(name, "blocked");
       _action("blocklist_block", blockResult.reason, {
         domain: name,
@@ -631,6 +637,9 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
         headers: { "content-type": DNS_CT, ...DNS_H },
       });
     }
+
+    const cat = dccClassify(name);
+    if (cat) _sh.dccHits++;
 
     // Alike / Homoglyph Brand Impersonation check
     const alike = alikeDomainCheck(name, db);

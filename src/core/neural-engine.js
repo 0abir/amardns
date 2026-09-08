@@ -245,6 +245,7 @@ export const _nnStats = {
   dtnBlocks: 0,
   dtnCalls: 0,
   gruAlarms: 0,
+  gruSteps: 0,
   mhaSelections: 0,
   dtcnClass: "normal",
   dtcnScore: 0,
@@ -811,6 +812,7 @@ export function nnThreatScore(domain, clientIp, rps, iqScore, markovConf, burstF
   gruIn[6] = f40[18];
   gruIn[7] = f40[22];
   const gruScore = _gru.step(clientIp || "0.0.0.0", gruIn);
+  _nnStats.gruSteps = (_nnStats.gruSteps || 0) + 1;
   if (gruScore > 0.7) _nnStats.gruAlarms++;
   const dtcnResult = _dtcn.forward(_rpsHistory);
   const aeResult = _ae.fwd(f32);
@@ -987,6 +989,7 @@ export function nnLearn(
   gruIn[6] = f40[18];
   gruIn[7] = f40[22];
   const gruScore = _gru.step(clientIp || "0.0.0.0", gruIn);
+  _nnStats.gruSteps = (_nnStats.gruSteps || 0) + 1;
   const bnnResult = _bnn.predict(f32);
   const forestScore = _forest.predict(f32);
   const dtcnResult = _dtcn.forward(_rpsHistory);
