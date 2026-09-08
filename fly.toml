@@ -4,7 +4,7 @@ primary_region = "sin"
 [build]
 
 [env]
-  NODE_OPTIONS = "--max-old-space-size=192 --expose-gc"
+  NODE_OPTIONS = "--max-old-space-size=96 --optimize_for_size --expose-gc"
   PORT = "8080"
   DOT_PORT = "8053"
   HOST = "::"

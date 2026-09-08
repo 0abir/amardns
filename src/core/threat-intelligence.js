@@ -301,6 +301,9 @@ export async function syncThreatFeeds(force = false, env = null, options = {}) {
     _feedCache.clear();
   } finally {
     _feedSyncing = false;
+    if (typeof global.gc === "function") {
+      try { global.gc(); } catch (_) {}
+    }
   }
 }
 export async function checkThreatFeeds(domain) {
@@ -709,7 +712,7 @@ export function ttlCheck(domain, ttl) {
   }
   return null;
 }
-const _ANSWER_HISTORY_MAX = 5e3;
+const _ANSWER_HISTORY_MAX = 500;
 export function answerDriftCheck(domain, ips) {
   if (!ips || ips.length === 0) return false;
   if (isKnownLegitDomain(domain)) return false;

@@ -72,7 +72,8 @@ export function startCron(worker, env) {
 
   // 4. Active Cleaning Rotation Micro-Sweeper & Proactive Memory Guard (every 30 seconds):
   // - Proactively purges expired DNS wire cache entries and expired Aero store keys
-  // - Monitors heap memory; triggers deep sweep if approaching budget to prevent OOM
+  // - Trims telemetry maps and dormant buffers via _memCheck
+  // - Monitors RSS and Heap memory; aggressively triggers compaction & GC to keep footprint lean
   const sweepInterval = setInterval(() => {
     if (env.aeroCache && typeof env.aeroCache.sweep === "function") {
       env.aeroCache.sweep(1000);
@@ -81,10 +82,20 @@ export function startCron(worker, env) {
       env.pulseDb.sweepExpiredAero(200);
     }
 
+    import("./core/telemetry.js").then(({ _memCheck }) => {
+      _memCheck?.();
+    }).catch(() => {});
+
     const mem = process.memoryUsage();
-    if (mem.heapUsed > 60 * 1024 * 1024) {
-      logger.warn(`[memory-guard] Elevated heap (${(mem.heapUsed / 1048576).toFixed(1)}MB), executing deep sweep`);
+    const heapMB = mem.heapUsed / 1048576;
+    const rssMB = mem.rss / 1048576;
+
+    if (rssMB > 70 || heapMB > 30) {
+      logger.info(`[memory-guard] Memory check (RSS: ${rssMB.toFixed(1)}MB, Heap: ${heapMB.toFixed(1)}MB) - executing deep sweep & GC`);
       if (env.aeroCache) env.aeroCache.sweep(5000);
+      if (env.pulseDb && typeof env.pulseDb.sweepExpiredAero === "function") {
+        env.pulseDb.sweepExpiredAero(500);
+      }
       if (typeof global.gc === "function") {
         try { global.gc(); } catch (_) {}
       }

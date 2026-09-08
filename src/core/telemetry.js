@@ -605,58 +605,58 @@ export function getActiveDevicesList() {
   return list.sort((a, b) => a.lastSeenSec - b.lastSeenSec).slice(0, 20);
 }
 export function _memCheck() {
-  const MAX_MAP_SIZE = 5e3;
+  const MAX_MAP_SIZE = 500;
   const maps = [_burstMap, _fpMap, _clientNX, _cacheTimings, _ttlHistory];
   maps.forEach((m) => {
     if (m.size > MAX_MAP_SIZE) {
       const iter = m.keys();
-      for (let i = 0; i < 500; i++) m.delete(iter.next().value);
+      for (let i = 0; i < 200; i++) m.delete(iter.next().value);
     }
   });
-  if (_heatmap.size > 1500) {
+  if (_heatmap.size > 500) {
     let count = 0;
     for (const [k] of _heatmap) {
       _heatmap.delete(k);
-      if (++count >= 300) break;
+      if (++count >= 150) break;
     }
   }
-  if (_gsbCache.size > GSB_CACHE_MAX * 0.9) {
+  if (_gsbCache.size > 500) {
     let c = 0;
     for (const k of _gsbCache.keys()) {
       _gsbCache.delete(k);
-      if (++c >= 500) break;
+      if (++c >= 200) break;
     }
   }
-  if (_feedCache.size > FEED_CACHE_MAX * 0.9) {
+  if (_feedCache.size > 500) {
     let c = 0;
     for (const k of _feedCache.keys()) {
       _feedCache.delete(k);
-      if (++c >= 500) break;
+      if (++c >= 200) break;
     }
   }
-  if (_negCache.size > NEG_MAX * 0.9) {
+  if (_negCache.size > 500) {
     const now = Date.now();
     for (const [k, v] of _negCache) if (v.exp < now) _negCache.delete(k);
-    if (_negCache.size > NEG_MAX * 0.9) {
+    if (_negCache.size > 500) {
       let count = 0;
       for (const [k] of _negCache) {
         _negCache.delete(k);
-        if (++count >= 500) break;
+        if (++count >= 200) break;
       }
     }
   }
-  if (_answerHistory.size > 5e3) {
+  if (_answerHistory.size > 500) {
     let count = 0;
     for (const k of _answerHistory.keys()) {
       _answerHistory.delete(k);
-      if (++count >= 1e3) break;
+      if (++count >= 200) break;
     }
   }
-  if (_swarmMap.size > 3e3) {
+  if (_swarmMap.size > 500) {
     let count = 0;
     for (const k of _swarmMap.keys()) {
       _swarmMap.delete(k);
-      if (++count >= 1e3) break;
+      if (++count >= 200) break;
     }
   }
 }

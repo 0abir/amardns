@@ -73,7 +73,7 @@ export const ABIR_TOTAL_URL =
 export const COMMON_FEED = "https://cdn.jsdelivr.net/gh/abir614/-@latest/whitelist.txt";
 export const COMMON_TOTAL_URL =
   "https://cdn.jsdelivr.net/gh/abir614/-@latest/total_whitelisted.txt";
-export const FEED_SYNC_INTERVAL = 30 * 60 * 1e3;
+export const FEED_SYNC_INTERVAL = 24 * 60 * 60 * 1e3; // 24 hours (daily sync)
 export const FEED_CACHE_TTL = 24 * 60 * 60 * 1e3;
 
 export const FEED_RETRY_INTERVAL = 5 * 60 * 1e3;

@@ -112,14 +112,17 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
       if (err.code !== "ECONNRESET" && err.code !== "EPIPE") {
         logger.warn("[dot] socket error:", err.message);
       }
+      rxBuf = null;
       try { socket.destroy(); } catch (_) {}
     });
 
     socket.on("close", () => {
       activeSockets.delete(socket);
+      rxBuf = null;
     });
 
     socket.on("data", async (chunk) => {
+      if (rxBuf === null) return;
       rxBuf = Buffer.concat([rxBuf, chunk]);
 
       // Check for PROXY protocol on connection start
@@ -132,16 +135,17 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
         if (proxyRes.clientIp) {
           clientIp = proxyRes.clientIp;
         }
-        rxBuf = proxyRes.remaining;
+        rxBuf = proxyRes.remaining ? Buffer.from(proxyRes.remaining) : Buffer.alloc(0);
         proxyChecked = true;
       }
 
       // Process all complete length-prefixed DNS messages in the buffer
-      while (rxBuf.length >= 2) {
+      while (rxBuf && rxBuf.length >= 2) {
         const msgLen = rxBuf.readUInt16BE(0);
 
         if (msgLen > MAX_DNS_QUERY) {
           logger.warn(`[dot] query size ${msgLen} exceeds max ${MAX_DNS_QUERY}`);
+          rxBuf = null;
           socket.destroy();
           return;
         }
@@ -151,8 +155,9 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
           break;
         }
 
-        const dnsQuery = rxBuf.subarray(2, 2 + msgLen);
-        rxBuf = rxBuf.subarray(2 + msgLen);
+        const dnsQuery = Buffer.from(rxBuf.subarray(2, 2 + msgLen));
+        const rem = rxBuf.subarray(2 + msgLen);
+        rxBuf = rem.length > 0 ? Buffer.from(rem) : Buffer.alloc(0);
 
         // Dispatch DNS query to worker asynchronously
         (async () => {

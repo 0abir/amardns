@@ -129,6 +129,18 @@ export function buildStatus(env, request = null) {
   const machineId = (typeof process !== "undefined" && process.env?.FLY_MACHINE_ID) || _ISOLATE_ID;
   const flyRegion = (typeof process !== "undefined" && process.env?.FLY_REGION) || "sin";
   const appName = (typeof process !== "undefined" && process.env?.FLY_APP_NAME) || "amardns";
+  const memStats =
+    typeof process !== "undefined" && process.memoryUsage
+      ? (() => {
+          const m = process.memoryUsage();
+          return {
+            rssMB: +(m.rss / 1048576).toFixed(1),
+            heapUsedMB: +(m.heapUsed / 1048576).toFixed(1),
+            heapTotalMB: +(m.heapTotal / 1048576).toFixed(1),
+            externalMB: +(m.external / 1048576).toFixed(1),
+          };
+        })()
+      : null;
   return {
     isolateId: machineId,
     node: {
@@ -138,7 +150,9 @@ export function buildStatus(env, request = null) {
       activeDevices: getActiveDeviceCount(),
       activeIps: getActiveIpCount(),
       deviceList: getActiveDevicesList(),
+      memory: memStats,
     },
+    memory: memStats,
     devices: getActiveDevicesList(),
     dnsRequestsTotal: _sh.requests,
     avgLatency: (() => {

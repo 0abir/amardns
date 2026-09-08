@@ -15,7 +15,13 @@ if (env.pulseDb) {
 // Customized threat feeds (404.2k blocklist, 2.8k whitelist) reside in-memory (BloomFilters)
 // and must ALWAYS be populated on process boot or deployment.
 setImmediate(() => {
-  core.syncThreatFeeds?.(true, env).catch((e) => logger.warn("[feed] Initial threat feed sync deferred:", e.message));
+  core.syncThreatFeeds?.(true, env)
+    .then(() => {
+      if (typeof global.gc === "function") {
+        try { global.gc(); } catch (_) {}
+      }
+    })
+    .catch((e) => logger.warn("[feed] Initial threat feed sync deferred:", e.message));
 });
 core._loadUpstreams?.(env);
 
