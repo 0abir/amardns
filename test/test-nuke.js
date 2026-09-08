@@ -199,15 +199,17 @@ async function run() {
     assert.strictEqual(_aiDecisions.length, 0, "_aiDecisions must be completely empty");
     assert.strictEqual(_configDecisions.length, 0, "_configDecisions must be completely empty");
 
-    // 11. Verify PulseDB and threat feeds were wiped of old state and reloaded fresh
-    console.log("-> 11. Verifying active upstreams and customized feeds loaded right after nuking...");
+    // 11. Verify PulseDB and AeroCache are 100% HOLLOW (0 records, 0 bytes)
+    console.log("-> 11. Verifying PulseDB and AeroCache are 100% hollow (0 records, 0 bytes)...");
     assert.strictEqual(pulseDb.get("custom:setting"), null, "Old custom AERO must be wiped");
     assert.strictEqual(pulseDb.get("user:token"), null, "Old user AERO must be wiped");
-    assert.strictEqual(pulseDb.get("config:dns_mode"), "public", "DNS mode must default to public");
-    assert.strictEqual(pulseDb.get("config:auto_heal"), "true");
-    assert.ok(pulseDb.get("upstreams:active_urls"), "Baseline active upstreams must be populated");
-    assert.ok(pulseDb.get("upstreams:ranked"), "Upstreams ranked metadata must be populated in PulseDB");
-    assert.strictEqual(_ups.length, 9, "9 baseline active upstreams must be configured");
+    assert.strictEqual(pulseDb.getStats().totalRecords, 0, "PulseDB totalRecords must be exactly 0 (hollow)");
+    assert.strictEqual(pulseDb.getStats().walBytes, 0, "PulseDB walBytes must be exactly 0 (hollow)");
+    assert.strictEqual(pulseDb.getStats().aeroKeys, 0, "PulseDB aeroKeys must be exactly 0 (hollow)");
+    assert.strictEqual(pulseDb.getStats().blocklistDomains, 0, "PulseDB blocklistDomains must be 0 (hollow)");
+    assert.strictEqual(pulseDb.getStats().whitelistDomains, 0, "PulseDB whitelistDomains must be 0 (hollow)");
+
+    assert.strictEqual(_ups.length, 9, "9 baseline active upstreams must be configured in-memory");
     assert.ok(Array.isArray(_upMetadata) && _upMetadata.length === 9, "Upstream metadata must be loaded with 9 providers");
 
     // Verify customized threat feeds reloaded into memory

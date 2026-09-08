@@ -1070,6 +1070,28 @@ export async function handleApiRoute(request, path, env, method) {
     (method === "POST" || method === "DELETE")
   ) {
     try {
+      // 0. Peer-sync across all Fly.io machines if running in cluster
+      const isPeerSync = request.headers.get("x-peer-sync") === "1";
+      if (!isPeerSync && process.env.FLY_APP_NAME) {
+        const port = process.env.PORT || 8080;
+        const peerHost = `http://${process.env.FLY_APP_NAME}.internal:${port}/api/nuke`;
+        const syncHdrs = {
+          "x-peer-sync": "1",
+          "content-type": "application/json"
+        };
+        const auth = request.headers.get("authorization");
+        if (auth) syncHdrs["authorization"] = auth;
+        const xKey = request.headers.get("x-admin-key") || request.headers.get("x-request-key");
+        if (xKey) syncHdrs["x-admin-key"] = xKey;
+        fetch(peerHost, {
+          method: "POST",
+          headers: syncHdrs,
+          body: JSON.stringify({ confirm: "NUKE" })
+        }).catch((err) => {
+          logger.warn("[nuke] Peer sync broadcast notice:", err.message);
+        });
+      }
+
       // 1. Clear in-memory AeroCache (entries, ghost queue, memory counters, and stats)
       if (env?.aeroCache && typeof env.aeroCache.clear === "function") {
         env.aeroCache.clear();
@@ -1141,16 +1163,11 @@ export async function handleApiRoute(request, path, env, method) {
       _aiDecisions.length = 0;
       _configDecisions.length = 0;
 
-      // 9. Re-create minimal baseline schema and configuration so resolver remains healthy
+      // 9. Re-initialize in-memory defaults ONLY (DO NOT write to PulseDB so it remains 100% hollow: 0 records, 0 bytes)
       const defaultMode = env.DNS_ACCESS_MODE || "public";
-      if (env?.pulseDb) {
-        env.pulseDb.set("config:dns_mode", defaultMode);
-        env.pulseDb.set("config:auto_heal", "true");
-        env.pulseDb.set("upstreams:last_sync", String(Date.now()));
-      }
-      _setDnsMode(defaultMode, env?.pulseDb);
+      _setDnsMode(defaultMode); // in-memory only, no DB write
 
-      // Re-initialize default 9 active upstreams (3xN) with baseline metadata
+      // In-memory 9 active upstreams (3xN) baseline so DNS queries continue resolving cleanly
       const defaultMetadata = [
         { provider: "Cloudflare", url: "https://cloudflare-dns.com/dns-query", aura: "high", latency: 15, ok: true },
         { provider: "Cloudflare (1.1.1.1)", url: "https://1.1.1.1/dns-query", aura: "high", latency: 16, ok: true },
@@ -1164,15 +1181,8 @@ export async function handleApiRoute(request, path, env, method) {
       ];
       const defaultUpstreams = defaultMetadata.map((m) => m.url);
       setUpstreams(defaultUpstreams, defaultMetadata, true);
-      if (env?.pulseDb) {
-        env.pulseDb.set("upstreams:active_urls", JSON.stringify(defaultUpstreams));
-        env.pulseDb.set("upstreams:ranked", JSON.stringify(defaultMetadata));
-      }
 
-      // Preload baseline config
-      preloadLists(env);
-
-      // Reload customized threat feeds cleanly via streaming (zero memory spike)
+      // Reload customized threat feeds cleanly into memory BloomFilter via streaming (zero disk write to PulseDB)
       try {
         await syncThreatFeeds(true, env);
       } catch (feedErr) {
@@ -1186,14 +1196,17 @@ export async function handleApiRoute(request, path, env, method) {
         });
       }).catch(() => {});
 
-      // Final guarantee: zero out logs and counters before returning
+      // Final guarantee: zero out logs, counters, and verify PulseDB & Cache are hollow
       _anomalies.length = 0;
       _actions.length = 0;
       _aiDecisions.length = 0;
       _configDecisions.length = 0;
       resetSh();
 
-      // Return hollowed confirmation response with reloaded upstreams and feeds
+      const dbStats = env?.pulseDb?.getStats?.() || {};
+      const cacheStats = env?.aeroCache?.getStats?.() || {};
+
+      // Return hollowed confirmation response
       return jsonResp({
         ok: true,
         wiped: true,
@@ -1201,14 +1214,17 @@ export async function handleApiRoute(request, path, env, method) {
         details: {
           cache: {
             size: env?.aeroCache?.size || 0,
+            bytes: cacheStats.bytes || 0,
             negCacheSize: _negCache.size,
             featCacheSize: _featCache.size,
-            hits: env?.aeroCache?.stats?.hits || 0,
+            hits: cacheStats.hits || 0,
           },
           database: {
-            blocklistDomains: env?.pulseDb?.blocklistTrie?.size || 0,
-            whitelistDomains: env?.pulseDb?.whitelistTrie?.size || 0,
-            aeroKeys: env?.pulseDb?.aeroStore?.size || 0,
+            totalRecords: dbStats.totalRecords || 0,
+            walBytes: dbStats.walBytes || 0,
+            blocklistDomains: dbStats.blocklistDomains || 0,
+            whitelistDomains: dbStats.whitelistDomains || 0,
+            aeroKeys: dbStats.aeroKeys || 0,
           },
           upstreams: {
             count: _ups.length,
@@ -1226,7 +1242,7 @@ export async function handleApiRoute(request, path, env, method) {
             actions: _actions.length,
           },
         },
-        message: "Nuclear wipe complete: Caches and telemetry reset to zero; active upstreams and customized feeds reloaded fresh.",
+        message: "Nuclear wipe complete: PulseDB and AeroCache hollowed to 0 records and 0 bytes. Active upstreams and threat feeds ready in-memory.",
       });
     } catch (e) {
       return jsonResp({ ok: false, error: "Nuclear wipe failed: " + e.message }, 500);
