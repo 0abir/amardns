@@ -47,6 +47,7 @@ export const PULSE_WRITE_LIMIT = Infinity;
 export const PULSE_SOFT_CAP = 1.0;
 export const BRAIN_SYNC_INTERVAL = 2 * 60 * 1e3;
 export const BRAIN_CHUNK_SIZE = 1e4;
+export const BRAIN_PRUNE_EVERY = 20;
 export const MAX_DNS_QUERY = 4096;
 export const MAX_ADMIN_BODY = 1024 * 1024;
 export const _BG_SET1 = new Set(

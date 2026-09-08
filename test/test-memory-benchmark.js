@@ -1,5 +1,6 @@
 // test/test-memory-benchmark.js
 import assert from "node:assert";
+import fs from "node:fs";
 import { AeroCache } from "../src/storage/aero-cache.js";
 import { PulseDB } from "../src/storage/pulse-db.js";
 

@@ -4,12 +4,14 @@
 import {
   _BG_SET1,
   _RE_CONSONANT_RUN, FEAT_CACHE_MAX,
-  AERO_WRITE_LIMIT, PULSE_WRITE_LIMIT, CB_THRESHOLD, DGA_FLAG_SCORE, DGA_BLOCK_SCORE, DOMAIN_IQ_MAX
+  AERO_WRITE_LIMIT, PULSE_WRITE_LIMIT, CB_THRESHOLD, DGA_FLAG_SCORE, DGA_BLOCK_SCORE, DOMAIN_IQ_MAX,
+  BRAIN_PRUNE_EVERY
 } from "./constants.js";
 import {
   _featCache, BRANDS_LIST, _env, _bgEnqueue,
   _aeroThrottle, _domainIQ, _markov, _runtimeConfig, _sh, _rhythm, _budgetAI,
-  _rpsHistory, _anomaly, _cb, _dgaLegit, _ucb, _ups, setBrainDirty
+  _rpsHistory, _anomaly, _cb, _dgaLegit, _ucb, _ups, setBrainDirty,
+  _pulseThrottle, _pulseW, _aeroW
 } from "./state.js";
 import {
   _softmax, _clip, _sigmoid, _relu,
@@ -20,9 +22,6 @@ import {
   _bnn, _contrastive, _neuron, _gnn, _forest, _calibrator,
   _meta, _dtcn, _symbolic, _embNet, _finalNeuron, _rl
 } from "./neural-models.js";
-import {
-  _pulseThrottle, _pulseW, _aeroW
-} from "./storage-adapter.js";
 import {
   _aeroCanWrite, _aeroAccountWrite, _log, _aiDecision,
   _adaptiveConfigTick, _updateUserEstimate, _memCheck, _stress, _rpsSmooth
@@ -1134,7 +1133,6 @@ export function nnImport(d) {
       _nnStats.brainVersion = d.stats.brainVersion;
   }
 }
-const BRAIN_PRUNE_EVERY = 20;
 let _brainSyncCount = 0;
 export function _brainPrune() {
   const now = Date.now();

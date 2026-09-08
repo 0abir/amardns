@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node --env-file=.env src/server.js",
-    "test": "node test/test-storage.js && node test/test-access-mode.js && node test/test-dot-doh.js && node test/test-neural-ai.js && node test/test-upstream-sync.js && node test/test-nuke.js && node test/test-device-detection.js && node test/test-blocklist-tags.js && node test/test-sleep-mode.js && node test/test-overview-cards.js && node test/test-whitelist-lookalike.js && node test/test-card-integrity.js && node test/test-boot-feed-load.js && node test/test-dashboard-smoothness.js && node test/test-suspicious-clients.js"
+    "test": "node test/test-storage.js && node test/test-access-mode.js && node test/test-dot-doh.js && node test/test-neural-ai.js && node test/test-upstream-sync.js && node test/test-nuke.js && node test/test-device-detection.js && node test/test-blocklist-tags.js && node test/test-sleep-mode.js && node test/test-overview-cards.js && node test/test-whitelist-lookalike.js && node test/test-card-integrity.js && node test/test-boot-feed-load.js && node test/test-dashboard-smoothness.js && node test/test-suspicious-clients.js && node test/test-brain-export-sync.js"
   },
   "dependencies": {
     "node-cron": "^4.6.0"

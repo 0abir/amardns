@@ -3,7 +3,8 @@
 
 import {
   BRAIN_SYNC_INTERVAL, BRAIN_CHUNK_SIZE, IMPORT_CHUNK_CHARS,
-  VERSION, FEED_CACHE_TTL, FEED_CACHE_MAX, AUTO_BLOCK_TTL
+  VERSION, FEED_CACHE_TTL, FEED_CACHE_MAX, AUTO_BLOCK_TTL,
+  BRAIN_PRUNE_EVERY
 } from "./constants.js";
 import {
   _env, _sh, _ISOLATE_ID,
@@ -15,8 +16,14 @@ import {
   _bgEnqueue, _dgaLegit, _autoBlocks, _ctx, _feedCache,
   _aeroW, _aeroR, _pulseW, _pulseR, _aeroThrottle, _pulseThrottle, _dayStr,
   _brainDirty, _brainLastSync, _brainSyncBytes, _brainLoadedAt, _brainLoaded, _brainInitializing, _brainSyncCount,
-  incPulseW, incPulseR, incAeroW, incAeroR, setPulseThrottle, setAeroThrottle, resetStorageQuotas, setBrainDirty
+  incPulseW, incPulseR, incAeroW, incAeroR, setPulseThrottle, setAeroThrottle, resetStorageQuotas, setBrainDirty,
+  _log, _stress, setStress, _userEstimate, _userSamples, setUserEstimate
 } from "./state.js";
+import {
+  nnExport, nnImport, _nnStats, _episodic, _brainPrune
+} from "./neural-engine.js";
+import { preloadLists as _preloadLists } from "./threat-intelligence.js";
+import { _aeroCanWrite } from "./telemetry.js";
 
 export {
   _aeroW, _aeroR, _pulseW, _pulseR, _aeroThrottle, _pulseThrottle, _dayStr,
@@ -446,7 +453,7 @@ export async function _brainImportParts(aero) {
 }
 export async function brainLoad(env) {
   if (_brainLoaded || _brainInitializing) return;
-  _brainInitializing = true;
+  setBrainInitializing(true);
   try {
     const db = env?.PULSE_DB;
     if (db && !_pulseThrottle) {
@@ -577,12 +584,11 @@ export async function brainLoad(env) {
             } catch (_) {}
         }
         pulseLoaded = true;
-        if (!_brainLoadedAt) _brainLoadedAt = Date.now();
+        if (!_brainLoadedAt) setBrainLoadedAt(Date.now());
         if (_brainSyncBytes === 0) {
           const _loadParts = _brainExportParts();
-          _brainSyncBytes = Object.values(_loadParts).reduce(
-            (a, s) => a + s.length,
-            0,
+          setBrainSyncBytes(
+            Object.values(_loadParts).reduce((a, s) => a + s.length, 0),
           );
         }
         _log("brain_loaded_pulse", {
@@ -638,12 +644,12 @@ export async function brainLoad(env) {
     if (!_listsPreloaded && (env?.pulseDb || env?.PULSE_DB)) {
       await _preloadLists(env).catch(() => {});
     }
-    _brainLoaded = true;
-    _brainLastSync = Date.now();
+    setBrainLoaded(true);
+    setBrainLastSync(Date.now());
   } catch (e) {
     _log("brain_load_error", { err: e.message });
   } finally {
-    _brainInitializing = false;
+    setBrainInitializing(false);
   }
 }
 export function _feedCacheGet(domain) {
@@ -692,12 +698,12 @@ export async function brainSync(force = false) {
   const db = _env?.pulseDb || _env?.PULSE_DB;
   if (!_listsPreloaded && db) _bgEnqueue(() => _preloadLists(_env), true);
   if (!force && !_budgetAI.canWrite(true)) return;
-  _brainLastSync = now;
-  _brainDirty = false;
-  _brainSyncCount++;
+  setBrainLastSync(now);
+  setBrainDirty(false);
+  setBrainSyncCount(_brainSyncCount + 1);
   if (_brainSyncCount % BRAIN_PRUNE_EVERY === 0) _brainPrune();
   const parts = _brainExportParts();
-  _brainSyncBytes = Object.values(parts).reduce((a, s) => a + s.length, 0);
+  setBrainSyncBytes(Object.values(parts).reduce((a, s) => a + s.length, 0));
   if (_brainSyncBytes > 9e5) {
     _log("brain_size_warn", {
       bytes: _brainSyncBytes,

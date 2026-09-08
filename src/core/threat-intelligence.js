@@ -18,7 +18,7 @@ import {
   setListsPreloaded } from "./state.js";
 import { _log, _getRps } from "./telemetry.js";
 import { deLeet, _getCandidates } from "./neural-math.js";
-import { aeroGet, _feedCacheGet, _feedCacheSet, _pulseThrottle, _pulseW } from "./storage-adapter.js";
+import { aeroGet, _feedCacheGet, _feedCacheSet, _pulseThrottle, accountPulseWrite } from "./storage-adapter.js";
 import { BloomFilter } from "./bloom-filter.js";
 import { NOT_BLOCKED } from "../storage/pulse-db.js";
 
@@ -518,7 +518,7 @@ export async function autoBlockSet(domain, reason, ttl = AUTO_BLOCK_TTL, isPeerS
       expSnap = exp;
     _bgEnqueue(async () => {
       if (_pulseThrottle || !_budgetAI.canWrite(false)) return;
-      _pulseW++;
+      accountPulseWrite();
       _budgetAI.track();
       try {
         await _env.PULSE_DB
