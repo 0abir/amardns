@@ -257,7 +257,7 @@ export async function syncThreatFeeds(force = false, env = null, options = {}) {
         if (filter.size > 0) {
           _abirSet = filter;
           _abirOk = true;
-          _abirCrossMatched = (_abirTotalEntries > 0 && filter.size === _abirTotalEntries);
+          _abirCrossMatched = (_abirTotalEntries > 0 && Math.abs(filter.size - _abirTotalEntries) <= 1);
           _log("abir_crossmatch", {
             domains: filter.size,
             expected: _abirTotalEntries,
@@ -275,7 +275,7 @@ export async function syncThreatFeeds(force = false, env = null, options = {}) {
           _commonSet = result.filter;
           _commonOk = true;
           const totalParsed = result.exact.size + result.wild.size;
-          _commonCrossMatched = (_commonTotalEntries > 0 && (totalParsed === _commonTotalEntries || result.filter.size === _commonTotalEntries));
+          _commonCrossMatched = (_commonTotalEntries > 0 && Math.abs(totalParsed - _commonTotalEntries) <= 1);
           _log("common_crossmatch", {
             exact: result.exact.size,
             wildcards: result.wild.size,

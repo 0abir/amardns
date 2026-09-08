@@ -694,6 +694,28 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
         headers: { "content-type": DNS_CT, ...DNS_H },
       });
     }
+
+    // Google Safe Browsing Cloud Threat Check (Malware, Phishing, Social Engineering)
+    try {
+      const gsb = await checkGoogleSafeBrowsing(name);
+      if (gsb?.threat) {
+        _sh.gsbBlocks++;
+        _domainIQ.see(name, "gsb");
+        autoBlockSet(name, "google_safe_browsing", 3600);
+        _action("gsb_block", "google_safe_browsing", {
+          domain: name,
+          client: clientIp,
+          matches: gsb.matches,
+        });
+        _aiDecision("gsb_block", {
+          domain: name,
+          threatTypes: (gsb.matches || []).map((m) => m.threatType).join(","),
+        });
+        return new Response(makeNxResponse(dnsQuery), {
+          headers: { "content-type": DNS_CT, ...DNS_H },
+        });
+      }
+    } catch (_) {}
   }
 
   const result = await queryUpstreams(dnsQuery, rps);
