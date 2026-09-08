@@ -531,7 +531,7 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
   const rawClientIp = clientMeta?.rawIp || clientIp;
   const deviceId = clientMeta?.deviceId || clientIp;
   const deviceType = clientMeta?.deviceType || "generic";
-  const rps = _trackRequest(clientIp, deviceId, deviceType);
+  const rps = _trackRequest(rawClientIp, deviceId, deviceType);
   _calcStress(rps);
   fpCheck(rawClientIp, name, rps);
   burstCheck(rawClientIp);
