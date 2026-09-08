@@ -45,8 +45,12 @@ function queryToBase64Url(buf) {
   return Buffer.from(buf).toString("base64url");
 }
 
+export let _cachedUpstreamList = null;
+export let _lastFeedFetch = 0;
+export const FEED_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // Pulled once a day (24 hours)
+
 /**
- * Fetches the upstream JSON feed.
+ * Fetches the upstream JSON feed from CDN.
  */
 export async function fetchUpstreamFeed(feedUrl = DEFAULT_UPSTREAM_FEED, timeoutMs = 8000) {
   const resp = await fetch(feedUrl, {
@@ -64,6 +68,54 @@ export async function fetchUpstreamFeed(feedUrl = DEFAULT_UPSTREAM_FEED, timeout
     throw new Error("Invalid feed format: missing 'dns_over_https' array");
   }
   return data.dns_over_https;
+}
+
+/**
+ * Retrieves the upstream candidate list, pulling from CDN once a day (24h cache)
+ * and persisting to PulseDB to prevent redundant network requests.
+ */
+export async function getUpstreamList(feedUrl = DEFAULT_UPSTREAM_FEED, force = false, env = null) {
+  const now = Date.now();
+  if (!force && _cachedUpstreamList && now - _lastFeedFetch < FEED_CACHE_TTL_MS) {
+    return _cachedUpstreamList;
+  }
+
+  const pdb = env?.pulseDb;
+  if (!force && !_cachedUpstreamList && pdb && typeof pdb.get === "function") {
+    try {
+      const savedRaw = pdb.get("upstreams:raw_feed", null);
+      const savedTime = parseInt(pdb.get("upstreams:raw_feed_time", "0"), 10);
+      if (savedRaw && now - savedTime < FEED_CACHE_TTL_MS) {
+        const parsed = JSON.parse(savedRaw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          _cachedUpstreamList = parsed;
+          _lastFeedFetch = savedTime;
+          return _cachedUpstreamList;
+        }
+      }
+    } catch (_) {}
+  }
+
+  // Pull fresh feed once daily from CDN
+  try {
+    const list = await fetchUpstreamFeed(feedUrl);
+    _cachedUpstreamList = list;
+    _lastFeedFetch = now;
+    if (pdb && typeof pdb.set === "function") {
+      try {
+        pdb.set("upstreams:raw_feed", JSON.stringify(list));
+        pdb.set("upstreams:raw_feed_time", String(now));
+      } catch (_) {}
+    }
+    logger.info(`[upstream-manager] Pulled fresh upstream list from CDN (24h cache, ${list.length} resolvers)`);
+    return list;
+  } catch (err) {
+    if (_cachedUpstreamList) {
+      logger.warn(`[upstream-manager] Daily feed pull failed (${err.message}), continuing with cached list`);
+      return _cachedUpstreamList;
+    }
+    throw err;
+  }
 }
 
 /**
@@ -197,17 +249,18 @@ export function rankUpstreams(probedList) {
  */
 export async function syncAndRankUpstreams(env, worker, options = {}) {
   const feedUrl = options.feedUrl || env?.UPSTREAM_FEED_URL || DEFAULT_UPSTREAM_FEED;
-  const timeoutMs = options.probeTimeoutMs || 3500;
-  logger.debug(`[upstream-syncer] Pulling upstream DNS list from ${feedUrl}...`);
+  const timeoutMs = options.probeTimeoutMs || 2500;
+  const forcePull = options.forcePull || false;
 
-  const rawList = await fetchUpstreamFeed(feedUrl);
-  logger.debug(`[upstream-syncer] Probing ${rawList.length} DoH upstreams in parallel...`);
+  // Retrieve candidate list: pulled once a day from CDN (24h cache), continuous probes
+  const rawList = await getUpstreamList(feedUrl, forcePull, env);
+  logger.debug(`[upstream-syncer] Probing ${rawList.length} DoH upstreams in parallel (non-blocking micro-probe)...`);
 
   const probePacket = makeDnsProbePacket();
   const probeB64 = queryToBase64Url(probePacket);
   const probeBytes = new Uint8Array(probePacket);
 
-  // Probe all candidates concurrently
+  // Probe all candidates simultaneously in the background without interrupting DNS traffic
   const probed = await Promise.all(
     rawList.map((u) => probeUpstream(u, probeB64, timeoutMs, probeBytes))
   );

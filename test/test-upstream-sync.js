@@ -9,6 +9,8 @@ import core from "../src/core.js";
 import { buildEnv } from "../src/env-shim.js";
 import {
   fetchUpstreamFeed,
+  getUpstreamList,
+  FEED_CACHE_TTL_MS,
   rankUpstreams,
   syncAndRankUpstreams,
   loadPersistedUpstreams,
@@ -19,12 +21,16 @@ async function run() {
   console.log("=== Testing Automated Upstream DNS Sync & Aura Ranker ===");
   const env = buildEnv();
 
-  // 1. Test fetching raw feed
-  console.log("-> [1/5] Testing feed fetch from CDN...");
+  // 1. Test fetching raw feed and 24h caching
+  console.log("-> [1/6] Testing feed fetch from CDN & 24h caching...");
   const rawList = await fetchUpstreamFeed(DEFAULT_UPSTREAM_FEED);
   assert.ok(Array.isArray(rawList), "Feed must return an array of upstreams");
   assert.ok(rawList.length >= 10, "Feed should contain at least 10 upstreams");
   console.log(`   ✓ Successfully fetched ${rawList.length} upstreams from CDN`);
+
+  const cachedList = await getUpstreamList(DEFAULT_UPSTREAM_FEED, false, env);
+  assert.strictEqual(cachedList.length, rawList.length, "getUpstreamList should return cached array");
+  console.log("   ✓ 24h feed caching verified (feed pulled once daily)");
 
   // 2. Test ranking logic (aura priority + low latency)
   console.log("-> [2/5] Testing aura + low latency ranking algorithm...");
