@@ -1,5 +1,9 @@
 // src/server.js
 process.env.UV_THREADPOOL_SIZE = process.env.UV_THREADPOOL_SIZE || "4";
+import v8 from "node:v8";
+try {
+  v8.setFlagsFromString("--optimize_for_size");
+} catch (_) {}
 import http from "node:http";
 import https from "node:https";
 import fs from "node:fs";
