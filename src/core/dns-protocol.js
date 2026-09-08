@@ -528,13 +528,14 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
   const parsed = parseDnsQuestion(dnsQuery);
   if (!parsed) return new Response(null, { status: 400 });
   const { name: name, qtype: qtype, qdcount: qdcount } = parsed;
+  const rawClientIp = clientMeta?.rawIp || clientIp;
   const deviceId = clientMeta?.deviceId || clientIp;
   const deviceType = clientMeta?.deviceType || "generic";
   const rps = _trackRequest(clientIp, deviceId, deviceType);
   _calcStress(rps);
-  fpCheck(clientIp, name, rps);
-  burstCheck(clientIp);
-  swarmCheck(name, clientIp);
+  fpCheck(rawClientIp, name, rps);
+  burstCheck(rawClientIp);
+  swarmCheck(name, rawClientIp);
   const cached = cacheGet(name, qtype);
   if (cached) {
     if (cached.negative) {
@@ -723,7 +724,7 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
   const rcode = getRcode(buf);
   if (rcode === 3) {
     _sh.nxAlarms++;
-    clientNxCheck(clientIp, 3);
+    clientNxCheck(rawClientIp, 3);
     negCacheSet(name, qtype, 3);
     _domainIQ.see(name, "nx");
     return new Response(makeNxResponse(dnsQuery), {
