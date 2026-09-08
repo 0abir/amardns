@@ -18,6 +18,8 @@ primary_region = "sin"
   DNS_WORKER_NAME = "amardns"
   DNS_ACCESS_MODE = "public"
   EXPECTED_USERS = "AI"
+  UPSTREAM_CRON = "0 0 * * *"
+  UPSTREAM_TZ = "Asia/Dhaka"
 
 [[mounts]]
   source = "amardns_data"

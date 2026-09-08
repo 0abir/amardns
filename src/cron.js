@@ -13,34 +13,43 @@ function stripQuotes(str) {
 
 export function startCron(worker, env) {
   const schedule = stripQuotes(process.env.CRON_SCHEDULE) || "*/5 * * * *";
-  // Continuously rank all upstreams in the background simultaneously (default: every 5 mins)
-  const upstreamSchedule = stripQuotes(process.env.UPSTREAM_CRON) || "*/5 * * * *";
+  // Upstream DNS sync & aura ranker runs strictly once a day at GMT+6, Dhaka
+  const upstreamSchedule = stripQuotes(process.env.UPSTREAM_CRON) || "0 0 * * *";
+  const upstreamTz = stripQuotes(process.env.UPSTREAM_TZ) || "Asia/Dhaka";
   const ctx = {
     waitUntil: (p) =>
       Promise.resolve(p).catch((e) => logger.error("cron waitUntil error:", e)),
   };
 
-  // 1. Initial boot check: load persisted upstreams, then immediately trigger background simultaneous ranker
+  // 1. Initial boot check: load persisted upstreams from PulseDB.
+  // If upstreams are already persisted and valid (< 24h old), avoid probe requests on boot.
+  // Only sync if missing or expired (> 24h).
   import("./upstream-manager.js").then(({ loadPersistedUpstreams, syncAndRankUpstreams }) => {
-    loadPersistedUpstreams(env, worker);
-    if (process.env.AUTO_UPSTREAM_SYNC !== "false") {
+    const { shouldSync, loaded } = loadPersistedUpstreams(env, worker);
+    if (shouldSync && process.env.AUTO_UPSTREAM_SYNC !== "false") {
       setTimeout(() => {
-        syncAndRankUpstreams(env, worker).catch((err) => {
-          logger.warn("[cron] Initial background upstream ranking deferred:", err.message);
+        syncAndRankUpstreams(env, worker, { forcePull: true }).catch((err) => {
+          logger.warn("[cron] Initial upstream ranking deferred:", err.message);
         });
       }, 1000).unref();
+    } else if (loaded) {
+      logger.info("[cron] Upstreams loaded from PulseDB; frequent background ranking disabled (scheduled once daily at GMT+6, Dhaka).");
     }
   }).catch((err) => logger.error("[cron] Failed to load upstream-manager:", err));
 
-  // 2. Continuous Upstream DNS Sync & Simultaneous Aura Ranker (every 5 mins)
-  const upstreamTask = cron.schedule(upstreamSchedule, () => {
-    logger.info("[cron] Running background upstream DNS simultaneous probing & aura ranking...");
-    import("./upstream-manager.js").then(({ syncAndRankUpstreams }) => {
-      syncAndRankUpstreams(env, worker).catch((err) => {
-        logger.error("[cron] Simultaneous upstream sync failed:", err.message);
-      });
-    }).catch((err) => logger.error("[cron] Simultaneous upstream sync error:", err));
-  });
+  // 2. Upstream DNS Sync & Aura Ranker — strictly once a day at GMT+6, Dhaka
+  const upstreamTask = cron.schedule(
+    upstreamSchedule,
+    () => {
+      logger.info(`[cron] Running daily upstream DNS pull & rank (schedule: "${upstreamSchedule}", tz: "${upstreamTz}")...`);
+      import("./upstream-manager.js").then(({ syncAndRankUpstreams }) => {
+        syncAndRankUpstreams(env, worker, { forcePull: true }).catch((err) => {
+          logger.error("[cron] Daily upstream sync failed:", err.message);
+        });
+      }).catch((err) => logger.error("[cron] Daily upstream sync error:", err));
+    },
+    { timezone: upstreamTz }
+  );
 
   // 3. Main scheduled worker cron (every 5 mins by default)
   const cronTask = cron.schedule(schedule, () => {
@@ -83,7 +92,7 @@ export function startCron(worker, env) {
   }, 30000);
   sweepInterval.unref(); // don't prevent clean process shutdown
 
-  logger.info(`[cron] scheduled: "${schedule}" + daily: "${upstreamSchedule}" (upstream sync) + 30s cleaning rotation & memory guard`);
+  logger.info(`[cron] scheduled: "${schedule}" + daily upstream: "${upstreamSchedule}" (${upstreamTz}) + 30s cleaning rotation & memory guard`);
 
   return {
     stop: () => {

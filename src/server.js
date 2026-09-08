@@ -145,9 +145,10 @@ const server = tlsOptions
   ? https.createServer(tlsOptions, requestHandler)
   : http.createServer(requestHandler);
 
-// Keep-alive and request timeouts to prevent connection accumulation
-server.keepAliveTimeout = 65000;
-server.headersTimeout = 66000;
+// Keep-alive and request timeouts: Set keepAliveTimeout higher than reverse proxy
+// (Fly Proxy default 60s) to prevent proxy seeing unexpected EOF on backhaul connections.
+server.keepAliveTimeout = 120000;
+server.headersTimeout = 125000;
 server.requestTimeout = 30000;
 
 // Track active HTTP sockets for guaranteed cleanup on termination
@@ -216,9 +217,14 @@ function shutdown(signal = "SIGTERM") {
     dotInstance.close(() => {});
   }
 
-  // 4. Close HTTP server and destroy lingering sockets
+  // 4. Close HTTP server and gracefully close sockets
   if (typeof server.closeIdleConnections === "function") {
     server.closeIdleConnections();
+  }
+
+  // Gracefully half-close active HTTP sockets with FIN first
+  for (const socket of activeHttpSockets) {
+    try { socket.end(); } catch (_) {}
   }
 
   server.close(() => {
@@ -227,13 +233,13 @@ function shutdown(signal = "SIGTERM") {
     process.exit(0);
   });
 
-  // Forcibly destroy any lingering active HTTP sockets after 1000ms
+  // Forcibly destroy any lingering active HTTP sockets after grace period
   setTimeout(() => {
     for (const socket of activeHttpSockets) {
-      socket.destroy();
+      try { if (!socket.destroyed) socket.destroy(); } catch (_) {}
     }
     activeHttpSockets.clear();
-  }, 1000).unref();
+  }, 1500).unref();
 }
 
 // OS Process Signals

@@ -86,8 +86,8 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
 
   function onConnection(socket) {
     activeSockets.add(socket);
-    socket.setKeepAlive(true, 15000);
-    socket.setTimeout(120000); // 120s idle timeout (RFC 7858)
+    socket.setKeepAlive(true, 30000);
+    socket.setTimeout(240000); // 240s idle timeout (RFC 7858)
 
     let rxBuf = Buffer.alloc(0);
     let proxyChecked = false;
@@ -102,17 +102,19 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
     }
 
     socket.on("timeout", () => {
+      // Gracefully half-close with FIN to avoid abrupt RST on proxy backhaul
       socket.end();
-      setTimeout(() => {
-        if (!socket.destroyed) socket.destroy();
-      }, 1000).unref();
+    });
+
+    socket.on("end", () => {
+      socket.end();
     });
 
     socket.on("error", (err) => {
       if (err.code !== "ECONNRESET" && err.code !== "EPIPE") {
         logger.warn("[dot] socket error:", err.message);
       }
-      socket.destroy();
+      try { socket.destroy(); } catch (_) {}
     });
 
     socket.on("close", () => {
@@ -244,10 +246,15 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
     server,
     close: (cb) => {
       for (const sock of activeSockets) {
-        sock.destroy();
+        try { sock.end(); } catch (_) {}
       }
-      activeSockets.clear();
-      server.close(cb);
+      setTimeout(() => {
+        for (const sock of activeSockets) {
+          try { if (!sock.destroyed) sock.destroy(); } catch (_) {}
+        }
+        activeSockets.clear();
+        server.close(cb);
+      }, 1500).unref();
     },
   };
 }
