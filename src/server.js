@@ -1,5 +1,5 @@
 // src/server.js
-process.env.UV_THREADPOOL_SIZE = process.env.UV_THREADPOOL_SIZE || "4";
+process.env.UV_THREADPOOL_SIZE = process.env.UV_THREADPOOL_SIZE || "2";
 import v8 from "node:v8";
 try {
   v8.setFlagsFromString("--optimize_for_size");
@@ -157,13 +157,16 @@ const server = tlsOptions
 
 // Keep-alive and request timeouts: Set keepAliveTimeout higher than reverse proxy
 // (Fly Proxy default 60s) to prevent proxy seeing unexpected EOF on backhaul connections.
+// Set requestTimeout and timeout to 0 so Node never abruptly terminates idle keep-alive backhaul sockets.
 server.keepAliveTimeout = 120000;
 server.headersTimeout = 125000;
-server.requestTimeout = 30000;
+server.requestTimeout = 0;
+server.timeout = 0;
 
 // Track active HTTP sockets for guaranteed cleanup on termination
 const activeHttpSockets = new Set();
 server.on("connection", (socket) => {
+  socket.setKeepAlive(true, 15000);
   activeHttpSockets.add(socket);
   socket.on("close", () => activeHttpSockets.delete(socket));
 });

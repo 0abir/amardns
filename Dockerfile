@@ -27,7 +27,7 @@ COPY --from=build --chown=nonroot:nonroot /data /data
 # Production environment & memory safeguards for 256MB VMs
 ENV NODE_ENV=production \
     NODE_OPTIONS="--max-old-space-size=96 --expose-gc" \
-    UV_THREADPOOL_SIZE=4 \
+    UV_THREADPOOL_SIZE=2 \
     PORT=8080 \
     DOT_PORT=8053 \
     HOST=:: \

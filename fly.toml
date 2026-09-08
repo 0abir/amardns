@@ -46,11 +46,6 @@ primary_region = "sin"
     port = 443
     handlers = ["tls", "http"]
 
-  [[services.tcp_checks]]
-    interval = "15s"
-    timeout = "4s"
-    grace_period = "10s"
-
   [[services.http_checks]]
     interval = "15s"
     timeout = "4s"

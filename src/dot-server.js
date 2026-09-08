@@ -105,7 +105,10 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
     }
 
     socket.on("end", () => {
-      socket.end();
+      rxBuf = null;
+      try {
+        if (!socket.destroyed) socket.end();
+      } catch (_) {}
     });
 
     socket.on("error", (err) => {
@@ -113,7 +116,11 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
         logger.warn("[dot] socket error:", err.message);
       }
       rxBuf = null;
-      try { socket.destroy(); } catch (_) {}
+      try {
+        if (!socket.destroyed) socket.end();
+      } catch (_) {
+        try { socket.destroy(); } catch (_) {}
+      }
     });
 
     socket.on("close", () => {
