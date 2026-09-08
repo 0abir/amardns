@@ -919,6 +919,9 @@ export function checkBlocklist(domain, db) {
   }
 
   // RULE 2: Blocklist feed matching (exact or wildcard)
+  if (!_abirOk && !_feedSyncing) {
+    setImmediate(() => syncThreatFeeds(false, _env || pdb).catch(() => {}));
+  }
   if (_abirOk && _abirSet && _abirSet.size > 0) {
     let hit = _abirSet.has(d);
     if (!hit) {

@@ -11,10 +11,12 @@ import logger from "./logger.js";
 const env = buildEnv();
 if (env.pulseDb) {
   core.preloadLists?.(env);
-  if (env.pulseDb.whitelistTrie?.size === 0) {
-    core.syncThreatFeeds?.(false, env).catch((e) => logger.warn("[feed] Initial threat feed sync deferred:", e.message));
-  }
 }
+// Customized threat feeds (404.2k blocklist, 2.8k whitelist) reside in-memory (BloomFilters)
+// and must ALWAYS be populated on process boot or deployment.
+setImmediate(() => {
+  core.syncThreatFeeds?.(true, env).catch((e) => logger.warn("[feed] Initial threat feed sync deferred:", e.message));
+});
 core._loadUpstreams?.(env);
 
 const PORT = Number(process.env.PORT) || 443;

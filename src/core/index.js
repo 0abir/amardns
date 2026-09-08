@@ -55,6 +55,7 @@ const workerInstance = {
         if (!_listsPreloaded && env?.pulseDb) {
           preloadLists(env);
         }
+        syncThreatFeeds(false, env).catch((e) => logger.warn("[feed] Scheduled threat feed sync error:", e.message));
         _log("scheduled_tick", { cron: event.cron });
       })(),
     );
