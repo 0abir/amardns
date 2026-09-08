@@ -26,8 +26,10 @@ import { NOT_BLOCKED } from "../storage/pulse-db.js";
 
 export let _feedSyncing = false;
 export let _feedLastSync = 0;
-export let _abirTotalEntries = 500000;
-export let _commonTotalEntries = 3000;
+export let _abirTotalEntries = 398911;
+export let _commonTotalEntries = 2819;
+export let _abirCrossMatched = false;
+export let _commonCrossMatched = false;
 export let _abirLastSync = 0;
 export let _commonLastSync = 0;
 export let _abirSet = new BloomFilter(Math.ceil(_abirTotalEntries * 1.1));
@@ -166,7 +168,10 @@ export async function syncThreatFeeds(force = false, env = null, options = {}) {
       }
       if (residue) {
         const d = _normalizeBlocklistLine(residue);
-        if (d) filter.add(d);
+        if (d) {
+          filter.add(d);
+          totalProcessed++;
+        }
       }
       return filter;
     } finally {
@@ -252,6 +257,12 @@ export async function syncThreatFeeds(force = false, env = null, options = {}) {
         if (filter.size > 0) {
           _abirSet = filter;
           _abirOk = true;
+          _abirCrossMatched = (_abirTotalEntries > 0 && filter.size === _abirTotalEntries);
+          _log("abir_crossmatch", {
+            domains: filter.size,
+            expected: _abirTotalEntries,
+            matched: _abirCrossMatched,
+          });
         }
         _log("abir_sync", { domains: filter.size });
       })(),
@@ -263,6 +274,15 @@ export async function syncThreatFeeds(force = false, env = null, options = {}) {
           _whitelistWildcards = result.wild;
           _commonSet = result.filter;
           _commonOk = true;
+          const totalParsed = result.exact.size + result.wild.size;
+          _commonCrossMatched = (_commonTotalEntries > 0 && (totalParsed === _commonTotalEntries || result.filter.size === _commonTotalEntries));
+          _log("common_crossmatch", {
+            exact: result.exact.size,
+            wildcards: result.wild.size,
+            totalParsed,
+            expected: _commonTotalEntries,
+            matched: _commonCrossMatched,
+          });
         }
         _log("common_sync", { exact: result.exact.size, wildcards: result.wild.size });
       })(),

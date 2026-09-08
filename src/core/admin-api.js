@@ -31,7 +31,7 @@ import {
   checkBlocklist, checkExistsAnywhere, checkWhitelist, checkCommon,
   preloadLists, _feedLastSync, _feedSyncing, _abirOk, _commonOk,
   _abirLastSync, _commonLastSync, _abirTotalEntries, _abirSet,
-  _commonTotalEntries, _commonSet, clearThreatIntelligenceCaches
+  _commonTotalEntries, _commonSet, _abirCrossMatched, _commonCrossMatched, clearThreatIntelligenceCaches
 } from "./threat-intelligence.js";
 import {
   _nnStats, _transformer, _manifold, _charTransformer,
@@ -220,11 +220,13 @@ export function buildStatus(env, request = null) {
       feedAiBlocks: _sh.feedAiBlocks,
       abirSize: _abirSet.size,
       abirTotalEntries: _abirTotalEntries,
+      abirCrossMatched: _abirCrossMatched,
       gsbOk: SAFE_BROWSING_KEYS.length > 0,
       gsbKeyCount: SAFE_BROWSING_KEYS.length,
       abirOk: _abirOk,
       commonSize: _commonSet.size,
       commonTotalEntries: _commonTotalEntries,
+      commonCrossMatched: _commonCrossMatched,
       commonOk: _commonOk,
       feedTier1: _sh.feedTier1,
       feedTier2: _sh.feedTier2,

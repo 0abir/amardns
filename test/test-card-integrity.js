@@ -119,12 +119,22 @@ async function main() {
   assert.strictEqual(dccCard.val, "42", `Category Hits must be 42, got: ${dccCard.val}`);
   console.log("   ✓ Category Hits actively tracks classified traffic!");
 
-  console.log("-> [5/5] Verifying Shield total aggregation...");
+  console.log("-> [5/6] Verifying Shield total aggregation...");
   const shieldCard = stats.find(s => s.id === "shield");
   assert.ok(shieldCard, "shield card exists");
   // 69 + 0 + 87 + 3 + 15 + 0 = 174
   assert.strictEqual(shieldCard.val, "174", `Shield must equal sum of all threat blocks, got: ${shieldCard.val}`);
   console.log("   ✓ Shield correctly sums threat blocks including abirBlocks!");
+
+  console.log("-> [6/6] Verifying ABIR Feed & Common Feed exact number total subtitles...");
+  const abirFeedCard = stats.find(s => s.id === "abir-bf");
+  assert.ok(abirFeedCard, "abir-bf card exists");
+  assert.strictEqual(abirFeedCard.sub, "404,200 total", `ABIR Feed subtitle must be 404,200 total, got: ${abirFeedCard.sub}`);
+
+  const comFeedCard = stats.find(s => s.id === "com-bf");
+  assert.ok(comFeedCard, "com-bf card exists");
+  assert.strictEqual(comFeedCard.sub, "2,800 total", `Common Feed subtitle must be 2,800 total, got: ${comFeedCard.sub}`);
+  console.log("   ✓ ABIR Feed and Common Feed display exact formatted total entries!");
 
   console.log("\nALL 30 CARDS VERIFIED AND FUNCTIONING PERFECTLY! 🚀🎉\n");
 }

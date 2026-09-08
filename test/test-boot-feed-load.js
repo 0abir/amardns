@@ -4,7 +4,7 @@
 import assert from "node:assert";
 import fs from "node:fs";
 import { PulseDB } from "../src/storage/pulse-db.js";
-import { syncThreatFeeds, _abirOk, _commonOk, _abirSet, _commonSet } from "../src/core/threat-intelligence.js";
+import { syncThreatFeeds, _abirOk, _commonOk, _abirSet, _commonSet, _abirCrossMatched, _commonCrossMatched } from "../src/core/threat-intelligence.js";
 import { setEnv } from "../src/core/state.js";
 
 async function main() {
@@ -22,13 +22,15 @@ async function main() {
   console.log("-> [1/2] Triggering boot sync with non-empty database...");
   await syncThreatFeeds(true, env);
 
-  console.log("-> [2/2] Validating feed in-memory state...");
+  console.log("-> [2/2] Validating feed in-memory state and cross-match verification...");
   assert.strictEqual(_abirOk, true, "ABIR blocklist feed must be OK on startup");
   assert.strictEqual(_commonOk, true, "Common whitelist feed must be OK on startup");
-  assert.ok(_abirSet.size > 100000, `ABIR blocklist set must be loaded with >100k domains, got ${_abirSet.size}`);
-  assert.ok(_commonSet.size > 1000, `Common whitelist set must be loaded with >1k domains, got ${_commonSet.size}`);
+  assert.strictEqual(_abirCrossMatched, true, "ABIR blocklist must be 100% cross-matched with total_blocked.txt");
+  assert.strictEqual(_commonCrossMatched, true, "Common whitelist must be 100% cross-matched with total_whitelisted.txt");
+  assert.strictEqual(_abirSet.size, 398911, `ABIR blocklist set must match total_blocked.txt exactly (398,911), got ${_abirSet.size}`);
+  assert.strictEqual(_commonSet.size, 2819, `Common whitelist set must match total_whitelisted.txt exactly (2,819), got ${_commonSet.size}`);
 
-  console.log(`   ✓ Successfully loaded ${_abirSet.size} blocklist and ${_commonSet.size} whitelist domains automatically!`);
+  console.log(`   ✓ Successfully cross-matched ${_abirSet.size} blocklist and ${_commonSet.size} whitelist domains!`);
 
   pdb.close();
   try {
