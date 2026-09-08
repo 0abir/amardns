@@ -43,13 +43,10 @@ export const ADMIN_CORS_H = Object.freeze({
   "vary": "Origin",
 });
 export const AERO_WRITE_LIMIT = Infinity;
-export const AERO_READ_LIMIT = Infinity;
 export const PULSE_WRITE_LIMIT = Infinity;
-export const PULSE_READ_LIMIT = Infinity;
 export const PULSE_SOFT_CAP = 1.0;
 export const BRAIN_SYNC_INTERVAL = 2 * 60 * 1e3;
 export const BRAIN_CHUNK_SIZE = 1e4;
-export const MAX_BODY = 65535;
 export const MAX_DNS_QUERY = 4096;
 export const MAX_ADMIN_BODY = 1024 * 1024;
 export const _BG_SET1 = new Set(
@@ -95,7 +92,6 @@ export const BURST_THRESHOLD = 60;
 export const CB_WINDOW = 60;
 export const CB_THRESHOLD = 0.45;
 export const EWMA_FAST = 0.35;
-export const EWMA_SLOW = 0.04;
 export const AUTO_BLOCK_TTL = 1800;
 export const AUTO_BLOCK_MAX = 200;
 export const DGA_FLAG_SCORE = 50;
@@ -119,9 +115,6 @@ export const XV_PENALTY = 180;
 export const TTL_DEVIATE_RATIO = 3;
 export const TTL_DEFLATE_RATIO = 0.25;
 export const TTL_PENALTY = 120;
-export const FS_STALE_RATIO = 1.2;
-export const FS_MIN_ELAPSED_S = 8;
-export const FS_PENALTY = 40;
 
 export const REBIND_PRIVATE = [
   /^10\./,

@@ -2,8 +2,10 @@
 // Global runtime state, telemetry containers, queues, and caches.
 
 import {
-  BG_CONCURRENCY, FEED_CACHE_MAX, PULSE_WRITE_LIMIT
+  BG_CONCURRENCY, FEED_CACHE_MAX, PULSE_WRITE_LIMIT,
+  AERO_BUCKET_CAP, AERO_REFILL_PER_MIN, DOMAIN_IQ_MAX, HEATMAP_MAX, LEDGER_MAX, _enc
 } from "./constants.js";
+export { AERO_BUCKET_CAP, AERO_REFILL_PER_MIN, DOMAIN_IQ_MAX, HEATMAP_MAX, LEDGER_MAX, _enc };
 import logger from "../logger.js";
 
 // Context & Environment
@@ -249,10 +251,23 @@ export let _aeroW = 0,
 export let _aeroThrottle = false,
   _pulseThrottle = false;
 export let _dayStr = "";
-export let _aeroBucket = 10;
-export const AERO_BUCKET_CAP = 10;
-export const AERO_REFILL_PER_MIN = 1;
-export let _aeroBucketTs = 0;
+
+export function incPulseW() { _pulseW++; }
+export function incPulseR() { _pulseR++; }
+export function incAeroW() { _aeroW++; }
+export function incAeroR() { _aeroR++; }
+export function setPulseThrottle(t) { _pulseThrottle = t; }
+export function setAeroThrottle(t) { _aeroThrottle = t; }
+export function resetStorageQuotas(today) {
+  _dayStr = today;
+  _aeroW = 0;
+  _aeroR = 0;
+  _pulseW = 0;
+  _pulseR = 0;
+  _aeroThrottle = false;
+  _pulseThrottle = false;
+}
+
 export const _negCache = new Map();
 export const _autoBlocks = new Map();
 export const _burstMap = new Map();
@@ -436,7 +451,6 @@ export const _anomaly = {
     }
   },
 };
-export const DOMAIN_IQ_MAX = 2e3;
 export let _iqDecayTs = 0;
 export let _userEstTs = 0;
 export const _domainIQ = {
@@ -642,7 +656,6 @@ export {
   _userEwmaFast, _userEwmaSlow, _userPeak,
   _userEstimate, _userModeAuto, setUserEstimate, setUserModeAuto
 } from "./telemetry.js";
-export const HEATMAP_MAX = 2e3;
 export const _heatmap = new Map();
 export let _heatmapFlushTs = 0;
 export const _obs = {
@@ -676,7 +689,6 @@ export const _obs = {
   },
 };
 export const _answerHistory = new Map();
-export const LEDGER_MAX = 200;
 export const _ledger = {
   entries: [],
   clear() {
@@ -750,7 +762,6 @@ export const _budgetAI = {
     }
   },
 };
-export const _enc = new TextEncoder();
 export const _hmacCache = new WeakMap();
 export function setIsolateId(id) { _ISOLATE_ID = id; }
 export function setBrainDirty(b) { _brainDirty = b; }

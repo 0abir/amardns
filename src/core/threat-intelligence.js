@@ -2,25 +2,23 @@
 // Threat feeds sync, Safe Browsing, lookalike brand spoofing, DGA scoring, behavioral heuristics, and list management.
 
 import {
-  VERSION, FEED_CACHE_TTL, FEED_CACHE_MAX, FEED_SYNC_INTERVAL, FEED_RETRY_INTERVAL,
+  VERSION, FEED_SYNC_INTERVAL, FEED_RETRY_INTERVAL,
   ABIR_FEED, ABIR_TOTAL_URL, COMMON_FEED, COMMON_TOTAL_URL, AUTO_BLOCK_TTL,
-  AUTO_BLOCK_MAX, DGA_MIN_LEN, DGA_FLAG_SCORE, DGA_BLOCK_SCORE, DGA_SKIP_TLDS,
-  PRIVATE_SUFFIXES, REBIND_PRIVATE, XV_PENALTY, TTL_DEVIATE_RATIO,
-  TTL_DEFLATE_RATIO, TTL_PENALTY, BURST_WINDOW_MS, BURST_THRESHOLD,
-  CB_WINDOW, CB_THRESHOLD, _BG_SET2, _RE_VOWELS, _RE_DIGITS, _RE_CONSONANT_RUN,
+  AUTO_BLOCK_MAX, DGA_MIN_LEN, DGA_BLOCK_SCORE, DGA_SKIP_TLDS,
+  PRIVATE_SUFFIXES, REBIND_PRIVATE, TTL_DEVIATE_RATIO,
+  TTL_DEFLATE_RATIO, BURST_WINDOW_MS, _BG_SET2, _RE_CONSONANT_RUN,
   GSB_CACHE_MAX, GSB_CACHE_THREAT_TTL, GSB_CACHE_CLEAN_TTL
 } from "./constants.js";
 import {
   _feedCache, SAFE_BROWSING_KEYS, BRANDS_LIST,
-  _autoBlocks, _burstMap, _fpMap, _answerHistory, _sh, _anomalies,
-  _bgEnqueue, _env, _memBlacklist,
-  _memWhitelist, _memCommon, _cb, _dnsMode, _setDnsMode,
-  _blockingEnabled, _setBlockingEnabled, getBlockingEnabled,
+  _autoBlocks, _burstMap, _fpMap, _answerHistory, _sh,
+  _bgEnqueue, _env, _cb, _setDnsMode,
+  _blockingEnabled, _setBlockingEnabled,
   _dgaLegit, _markov, _domainIQ, _rhythm, _obs, _budgetAI, _runtimeConfig,
-  _listsPreloaded, setListsPreloaded } from "./state.js";
-import { _log, _action, _aiDecision, _getRps } from "./telemetry.js";
+  setListsPreloaded } from "./state.js";
+import { _log, _getRps } from "./telemetry.js";
 import { deLeet, _getCandidates } from "./neural-math.js";
-import { aeroGet, aeroPut, _feedCacheGet, _feedCacheSet, _pulseThrottle, _pulseW } from "./storage-adapter.js";
+import { aeroGet, _feedCacheGet, _feedCacheSet, _pulseThrottle, _pulseW } from "./storage-adapter.js";
 import { BloomFilter } from "./bloom-filter.js";
 import { NOT_BLOCKED } from "../storage/pulse-db.js";
 
@@ -397,7 +395,6 @@ export async function checkThreatFeeds(domain) {
   _feedCacheSet(cleanDomain, aiBlocked, "ai_fallback");
   return r;
 }
-const AERO_CHUNK_BYTES = 1e4;
 export const _gsbCache = new Map();
 
 export function _gsbCacheGet(domain) {

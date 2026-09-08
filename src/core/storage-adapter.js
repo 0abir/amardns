@@ -12,58 +12,39 @@ import {
   _ledger, _budgetAI, _runtimeConfig, _listsPreloaded,
   setListsPreloaded, setBrainLastSync, setBrainSyncBytes,
   setBrainLoaded, setBrainLoadedAt, setBrainInitializing, setBrainSyncCount,
-  _bgEnqueue, _dgaLegit, _autoBlocks, _ctx, _feedCache
+  _bgEnqueue, _dgaLegit, _autoBlocks, _ctx, _feedCache,
+  _aeroW, _aeroR, _pulseW, _pulseR, _aeroThrottle, _pulseThrottle, _dayStr,
+  _brainDirty, _brainLastSync, _brainSyncBytes, _brainLoadedAt, _brainLoaded, _brainInitializing, _brainSyncCount,
+  incPulseW, incPulseR, incAeroW, incAeroR, setPulseThrottle, setAeroThrottle, resetStorageQuotas, setBrainDirty
 } from "./state.js";
-import { _aeroCanWrite, _aeroAccountWrite, _log, _action, setUserEstimate, setStress, _stress, _userEstimate, _userSamples } from "./telemetry.js";
-import { nnExport, nnImport, _charTransformer, _episodic, _nnStats, _brainPrune } from "./neural-engine.js";
-import {
-  _dtn, _moe, _gru, _ae, _spiking, _liquid, _mha, _bnn,
-  _contrastive, _neuron, _gnn, _forest, _calibrator, _meta,
-  _dtcn, _symbolic, _embNet, _finalNeuron, _rl
-} from "./neural-models.js";
 
-import { preloadLists as _preloadLists } from "./threat-intelligence.js";
+export {
+  _aeroW, _aeroR, _pulseW, _pulseR, _aeroThrottle, _pulseThrottle, _dayStr,
+  _brainDirty, _brainLastSync, _brainSyncBytes, _brainLoadedAt, _brainLoaded, _brainInitializing, _brainSyncCount,
+  resetStorageQuotas, setBrainDirty
+};
 
-export let _aeroW = 0, _aeroR = 0, _pulseW = 0, _pulseR = 0;
-export let _aeroThrottle = false, _pulseThrottle = false;
-export let _dayStr = "";
-export let _brainDirty = false;
-export let _brainLastSync = 0;
-export let _brainSyncBytes = 0;
-export let _brainLoadedAt = 0;
-export let _brainLoaded = false;
-export let _brainInitializing = false;
-export let _brainSyncCount = 0;
-
-export function setBrainDirty(b = true) { _brainDirty = b; }
-export function resetStorageQuotas(today) {
-  _dayStr = today;
-  _aeroW = 0;
-  _aeroR = 0;
-  _pulseW = 0;
-  _pulseR = 0;
-  _aeroThrottle = false;
-  _pulseThrottle = false;
-}
-export function accountAeroWrite() { _aeroW++; }
-export function accountPulseRead() { _pulseR++; }
+export function accountAeroWrite() { incAeroW(); }
+export function accountAeroRead() { incAeroR(); }
+export function accountPulseRead() { incPulseR(); }
+export function accountPulseWrite() { incPulseW(); }
 
 
 export async function aeroGet(key, fallback = null) {
   const pdb = _env?.pulseDb;
   if (pdb && typeof pdb.get === "function") {
-    _aeroR++;
+    incAeroR();
     return pdb.get(key, fallback);
   }
   const aero = _env?.DNS_AERO;
   if (!aero || _aeroThrottle) return fallback;
   try {
-    _aeroR++;
+    incAeroR();
     const val = await aero.get(key, "json");
     return val !== null ? val : fallback;
   } catch (e) {
     if (e.message?.includes("limit") || e.message?.includes("quota"))
-      _aeroThrottle = true;
+      setAeroThrottle(true);
     return fallback;
   }
 }
@@ -71,30 +52,30 @@ export async function aeroPut(key, value, ttl = 3600) {
   const pdb = _env?.pulseDb;
   if (pdb && typeof pdb.set === "function") {
     pdb.set(key, value, ttl);
-    _aeroAccountWrite();
+    incAeroW();
     return;
   }
   const aero = _env?.DNS_AERO;
   if (!aero || !_aeroCanWrite()) return;
   try {
     await aero.put(key, JSON.stringify(value), { expirationTtl: ttl });
-    _aeroAccountWrite();
+    incAeroW();
   } catch (e) {
     if (e.message?.includes("limit") || e.message?.includes("quota"))
-      _aeroThrottle = true;
+      setAeroThrottle(true);
     _sh.pulseErrors++;
   }
 }
 export async function pulseGet(key, fallback = null) {
   const pdb = _env?.pulseDb;
   if (pdb && typeof pdb.get === "function") {
-    _pulseR++;
+    incPulseR();
     return pdb.get(key, fallback);
   }
   const db = _env?.PULSE_DB;
   if (!db || _pulseThrottle) return fallback;
   try {
-    _pulseR++;
+    incPulseR();
     const row = await db
       .prepare(
         "SELECT value FROM pulse_generic WHERE key=? AND (exp=0 OR exp>?) LIMIT 1",
@@ -104,7 +85,7 @@ export async function pulseGet(key, fallback = null) {
     return row?.value ? JSON.parse(row.value) : fallback;
   } catch (e) {
     _sh.pulseErrors++;
-    if (e.message?.includes("limit")) _pulseThrottle = true;
+    if (e.message?.includes("limit")) setPulseThrottle(true);
     return fallback;
   }
 }
@@ -112,13 +93,13 @@ export async function pulsePut(key, value, ttlSeconds = 3600) {
   const pdb = _env?.pulseDb;
   if (pdb && typeof pdb.set === "function") {
     pdb.set(key, value, ttlSeconds);
-    _pulseW++;
+    incPulseW();
     return;
   }
   const db = _env?.PULSE_DB;
   if (!db || _pulseThrottle || !_budgetAI.canWrite()) return;
   const exp = ttlSeconds > 0 ? Math.floor(Date.now() / 1e3) + ttlSeconds : 0;
-  _pulseW++;
+  incPulseW();
   _budgetAI.track();
   try {
     await db
@@ -127,7 +108,7 @@ export async function pulsePut(key, value, ttlSeconds = 3600) {
       .run();
   } catch (e) {
     _sh.pulseErrors++;
-    if (e.message?.includes("limit")) _pulseThrottle = true;
+    if (e.message?.includes("limit")) setPulseThrottle(true);
   }
 }
 export async function pulseDel(key) {
@@ -683,45 +664,6 @@ export function _feedCacheSet(domain, blocked, source) {
   _feedCache.set(domain, { blocked: blocked, source: source, ts: Date.now() });
 }
 
-export async function aeroPutChunked(aero, key, value, ttl) {
-  if (!aero || !_aeroCanWrite()) return;
-  const str = typeof value === "string" ? value : JSON.stringify(value);
-  if (str.length <= AERO_CHUNK_BYTES) {
-    try {
-      await aero.put(key, str, { expirationTtl: ttl });
-      _aeroAccountWrite();
-    } catch (e) {
-      if (e.message?.includes("limit") || e.message?.includes("quota"))
-        _aeroThrottle = true;
-    }
-    return;
-  }
-  const n = Math.ceil(str.length / AERO_CHUNK_BYTES);
-  _bgEnqueue(async () => {
-    if (!_aeroCanWrite()) return;
-    try {
-      await aero.put(`${key}:__n`, String(n), { expirationTtl: ttl });
-      _aeroAccountWrite();
-    } catch (e) {
-      if (e.message?.includes("limit") || e.message?.includes("quota"))
-        _aeroThrottle = true;
-    }
-  });
-  for (let i = 0; i < n; i++) {
-    const chunk = str.slice(i * AERO_CHUNK_BYTES, (i + 1) * AERO_CHUNK_BYTES);
-    const chunkKey = `${key}:__c${i}`;
-    _bgEnqueue(async () => {
-      if (!_aeroCanWrite()) return;
-      try {
-        await aero.put(chunkKey, chunk, { expirationTtl: ttl });
-        _aeroAccountWrite();
-      } catch (e) {
-        if (e.message?.includes("limit") || e.message?.includes("quota"))
-          _aeroThrottle = true;
-      }
-    });
-  }
-}
 export async function aeroGetChunked(aero, key) {
   if (!aero) return null;
   try {
@@ -767,25 +709,21 @@ export async function brainSync(force = false) {
       if (!_pulseThrottle && _budgetAI.canWrite(true)) {
         const metaVal = parts["meta"] || "";
         if (metaVal) {
-          _pulseW++;
           _budgetAI.track();
           await pulsePut("ai:brain:hot", metaVal, 0).catch(() => {});
         }
         const statsVal = parts["nn_stats"] || "";
         if (statsVal && statsVal.length < 2e4 && _budgetAI.canWrite(true)) {
-          _pulseW++;
           _budgetAI.track();
           await pulsePut("ai:brain:nn_stats", statsVal, 0).catch(() => {});
         }
         const markovPlain = parts["markov"] || "";
         const markovChunkCount = parseInt(parts["markov_chunks"] || "0", 10);
         if (markovPlain && _budgetAI.canWrite(true)) {
-          _pulseW++;
           _budgetAI.track();
           await pulsePut("ai:brain:markov", markovPlain, 0).catch(() => {});
         } else if (markovChunkCount > 0) {
           if (_budgetAI.canWrite(true)) {
-            _pulseW++;
             _budgetAI.track();
             await pulsePut(
               "ai:brain:markov_chunks",
@@ -797,7 +735,6 @@ export async function brainSync(force = false) {
             Array.from({ length: markovChunkCount }, async (_, i) => {
               const chunk = parts[`markov_${i}`] || "";
               if (chunk && _budgetAI.canWrite(true)) {
-                _pulseW++;
                 _budgetAI.track();
                 await pulsePut(`ai:brain:markov_${i}`, chunk, 0).catch(() => {});
               }
@@ -833,7 +770,6 @@ export async function brainSync(force = false) {
           NN_SYNC_KEYS.map(async (k) => {
             const val = parts["nn_" + k];
             if (val && val.length < 5e4 && _budgetAI.canWrite(true)) {
-              _pulseW++;
               _budgetAI.track();
               await pulsePut("ai:brain:nn_" + k, val, 0).catch(() => {});
             }
@@ -841,14 +777,12 @@ export async function brainSync(force = false) {
         );
         const rhythmVal = parts["rhythm"] || "";
         if (rhythmVal && _budgetAI.canWrite(true)) {
-          _pulseW++;
           _budgetAI.track();
           await pulsePut("ai:brain:rhythm", rhythmVal, 0).catch(() => {});
         }
         const iqChunks = parts["iq_chunks"] || "";
         const iqWrites = [];
         if (iqChunks && _budgetAI.canWrite(true)) {
-          _pulseW++;
           _budgetAI.track();
           iqWrites.push(
             pulsePut("ai:brain:iq_chunks", iqChunks, 0).catch(() => {}),
@@ -857,14 +791,12 @@ export async function brainSync(force = false) {
         for (let i = 0; i < 5; i++) {
           const iqPart = parts["iq_" + i];
           if (iqPart && _budgetAI.canWrite(true)) {
-            _pulseW++;
             _budgetAI.track();
             iqWrites.push(pulsePut("ai:brain:iq_" + i, iqPart, 0).catch(() => {}));
           }
         }
         const iqPlain = parts["iq"] || "";
         if (iqPlain && _budgetAI.canWrite(true)) {
-          _pulseW++;
           _budgetAI.track();
           iqWrites.push(pulsePut("ai:brain:iq", iqPlain, 0).catch(() => {}));
         }
@@ -873,7 +805,7 @@ export async function brainSync(force = false) {
         if (aero && !_aeroThrottle && _aeroCanWrite()) {
           try {
             await aero.put("ai:brain:probe", "1", { expirationTtl: 172800 });
-            _aeroAccountWrite();
+            incAeroW();
           } catch (_) {}
         }
       }

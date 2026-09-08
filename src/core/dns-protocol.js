@@ -3,30 +3,27 @@
 
 import {
   DNS_H, DNS_CT, NEG_TTL_MS, NEG_SRVFAIL_MS, NEG_MAX,
-  MAX_CACHE_TTL, MIN_CACHE_TTL, DEF_CACHE_TTL, MAX_PTR_HOPS,
-  _decoder, DGA_BLOCK_SCORE
+  MIN_CACHE_TTL, DEF_CACHE_TTL, _decoder, DGA_BLOCK_SCORE
 } from "./constants.js";
 import {
-  _negCache, _autoBlocks,
-  _sh, _anomalies, _runtimeConfig, _stress, _rndData, _bgEnqueue, _env, _ucb, _kf,
+  _negCache, _sh, _runtimeConfig, _stress, _rndData, _env, _ucb, _kf,
   _ctx, _burstMap, _aiDecisions, _configDecisions, _domainIQ, _markov,
-  _blockingEnabled
+  _blockingEnabled, _lastLbMode, setLastLbMode
 } from "./state.js";
+export { _lastLbMode };
 import {
   _trackRequest, _calcStress, _log, _action, _aiDecision,
-  setUserEstimate, setUserModeAuto, _userEstimate, _userModeAuto, _heatmapUpdate
+  setUserEstimate, setUserModeAuto, _heatmapUpdate
 } from "./telemetry.js";
 import {
-  checkBlocklist, checkExistsAnywhere, checkWhitelist, checkCommon,
-  alikeDomainCheck, checkThreatFeeds, checkGoogleSafeBrowsing,
-  autoBlockSet, dgaScore, burstCheck, rebindCheck, qtypeAbuseCheck,
-  ttlCheck, answerDriftCheck, swarmCheck, fpCheck, clientNxCheck,
-  aiThreatAugment, poisonGuardCheck, multiQuestionCheck, cbCheck,
+  checkBlocklist, checkWhitelist, alikeDomainCheck, checkGoogleSafeBrowsing,
+  autoBlockSet, dgaScore, rebindCheck, qtypeAbuseCheck,
+  answerDriftCheck, multiQuestionCheck, cbCheck,
   isKnownLegitDomain, dccClassify
 } from "./threat-intelligence.js";
 import {
   nnThreatScore, nnSelectUpstream, nnCacheTTL, nnCacheSignal,
-  _perpetualLearnTick, _contextFusion, _charSummary4, _nnStats
+  _perpetualLearnTick, _nnStats
 } from "./neural-engine.js";
 import { queryHttp2 } from "./http2-doh.js";
 
@@ -34,7 +31,6 @@ export let _ups = [];
 export let _upScores = [];
 export let _cb = [];
 export let _upMetadata = null;
-export let _lastLbMode = "BALANCED";
 
 export function _view(buf) {
   if (!buf) return null;
@@ -422,12 +418,7 @@ export async function fetchUpstream(dnsQuery, upIdx, signal) {
     return null;
   }
 }
-export function _queryToBase64Url(buf) {
-  const bytes = new Uint8Array(buf);
-  let str = "";
-  for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]);
-  return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
-}
+
 export async function queryUpstreams(dnsQuery, rps) {
   const n = _ups.length;
   if (n === 0) return null;
@@ -464,7 +455,7 @@ export async function queryUpstreams(dnsQuery, rps) {
     });
     if (_aiDecisions.length > 100) _aiDecisions.shift();
   }
-  _lastLbMode = lbMode;
+  setLastLbMode(lbMode);
   const available = _ups.map((_, i) => i).filter((i) => !_cb[i]?.open);
   if (available.length === 0) {
     _cb.forEach((c) => {
@@ -637,9 +628,6 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
         headers: { "content-type": DNS_CT, ...DNS_H },
       });
     }
-
-    const cat = dccClassify(name);
-    if (cat) _sh.dccHits++;
 
     // Alike / Homoglyph Brand Impersonation check
     const alike = alikeDomainCheck(name, db);

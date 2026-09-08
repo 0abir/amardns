@@ -2,49 +2,45 @@
 // Live status telemetry builder, admin dashboard route handlers, and administrative REST endpoints.
 
 import {
-  VERSION, ADMIN_CORS_H, NO_CACHE_H, CORS_H, _SEC_H, _enc,
+  ADMIN_CORS_H, NO_CACHE_H, _SEC_H, _enc,
   PULSE_WRITE_LIMIT, PULSE_SOFT_CAP, MAX_CACHE_TTL, MIN_CACHE_TTL,
   CB_WINDOW, CB_THRESHOLD, DGA_FLAG_SCORE, DGA_BLOCK_SCORE, DOMAIN_IQ_MAX
 } from "./constants.js";
-import { sanitizeDomain, sanitizePath, sanitizeTtl, escapeHtml } from "./sanitizer.js";
+import { sanitizeDomain, sanitizePath, sanitizeTtl } from "./sanitizer.js";
 import logger from "../logger.js";
 // ADMIN_HTML is dynamically imported on demand when /dashboard is requested
 import {
-  _upScores, _cb, _upMetadata, _ISOLATE_ID, _userEstimate,
-  _userModeAuto, _userSamples, _workerStartTs, _workerId, _sh,
+  _upScores, _cb, _upMetadata, _ISOLATE_ID, _userEstimate, _sh,
   _anomalies, _actions, _aiDecisions, _configDecisions, _kf, _rhythm,
   _anomaly, _domainIQ, _markov, _dgaLegit, _ucb, _obs, _ledger,
   _budgetAI, _heatmap, _negCache, _autoBlocks, _burstMap, _fpMap,
-  _answerHistory, _featCache, _stress, _stressHistory, _rpsSmooth,
+  _answerHistory, _featCache, _stress,
   _rpsPeak, _brainDirty, _brainLastSync, _brainSyncBytes, _brainLoadedAt,
-  _brainLoaded, _brainInitializing, _listsPreloaded,
-  SAFE_BROWSING_KEYS, BRANDS_LIST, _runtimeConfig, _pulseW, _pulseR,
-  _aeroW, _aeroR, _env, _ctx, _dnsMode, _setDnsMode, _blockingEnabled, _setBlockingEnabled, _ups, _bgEnqueue,
+  _brainLoaded, _brainInitializing,
+  SAFE_BROWSING_KEYS, _pulseW, _pulseR,
+  _aeroW, _dnsMode, _setDnsMode, _blockingEnabled, _setBlockingEnabled, _ups, _bgEnqueue,
   resetSh, _memBlacklist, _memWhitelist, _memCommon, _feedCache, _userMap, _deviceMap, _bgQueue, _bgQueueHi
 } from "./state.js";
 import {
-  _onlineSince, _log, _action, _aiDecision, generateToken, _getRps, fnv1a32, _utcDay, _getHmacKey,
+  _onlineSince, _log, _action, generateToken, _getRps, _utcDay, _getHmacKey,
   resetTelemetry, bufToHex, getActiveDeviceCount, getActiveIpCount, getActiveDevicesList
 } from "./telemetry.js";
 import {
   alikeDomainCheck, dgaScore, syncThreatFeeds, autoBlockSet,
-  checkBlocklist, checkExistsAnywhere, checkWhitelist, checkCommon,
-  preloadLists, _feedLastSync, _feedSyncing, _abirOk, _commonOk,
-  _abirLastSync, _commonLastSync, _abirTotalEntries, _abirSet,
+  preloadLists, _abirOk, _commonOk,
+  _abirTotalEntries, _abirSet,
   _commonTotalEntries, _commonSet, _abirCrossMatched, _commonCrossMatched, clearThreatIntelligenceCaches
 } from "./threat-intelligence.js";
 import {
-  _nnStats, _transformer, _manifold, _charTransformer,
-  _episodic, _rewardShaper, _contextFusion, nnExport, nnImport, _brainPrune,
+  _nnStats, _charTransformer,
+  _episodic, _rewardShaper, _contextFusion, _brainPrune,
   clearNeuralCaches
 } from "./neural-engine.js";
 import {
-  _dtn, _moe, _gru, _ae, _spiking, _liquid, _mha, _bnn,
-  _contrastive, _neuron, _gnn, _forest, _calibrator, _meta,
-  _dtcn, _symbolic, _embNet, _finalNeuron, _rl, clearNeuralModelStates
+  _dtn, _ae, clearNeuralModelStates
 } from "./neural-models.js";
 import {
-  aeroGet, aeroPut, pulseGet, pulsePut, pulseDel, brainSync, brainLoad,
+  brainSync,
   setBrainDirty, accountPulseRead, _brainExport, _brainImport, _pulseThrottle
 } from "./storage-adapter.js";
 import { setUpstreams, _lastLbMode, _loadUpstreams } from "./dns-protocol.js";
@@ -841,17 +837,11 @@ export async function handleApiRoute(request, path, env, method) {
     _action("self_heal_cleared", "admin");
     return jsonResp({ ok: true });
   }
-  if (path === "/api/incident" && method === "DELETE") {
-    return jsonResp({ ok: true });
-  }
   if (path === "/api/pcb" && method === "DELETE") {
     _cb.forEach((c) => {
       c.errors = 0;
       c.total = 0;
     });
-    return jsonResp({ ok: true });
-  }
-  if (path === "/api/xval" && method === "DELETE") {
     return jsonResp({ ok: true });
   }
   if (path === "/api/config") {

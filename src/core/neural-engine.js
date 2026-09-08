@@ -2,8 +2,8 @@
 // Neural AI Threat Engine: Feature extraction, attention routing, 20-model threat ensemble, dynamic TTL, and online learning.
 
 import {
-  _BG_SET1, _BG_SET2, _RE_VOWELS, _RE_DIGITS,
-  _RE_CONSONANT_RUN, _RE_HYPHENS, FEAT_CACHE_MAX,
+  _BG_SET1,
+  _RE_CONSONANT_RUN, FEAT_CACHE_MAX,
   AERO_WRITE_LIMIT, PULSE_WRITE_LIMIT, CB_THRESHOLD, DGA_FLAG_SCORE, DGA_BLOCK_SCORE, DOMAIN_IQ_MAX
 } from "./constants.js";
 import {
@@ -12,7 +12,7 @@ import {
   _rpsHistory, _anomaly, _cb, _dgaLegit, _ucb, _ups, setBrainDirty
 } from "./state.js";
 import {
-  _softmax, _clip, _norm2, _sigmoid, _relu,
+  _softmax, _clip, _sigmoid, _relu,
   _makeLayerNorm, _heInit, _makeDense, _zeros, _randn, _glorot, _ones, _gelu
 } from "./neural-math.js";
 import {
@@ -31,9 +31,7 @@ import {
 let _iqDecayTs = 0;
 let _userEstTs = 0;
 
-export function _timeout(ms, val = null) {
-  return new Promise((resolve) => setTimeout(() => resolve(val), ms));
-}
+
 export function _feat40Raw(
   domain,
   clientIp,
