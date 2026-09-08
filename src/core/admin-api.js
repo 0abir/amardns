@@ -1212,12 +1212,20 @@ export async function handleApiRoute(request, path, env, method) {
         });
       }).catch(() => {});
 
-      // Final guarantee: zero out logs, counters, and verify PulseDB & Cache are hollow
+      // Final guarantee: zero out logs, counters, and ensure PulseDB & Cache are 100% hollow
       _anomalies.length = 0;
       _actions.length = 0;
       _aiDecisions.length = 0;
       _configDecisions.length = 0;
       resetSh();
+      resetTelemetry();
+
+      if (env?.aeroCache && typeof env.aeroCache.clear === "function") {
+        env.aeroCache.clear();
+      }
+      if (env?.pulseDb && typeof env.pulseDb.wipe === "function") {
+        env.pulseDb.wipe();
+      }
 
       const dbStats = env?.pulseDb?.getStats?.() || {};
       const cacheStats = env?.aeroCache?.getStats?.() || {};
