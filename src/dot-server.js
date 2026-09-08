@@ -86,8 +86,11 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
 
   function onConnection(socket) {
     activeSockets.add(socket);
-    socket.setKeepAlive(true, 30000);
-    socket.setTimeout(240000); // 240s idle timeout (RFC 7858)
+    // Keep TCP connection alive through Fly Proxy / WireGuard mesh with 15s keep-alive probes.
+    // Do NOT set a premature backend idle timeout (like 240s) because Fly Proxy manages edge client
+    // sessions; closing the backhaul prematurely causes Fly Proxy to log PP03 'unexpected end of file'.
+    socket.setKeepAlive(true, 15000);
+    socket.setTimeout(0); // Let Fly Proxy manage connection lifecycle
 
     let rxBuf = Buffer.alloc(0);
     let proxyChecked = false;
@@ -100,11 +103,6 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
         sniTag = parts[0];
       }
     }
-
-    socket.on("timeout", () => {
-      // Gracefully half-close with FIN to avoid abrupt RST on proxy backhaul
-      socket.end();
-    });
 
     socket.on("end", () => {
       socket.end();
