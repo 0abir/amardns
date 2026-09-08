@@ -19,7 +19,8 @@ import {
   checkBlocklist, checkWhitelist, alikeDomainCheck, checkGoogleSafeBrowsing,
   autoBlockSet, dgaScore, rebindCheck, qtypeAbuseCheck,
   answerDriftCheck, multiQuestionCheck, cbCheck,
-  isKnownLegitDomain, dccClassify
+  isKnownLegitDomain, dccClassify,
+  fpCheck, burstCheck, swarmCheck, clientNxCheck, ttlCheck, poisonGuardCheck
 } from "./threat-intelligence.js";
 import {
   nnThreatScore, nnSelectUpstream, nnCacheTTL, nnCacheSignal,
@@ -531,6 +532,9 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
   const deviceType = clientMeta?.deviceType || "generic";
   const rps = _trackRequest(clientIp, deviceId, deviceType);
   _calcStress(rps);
+  fpCheck(clientIp, name, rps);
+  burstCheck(clientIp);
+  swarmCheck(name, clientIp);
   const cached = cacheGet(name, qtype);
   if (cached) {
     if (cached.negative) {
@@ -592,6 +596,8 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
         headers: { "content-type": DNS_CT, ...DNS_H },
       });
     const ttl = extractTTL(result.buf) || DEF_CACHE_TTL;
+    ttlCheck(name, ttl);
+    poisonGuardCheck(name, result.latency || 20);
     _ctx?.waitUntil(
       (async () => {
         const _rlTTL = nnCacheTTL(name, clientIp, rps, 0, 0, result.latency || 20, ttl);
@@ -717,6 +723,7 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
   const rcode = getRcode(buf);
   if (rcode === 3) {
     _sh.nxAlarms++;
+    clientNxCheck(clientIp, 3);
     negCacheSet(name, qtype, 3);
     _domainIQ.see(name, "nx");
     return new Response(makeNxResponse(dnsQuery), {
@@ -729,6 +736,8 @@ export async function resolveDns(dnsQuery, clientIp, env, clientMeta = null) {
   }
   const ips = extractAnswerIPs(buf);
   const ttl = extractTTL(buf) || DEF_CACHE_TTL;
+  ttlCheck(name, ttl);
+  poisonGuardCheck(name, latency);
   if (ips.length > 0) {
     if (_blockingEnabled && rebindCheck(name, ips)) {
       _sh.rebindBlocks++;
