@@ -255,16 +255,15 @@ export function startDotServer(worker, env, ctx, port = 853, tlsOptions = null) 
   return {
     server,
     close: (cb) => {
-      for (const sock of activeSockets) {
-        try { sock.end(); } catch (_) {}
-      }
-      setTimeout(() => {
-        for (const sock of activeSockets) {
-          try { if (!sock.destroyed) sock.destroy(); } catch (_) {}
-        }
-        activeSockets.clear();
+      try {
         server.close(cb);
-      }, 1500).unref();
+      } catch (_) {
+        if (typeof cb === "function") cb();
+      }
+      for (const sock of activeSockets) {
+        try { if (!sock.destroyed) sock.end(); } catch (_) {}
+      }
+      activeSockets.clear();
     },
   };
 }

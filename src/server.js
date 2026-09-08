@@ -225,9 +225,25 @@ function shutdown(signal = "SIGTERM") {
     }
   }
 
-  // 3. Close DoT server & destroy active client sockets
+  let httpClosed = false;
+  let dotClosed = false;
+
+  const tryExit = () => {
+    if (httpClosed && dotClosed) {
+      clearTimeout(forceExitTimer);
+      logger.system("[system] All servers and resources closed cleanly. Exiting.");
+      process.exit(0);
+    }
+  };
+
+  // 3. Close DoT server & send clean FIN to active sockets
   if (dotInstance && typeof dotInstance.close === "function") {
-    dotInstance.close(() => {});
+    dotInstance.close(() => {
+      dotClosed = true;
+      tryExit();
+    });
+  } else {
+    dotClosed = true;
   }
 
   // 4. Close HTTP server and gracefully close sockets
@@ -235,24 +251,15 @@ function shutdown(signal = "SIGTERM") {
     server.closeIdleConnections();
   }
 
-  // Gracefully half-close active HTTP sockets with FIN first
   for (const socket of activeHttpSockets) {
-    try { socket.end(); } catch (_) {}
+    try { if (!socket.destroyed) socket.end(); } catch (_) {}
   }
+  activeHttpSockets.clear();
 
   server.close(() => {
-    clearTimeout(forceExitTimer);
-    logger.system("[system] All servers and resources closed cleanly. Exiting.");
-    process.exit(0);
+    httpClosed = true;
+    tryExit();
   });
-
-  // Forcibly destroy any lingering active HTTP sockets after grace period
-  setTimeout(() => {
-    for (const socket of activeHttpSockets) {
-      try { if (!socket.destroyed) socket.destroy(); } catch (_) {}
-    }
-    activeHttpSockets.clear();
-  }, 1500).unref();
 }
 
 // OS Process Signals
