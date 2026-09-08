@@ -366,32 +366,50 @@ export async function fetchUpstream(dnsQuery, upIdx, signal) {
   try {
     let resp = null;
     let buf = null;
-    try {
-      resp = await fetch(base, {
-        method: "POST",
-        headers: {
-          "Content-Type": DNS_CT,
-          Accept: DNS_CT,
-          "User-Agent": _rndData(),
-          "Cache-Control": "no-store",
-        },
-        body: dnsQuery,
-        signal: signal || AbortSignal.timeout(_runtimeConfig.fetchTimeoutMs),
-        cf: { cacheEverything: false },
-      });
-    } catch (fetchErr) {
-      if (signal?.aborted) return null;
+    const upMeta = _upMetadata && _upMetadata[upIdx];
+    const prefersH2 = upMeta?.protocol === "h2";
+
+    if (prefersH2) {
+      try {
+        const h2Buf = await queryHttp2(base, dnsQuery, _runtimeConfig.fetchTimeoutMs);
+        if (h2Buf && h2Buf.byteLength >= 12) {
+          buf = h2Buf.buffer.slice(h2Buf.byteOffset, h2Buf.byteOffset + h2Buf.byteLength);
+        }
+      } catch (_) {}
     }
 
-    if (resp && resp.ok) {
-      buf = await resp.arrayBuffer();
-    } else {
-      // Fallback to native HTTP/2 for resolvers enforcing HTTP/2 (e.g. Quad9 Anycast POPs)
-      const h2Buf = await queryHttp2(base, dnsQuery, _runtimeConfig.fetchTimeoutMs);
-      if (h2Buf && h2Buf.byteLength >= 12) {
-        buf = h2Buf.buffer.slice(h2Buf.byteOffset, h2Buf.byteOffset + h2Buf.byteLength);
+    if (!buf) {
+      try {
+        resp = await fetch(base, {
+          method: "POST",
+          headers: {
+            "Content-Type": DNS_CT,
+            Accept: DNS_CT,
+            "User-Agent": _rndData(),
+            "Cache-Control": "no-store",
+          },
+          body: dnsQuery,
+          signal: signal || AbortSignal.timeout(_runtimeConfig.fetchTimeoutMs),
+          cf: { cacheEverything: false },
+        });
+      } catch (fetchErr) {
+        if (signal?.aborted) return null;
+      }
+
+      if (resp && resp.ok) {
+        buf = await resp.arrayBuffer();
       } else {
-        throw new Error(resp ? `HTTP ${resp.status}` : "Resolution failed");
+        // Fallback to native HTTP/2 for resolvers enforcing HTTP/2 (e.g. Quad9 Anycast POPs)
+        try {
+          const h2Buf = await queryHttp2(base, dnsQuery, _runtimeConfig.fetchTimeoutMs);
+          if (h2Buf && h2Buf.byteLength >= 12) {
+            buf = h2Buf.buffer.slice(h2Buf.byteOffset, h2Buf.byteOffset + h2Buf.byteLength);
+            if (upMeta) upMeta.protocol = "h2";
+          }
+        } catch (_) {}
+        if (!buf) {
+          throw new Error(resp ? `HTTP ${resp.status}` : "Resolution failed");
+        }
       }
     }
     const latency = Date.now() - start;
@@ -399,7 +417,9 @@ export async function fetchUpstream(dnsQuery, upIdx, signal) {
     if (scores) {
       scores[_ucb.pulls[upIdx] % 32] = latency;
     }
-    _ucb.reward(upIdx, Math.max(0, 1 - latency / 2e3));
+    const aura = upMeta?.aura?.toLowerCase();
+    const auraWeight = aura === "high" ? 1.25 : aura === "low" ? 0.75 : 1.0;
+    _ucb.reward(upIdx, Math.max(0, (1 - latency / 2e3) * auraWeight));
     cbCheck(upIdx, true);
     _domainIQ.see(`_up${upIdx}`, "good");
     return { buf: buf, latency: latency, upIdx: upIdx };

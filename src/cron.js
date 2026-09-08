@@ -13,33 +13,33 @@ function stripQuotes(str) {
 
 export function startCron(worker, env) {
   const schedule = stripQuotes(process.env.CRON_SCHEDULE) || "*/5 * * * *";
-  // Pull upstream DNS list once daily (default: every day at 03:00 UTC)
-  const upstreamSchedule = stripQuotes(process.env.UPSTREAM_CRON) || "0 3 * * *";
+  // Continuously rank all upstreams in the background simultaneously (default: every 5 mins)
+  const upstreamSchedule = stripQuotes(process.env.UPSTREAM_CRON) || "*/5 * * * *";
   const ctx = {
     waitUntil: (p) =>
       Promise.resolve(p).catch((e) => logger.error("cron waitUntil error:", e)),
   };
 
-  // 1. Initial boot check: load persisted upstreams or trigger initial sync asynchronously
+  // 1. Initial boot check: load persisted upstreams, then immediately trigger background simultaneous ranker
   import("./upstream-manager.js").then(({ loadPersistedUpstreams, syncAndRankUpstreams }) => {
-    const initStatus = loadPersistedUpstreams(env, worker);
-    if (initStatus.shouldSync && process.env.AUTO_UPSTREAM_SYNC !== "false") {
-      setImmediate(() => {
+    loadPersistedUpstreams(env, worker);
+    if (process.env.AUTO_UPSTREAM_SYNC !== "false") {
+      setTimeout(() => {
         syncAndRankUpstreams(env, worker).catch((err) => {
-          logger.warn("[cron] Initial upstream sync deferred/failed:", err.message);
+          logger.warn("[cron] Initial background upstream ranking deferred:", err.message);
         });
-      });
+      }, 1000).unref();
     }
   }).catch((err) => logger.error("[cron] Failed to load upstream-manager:", err));
 
-  // 2. Daily Upstream DNS Sync & Aura Ranker
+  // 2. Continuous Upstream DNS Sync & Simultaneous Aura Ranker (every 5 mins)
   const upstreamTask = cron.schedule(upstreamSchedule, () => {
-    logger.info("[cron] Running daily upstream DNS synchronization & aura ranking...");
+    logger.info("[cron] Running background upstream DNS simultaneous probing & aura ranking...");
     import("./upstream-manager.js").then(({ syncAndRankUpstreams }) => {
       syncAndRankUpstreams(env, worker).catch((err) => {
-        logger.error("[cron] Daily upstream sync failed:", err.message);
+        logger.error("[cron] Simultaneous upstream sync failed:", err.message);
       });
-    }).catch((err) => logger.error("[cron] Daily upstream sync error:", err));
+    }).catch((err) => logger.error("[cron] Simultaneous upstream sync error:", err));
   });
 
   // 3. Main scheduled worker cron (every 5 mins by default)

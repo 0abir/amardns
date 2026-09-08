@@ -712,6 +712,7 @@ export function ttlCheck(domain, ttl) {
 const _ANSWER_HISTORY_MAX = 5e3;
 export function answerDriftCheck(domain, ips) {
   if (!ips || ips.length === 0) return false;
+  if (isKnownLegitDomain(domain)) return false;
   let prev = _answerHistory.get(domain);
   if (!prev) {
     if (_answerHistory.size >= _ANSWER_HISTORY_MAX)
