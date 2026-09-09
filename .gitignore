@@ -20,6 +20,8 @@ fly.toml
 *.wal
 *.db
 *.tmp
+*.bundle
+*.tar.gz
 /data/
 
 # Logs
