@@ -1,0 +1,302 @@
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DeviceEntry {
+    pub id: String,
+    pub ip: String,
+    #[serde(rename = "type")]
+    pub device_type: String,
+    pub count: u64,
+    #[serde(rename = "lastSeen")]
+    pub last_seen: u64,
+}
+
+pub struct Metrics {
+    pub requests: AtomicU64,
+    pub cache_hits: AtomicU64,
+    pub cache_misses: AtomicU64,
+    pub threat_blocks: AtomicU64,
+    pub alike_blocks: AtomicU64,
+    pub dga_blocks: AtomicU64,
+    pub gsb_blocks: AtomicU64,
+    pub rebind_blocks: AtomicU64,
+    pub rep_blocks: AtomicU64,
+    pub auto_blocks: AtomicU64,
+    pub burst_events: AtomicU64,
+    pub nx_alarms: AtomicU64,
+    pub answer_drifts: AtomicU64,
+    pub dcc_hits: AtomicU64,
+    pub swarm_alarms: AtomicU64,
+    pub dot_queries: AtomicU64,
+    pub doh_queries: AtomicU64,
+    start_time: Instant,
+    boot_timestamp: u64,
+    rps_buckets: Mutex<[u32; 60]>,
+    rps_idx: Mutex<u64>,
+    rps_smooth: Mutex<f64>,
+    rps_peak: Mutex<f64>,
+    devices: Mutex<HashMap<String, DeviceEntry>>,
+    users: Mutex<HashMap<String, u64>>,
+}
+
+impl Metrics {
+    pub fn new() -> Self {
+        let now_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        Self {
+            requests: AtomicU64::new(0),
+            cache_hits: AtomicU64::new(0),
+            cache_misses: AtomicU64::new(0),
+            threat_blocks: AtomicU64::new(0),
+            alike_blocks: AtomicU64::new(0),
+            dga_blocks: AtomicU64::new(0),
+            gsb_blocks: AtomicU64::new(0),
+            rebind_blocks: AtomicU64::new(0),
+            rep_blocks: AtomicU64::new(0),
+            auto_blocks: AtomicU64::new(0),
+            burst_events: AtomicU64::new(0),
+            nx_alarms: AtomicU64::new(0),
+            answer_drifts: AtomicU64::new(0),
+            dcc_hits: AtomicU64::new(0),
+            swarm_alarms: AtomicU64::new(0),
+            dot_queries: AtomicU64::new(0),
+            doh_queries: AtomicU64::new(0),
+            start_time: Instant::now(),
+            boot_timestamp: now_unix,
+            rps_buckets: Mutex::new([0; 60]),
+            rps_idx: Mutex::new(now_unix),
+            rps_smooth: Mutex::new(0.0),
+            rps_peak: Mutex::new(0.0),
+            devices: Mutex::new(HashMap::new()),
+            users: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Records an incoming DNS query with client IP, updating real-time RPS, active devices, and users
+    pub fn record_query(&self, client_ip: &str, device_type: &str) {
+        self.requests.fetch_add(1, Ordering::Relaxed);
+        if device_type == "dot" {
+            self.dot_queries.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.doh_queries.fetch_add(1, Ordering::Relaxed);
+        }
+
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let now_sec = now_ms / 1000;
+
+        let clean_ip = if client_ip.is_empty() { "127.0.0.1" } else { client_ip };
+
+        // 1. Update active devices
+        if let Ok(mut map) = self.devices.lock() {
+            if map.len() > 10_000 {
+                let cutoff = now_ms.saturating_sub(300_000);
+                map.retain(|_, v| v.last_seen >= cutoff);
+            }
+            let entry = map.entry(clean_ip.to_string()).or_insert_with(|| DeviceEntry {
+                id: clean_ip.to_string(),
+                ip: clean_ip.to_string(),
+                device_type: device_type.to_string(),
+                count: 0,
+                last_seen: now_ms,
+            });
+            entry.count += 1;
+            entry.last_seen = now_ms;
+        }
+
+        // 2. Update user map
+        if let Ok(mut users) = self.users.lock() {
+            if users.len() > 10_000 {
+                let cutoff = now_ms.saturating_sub(300_000);
+                users.retain(|_, last| *last >= cutoff);
+            }
+            users.insert(clean_ip.to_string(), now_ms);
+        }
+
+        // 3. Update rolling 60s buckets
+        if let Ok(mut idx_guard) = self.rps_idx.lock() {
+            let last_sec = *idx_guard;
+            if now_sec > last_sec {
+                if let Ok(mut buckets) = self.rps_buckets.lock() {
+                    let elapsed = (now_sec - last_sec).min(60);
+                    for s in 1..=elapsed {
+                        buckets[((last_sec + s) % 60) as usize] = 0;
+                    }
+                }
+                *idx_guard = now_sec;
+            }
+
+            if let Ok(mut buckets) = self.rps_buckets.lock() {
+                buckets[(now_sec % 60) as usize] = buckets[(now_sec % 60) as usize].saturating_add(1);
+            }
+        }
+    }
+
+    pub fn reset(&self) {
+        self.requests.store(0, Ordering::Relaxed);
+        self.cache_hits.store(0, Ordering::Relaxed);
+        self.cache_misses.store(0, Ordering::Relaxed);
+        self.threat_blocks.store(0, Ordering::Relaxed);
+        self.alike_blocks.store(0, Ordering::Relaxed);
+        self.dga_blocks.store(0, Ordering::Relaxed);
+        self.gsb_blocks.store(0, Ordering::Relaxed);
+        self.rebind_blocks.store(0, Ordering::Relaxed);
+        self.rep_blocks.store(0, Ordering::Relaxed);
+        self.auto_blocks.store(0, Ordering::Relaxed);
+        self.burst_events.store(0, Ordering::Relaxed);
+        self.nx_alarms.store(0, Ordering::Relaxed);
+        self.answer_drifts.store(0, Ordering::Relaxed);
+        self.dcc_hits.store(0, Ordering::Relaxed);
+        self.swarm_alarms.store(0, Ordering::Relaxed);
+        self.dot_queries.store(0, Ordering::Relaxed);
+        self.doh_queries.store(0, Ordering::Relaxed);
+        if let Ok(mut b) = self.rps_buckets.lock() { *b = [0; 60]; }
+        if let Ok(mut s) = self.rps_smooth.lock() { *s = 0.0; }
+        if let Ok(mut p) = self.rps_peak.lock() { *p = 0.0; }
+        if let Ok(mut d) = self.devices.lock() { d.clear(); }
+        if let Ok(mut u) = self.users.lock() { u.clear(); }
+    }
+
+    #[allow(dead_code)]
+    pub fn record_device(&self, device_id: &str) {
+        self.record_query(device_id, "device");
+    }
+
+    pub fn get_rps(&self) -> f64 {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let now_sec = now_ms / 1000;
+
+        // 1. Roll forward any elapsed seconds in buckets if idle
+        if let Ok(mut idx_guard) = self.rps_idx.lock() {
+            let last_sec = *idx_guard;
+            if now_sec > last_sec {
+                if let Ok(mut buckets) = self.rps_buckets.lock() {
+                    let elapsed = (now_sec - last_sec).min(60);
+                    for s in 1..=elapsed {
+                        buckets[((last_sec + s) % 60) as usize] = 0;
+                    }
+                }
+                *idx_guard = now_sec;
+            }
+        }
+
+        // 2. High-precision sliding 1.0s window:
+        // Fraction elapsed into the current second (0.0 to 1.0)
+        let frac = (now_ms % 1000) as f64 / 1000.0;
+        if let Ok(buckets) = self.rps_buckets.lock() {
+            let curr = buckets[(now_sec % 60) as usize] as f64;
+            let prev = buckets[(now_sec.saturating_sub(1) % 60) as usize] as f64;
+
+            // Rolling 1.0-second window interpolation:
+            // Combines queries in the current second plus remaining fraction of previous second
+            let live_rate = (curr + (1.0 - frac) * prev).max(0.0);
+
+            if let Ok(mut peak_guard) = self.rps_peak.lock() {
+                if live_rate > *peak_guard {
+                    *peak_guard = live_rate;
+                }
+            }
+
+            (live_rate * 10.0).round() / 10.0
+        } else {
+            0.0
+        }
+    }
+
+    pub fn get_rps_peak(&self) -> f64 {
+        if let Ok(guard) = self.rps_peak.lock() {
+            (*guard * 100.0).round() / 100.0
+        } else {
+            0.0
+        }
+    }
+
+    pub fn calc_stress(&self, rps: f64) -> f64 {
+        if rps <= 0.0 {
+            return 0.0;
+        }
+        let rps_load = (rps / 500.0).min(1.0).powf(1.2);
+        (rps_load.min(1.0) * 1000.0).round() / 1000.0
+    }
+
+    pub fn online_since(&self) -> String {
+        let s = self.start_time.elapsed().as_secs();
+        if s < 60 {
+            format!("{}s", s)
+        } else if s < 3600 {
+            format!("{}m", s / 60)
+        } else if s < 86400 {
+            format!("{}h", s / 3600)
+        } else {
+            format!("{}d", s / 86400)
+        }
+    }
+
+    pub fn uptime_secs(&self) -> u64 {
+        self.start_time.elapsed().as_secs()
+    }
+
+    #[allow(dead_code)]
+    pub fn boot_timestamp(&self) -> u64 {
+        self.boot_timestamp
+    }
+
+    pub fn active_device_count(&self) -> usize {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let cutoff = now_ms.saturating_sub(300_000);
+
+        if let Ok(mut map) = self.devices.lock() {
+            map.retain(|_, v| v.last_seen >= cutoff);
+            map.len()
+        } else {
+            0
+        }
+    }
+
+    pub fn active_ip_count(&self) -> usize {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let cutoff = now_ms.saturating_sub(300_000);
+
+        if let Ok(mut users) = self.users.lock() {
+            users.retain(|_, last| *last >= cutoff);
+            users.len()
+        } else {
+            0
+        }
+    }
+
+    pub fn get_active_devices(&self) -> Vec<DeviceEntry> {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let cutoff = now_ms.saturating_sub(300_000);
+
+        if let Ok(mut map) = self.devices.lock() {
+            map.retain(|_, v| v.last_seen >= cutoff);
+            let mut list: Vec<DeviceEntry> = map.values().cloned().collect();
+            list.sort_by(|a, b| b.count.cmp(&a.count));
+            list
+        } else {
+            Vec::new()
+        }
+    }
+}

@@ -1,0 +1,285 @@
+use std::net::SocketAddr;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tracing::{info, warn};
+
+use crate::dns::parser::{build_blocked_response, build_servfail_response, parse_dns_query};
+use crate::state::AppState;
+
+const DOT_IDLE_TIMEOUT: Duration = Duration::from_secs(25);
+const DOT_READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// DNS-over-TLS (DoT, RFC 7858) internal backend listener.
+///
+/// NOTE ON TLS TERMINATION & ENCRYPTION:
+/// In production on Fly.io, TLS 1.3/1.2 is terminated at Fly's Anycast Edge Proxy on public port 853
+/// via `handlers = ["tls"]` in `fly.toml` using valid Let's Encrypt certificates.
+/// Clients (e.g. Android Private DNS) establish an encrypted TLS tunnel with Fly's Edge.
+/// Fly proxies the stream over its internal private WireGuard network to internal port 8053,
+/// where this listener processes RFC 7858 length-prefixed DNS wire packets.
+pub async fn start_dot_server(
+    state: Arc<AppState>,
+    host: &str,
+    port: u16,
+    mut shutdown_rx: tokio::sync::watch::Receiver<()>,
+) -> Result<(), std::io::Error> {
+    let host_ip: std::net::IpAddr = host.parse().unwrap_or(std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED));
+    let addr = SocketAddr::new(host_ip, port);
+    let listener = TcpListener::bind(addr).await?;
+    info!("[dot] AmarDNS DoT server listening on {} (Edge TLS terminated via Fly proxy on 853)", addr);
+
+    loop {
+        tokio::select! {
+            accept_res = listener.accept() => {
+                match accept_res {
+                    Ok((socket, client_addr)) => {
+                        let state_clone = state.clone();
+                        tokio::spawn(async move {
+                            handle_dot_connection(socket, client_addr, state_clone).await;
+                        });
+                    }
+                    Err(e) => {
+                        warn!("[dot] Accept error: {}", e);
+                    }
+                }
+            }
+            _ = shutdown_rx.changed() => {
+                info!("[dot] Shutting down DoT listener gracefully...");
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, state: Arc<AppState>) {
+    let _ = socket.set_nodelay(true);
+    let client_ip = client_addr.ip();
+
+    // Check rate limiter (private/internal Fly.io proxy IPs are automatically exempt)
+    if !state.rate_limiter.check(client_ip) {
+        let _ = socket.shutdown().await;
+        return;
+    }
+
+    let mut buf = vec![0u8; 4096];
+
+    loop {
+        // Read 2-byte length prefix (RFC 7858 Section 3.4 25-second idle timeout)
+        let mut len_buf = [0u8; 2];
+        let read_res = tokio::time::timeout(DOT_IDLE_TIMEOUT, socket.read_exact(&mut len_buf)).await;
+        match read_res {
+            Ok(Ok(2)) => {}
+            Ok(Ok(0)) | Ok(Err(_)) => {
+                // Client cleanly closed or dropped connection / Fly probe completed
+                let _ = socket.shutdown().await;
+                break;
+            }
+            Ok(_) => {
+                let _ = socket.shutdown().await;
+                break;
+            }
+            Err(_) => {
+                // RFC 7858 Section 3.4 idle timeout expired (no queries for 25s).
+                // Server actively initiates clean TCP half-close before Fly's 60s proxy timeout.
+                let _ = socket.shutdown().await;
+                break;
+            }
+        }
+
+        let msg_len = u16::from_be_bytes(len_buf) as usize;
+        if msg_len == 0 || msg_len > 4096 {
+            let _ = socket.shutdown().await;
+            break;
+        }
+
+        if buf.len() < msg_len {
+            buf.resize(msg_len, 0);
+        }
+
+        // Read DNS query packet body with a 5s read timeout
+        let body_res = tokio::time::timeout(DOT_READ_TIMEOUT, socket.read_exact(&mut buf[..msg_len])).await;
+        if body_res.is_err() || body_res.unwrap().is_err() {
+            break;
+        }
+
+        // Per-query rate limit check to prevent pipelined connection flooding over persistent TCP
+        if !state.rate_limiter.check(client_ip) {
+            let fail = build_servfail_response(&buf[..msg_len]);
+            let _ = send_length_prefixed(&mut socket, &fail).await;
+            let _ = socket.shutdown().await;
+            break;
+        }
+
+        // DNS query successfully received - record metrics once
+        state.metrics.record_query(&client_ip.to_string(), "dot");
+
+        let query_wire = &buf[..msg_len];
+
+        let parsed = match parse_dns_query(query_wire) {
+            Some(p) => p,
+            None => {
+                let fail = build_servfail_response(query_wire);
+                if send_length_prefixed(&mut socket, &fail).await.is_err() {
+                    break;
+                }
+                continue;
+            }
+        };
+
+        let q = match parsed.question {
+            Some(q) => q,
+            None => {
+                let fail = build_servfail_response(query_wire);
+                if send_length_prefixed(&mut socket, &fail).await.is_err() {
+                    break;
+                }
+                continue;
+            }
+        };
+
+        // Rogue client detection & query fingerprinting
+        if let Some(flag) = state.fingerprint.record_query(client_ip, &q.name) {
+            state.log_action("rogue_client_detected", &format!("{}: {}", client_ip, flag));
+            state.log_anomaly("rogue_client_scanner", &format!("{}: {}", client_ip, flag));
+        }
+
+        // Record heatmap
+        state.record_heatmap(&q.name);
+
+        // 0. Threat & Whitelist policy check (Whitelist has ultimate priority over blocklists and negative cache)
+        let (is_blocked, is_nxdomain, reason) = state.check_domain(&q.name);
+        if is_blocked {
+            state.record_detected_block(&q.name, reason);
+            state.fingerprint.record_response(client_ip, 3);
+            state.fingerprint.flag_client(client_ip, reason, &q.name);
+            state.wal.append_threat_event(&q.name, reason, &client_ip.to_string());
+            state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), 3, 0, "BLOCKED");
+            state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "BLOCKED", 3, 0, reason, "Filter");
+            state.cache.insert_negative(&q.name, 60).await;
+            let blocked = build_blocked_response(query_wire, is_nxdomain);
+            if send_length_prefixed(&mut socket, &blocked).await.is_err() {
+                break;
+            }
+            continue;
+        }
+
+        // 1. AeroCache Negative Cache Lookup (Strictly bypassed if domain or parent is whitelisted/exempt)
+        if !state.is_exempt(&q.name) && state.cache.get_negative(&q.name).await {
+            state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
+            let (feats, ent) = state.brain.extract_features(&q.name);
+            state.brain.record_decision(
+                &q.name,
+                ent,
+                0.96,
+                feats,
+                "AEROCACHE_DROP",
+                "threat_negative_cache",
+                "Preemptively dropped in 0ms from RAM; saved upstream DNS roundtrip and CPU cycles",
+            );
+            let blocked = build_blocked_response(query_wire, true);
+            state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), 3, 0, "NEG_HIT");
+            state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "NEG_HIT", 3, 0, "threat_negative_cache", "AeroCache");
+            if send_length_prefixed(&mut socket, &blocked).await.is_err() {
+                break;
+            }
+            continue;
+        }
+
+        // Google Safe Browsing Cloud Threat Check
+        if state.blocking_enabled.load(Ordering::Relaxed) && !state.is_exempt(&q.name) {
+            if let Some(threat_type) = state.safe_browsing.check_domain(&q.name).await {
+                state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
+                state.metrics.gsb_blocks.fetch_add(1, Ordering::Relaxed);
+                state.fingerprint.record_response(client_ip, 3);
+                state.fingerprint.flag_client(client_ip, "GSB_THREAT", &q.name);
+                state.log_action("gsb_block", &format!("{} [{}]", q.name, threat_type));
+                state.record_detected_block(&q.name, "google_safe_browsing");
+                state.wal.append_threat_event(&q.name, "google_safe_browsing", &client_ip.to_string());
+                state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), 3, 0, "GSB_BLOCK");
+                state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "GSB_BLOCK", 3, 0, "google_safe_browsing", "Google Safe Browsing");
+                state.cache.insert_negative(&q.name, 120).await;
+                let blocked = build_blocked_response(query_wire, true);
+                if send_length_prefixed(&mut socket, &blocked).await.is_err() {
+                    break;
+                }
+                continue;
+            }
+        }
+
+        // Cache lookup
+        if let Some(cached_resp) = state.cache.get(&q.name, q.qtype, parsed.tx_id).await {
+            state.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
+            state.fingerprint.record_response(client_ip, 0);
+            state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), 0, 0, "HIT");
+            state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "HIT", 0, 0, "none", "AeroCache");
+            if send_length_prefixed(&mut socket, &cached_resp).await.is_err() {
+                break;
+            }
+            continue;
+        }
+
+        state.metrics.cache_misses.fetch_add(1, Ordering::Relaxed);
+
+        // Forward to upstream
+        let start_upstream = std::time::Instant::now();
+        if let Some((upstream_resp, upstream_name)) = state.upstreams.resolve(query_wire).await {
+            let lat = start_upstream.elapsed().as_millis() as u32;
+            let rcode = if upstream_resp.len() >= 4 { (upstream_resp[3] & 0x0F) as u16 } else { 0 };
+            if let Some(flag) = state.fingerprint.record_response(client_ip, rcode) {
+                state.log_action("rogue_client_detected", &format!("{}: {}", client_ip, flag));
+            }
+
+            // DNS Rebinding Protection: Block public domains resolving to private/loopback/link-local IP addresses
+            if state.blocking_enabled.load(Ordering::Relaxed)
+                && !state.is_exempt(&q.name)
+                && !crate::dns::parser::is_rebind_exempt_domain(&q.name)
+            {
+                if let Some(rebind_ip) = crate::dns::parser::extract_rebind_ip(&upstream_resp) {
+                    state.metrics.rebind_blocks.fetch_add(1, Ordering::Relaxed);
+                    state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
+                    state.fingerprint.record_response(client_ip, 3);
+                    state.fingerprint.flag_client(client_ip, "REBIND_ATTACK", &q.name);
+                    state.log_action("rebind_block", &format!("{} -> {}", q.name, rebind_ip));
+                    state.log_anomaly("dns_rebind_attack", &format!("Private IP leak blocked: {} -> {}", q.name, rebind_ip));
+                    state.wal.append_threat_event(&q.name, "dns_rebind_attack", &client_ip.to_string());
+                    state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), 3, lat, "REBIND_BLOCK");
+                    state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "REBIND_BLOCK", 3, lat, "dns_rebind_attack", "Rebind Defense");
+                    state.cache.insert_negative(&q.name, 120).await;
+                    let blocked = build_blocked_response(query_wire, true);
+                    if send_length_prefixed(&mut socket, &blocked).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
+            }
+
+            state.cache.insert(&q.name, q.qtype, upstream_resp.clone(), 300).await;
+            state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), rcode, lat, "RESOLVED");
+            state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "RESOLVED", rcode, lat, "none", &upstream_name);
+            if send_length_prefixed(&mut socket, &upstream_resp).await.is_err() {
+                break;
+            }
+        } else {
+            state.fingerprint.record_response(client_ip, 2);
+            state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), 2, 0, "FAIL");
+            state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "FAIL", 2, 0, "servfail", "none");
+            let fail = build_servfail_response(query_wire);
+            if send_length_prefixed(&mut socket, &fail).await.is_err() {
+                break;
+            }
+        }
+    }
+    let _ = socket.shutdown().await;
+}
+
+async fn send_length_prefixed(socket: &mut TcpStream, data: &[u8]) -> Result<(), std::io::Error> {
+    let len = data.len() as u16;
+    socket.write_all(&len.to_be_bytes()).await?;
+    socket.write_all(data).await?;
+    socket.flush().await?;
+    Ok(())
+}

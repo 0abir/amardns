@@ -1,0 +1,67 @@
+app = "amardns"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  DOT_PORT = "8053"
+  HOST = "::"
+  DB_PATH = "/data/amardns.wal"
+  LOG_LEVEL = "info"
+  DNS_MASTER_KEY = "CHANGE_ME_MASTER_KEY"
+  DNS_TOKEN_SECRET = "CHANGE_ME_TOKEN_SECRET"
+  DNS_ACCESS_MODE = "public"
+  UPSTREAM_CRON = "0 0 * * *"
+  UPSTREAM_TZ = "Asia/Dhaka"
+  SAFE_BROWSING_KEYS = ""
+
+[[mounts]]
+  source = "amardns_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+# HTTP & DoH (DNS-over-HTTPS)
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 2
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.http_checks]]
+    interval = "15s"
+    timeout = "4s"
+    grace_period = "10s"
+    method = "get"
+    path = "/health"
+
+# DoT (DNS-over-TLS for Android Private DNS)
+[[services]]
+  internal_port = 8053
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 2
+
+  [[services.ports]]
+    port = 853
+    handlers = ["tls"]
+
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "4s"
+    grace_period = "10s"

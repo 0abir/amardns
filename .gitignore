@@ -1,0 +1,34 @@
+# Rust Build Artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Fly.io Deployment & Secrets
+fly.toml
+
+# GitHub Actions (requires separate workflow token scope)
+.github/
+
+# Environment & Secrets
+.env
+.env.*
+*.pem
+*.key
+*.cert
+
+# Local Database & WAL
+*.wal
+*.db
+*.tmp
+/data/
+
+# Logs
+*.log
+
+# OS & Editor Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
