@@ -1,4 +1,46 @@
-target/
+# Version control
 .git/
-*.swp
+.gitignore
+
+# Build artifacts & target
+target/
+*.pdb
+*.exe
+*.so
+*.dylib
+
+# Local databases & data volumes
+*.wal
+*.db
 *.tmp
+/data/
+
+# Backup archives and bundles
+*.bundle
+*.tar.gz
+*.zip
+
+# Deployment configurations
+fly.toml
+fly.toml.example
+.github/
+
+# Documentation & licensing
+README.md
+LICENSE
+
+# Environment & secrets
+.env
+.env.*
+*.pem
+*.key
+*.cert
+
+# Editor & OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
+*.log
