@@ -377,8 +377,13 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
     let minor = (brain_cycles / 100) % 10;
     let patch = (brain_cycles / 10) % 10;
     let brain_version = format!("{}.{}.{}", major, minor, patch);
-    let brain_sync_bytes = state.brain.memory_bytes() as u64;
     let (neg_cache_size, neg_cache_hits) = state.cache.get_neg_stats();
+    let swr_serves = state.metrics.swr_serves.load(Ordering::Relaxed);
+    let fast_neg_hits = state.metrics.fast_neg_hits.load(Ordering::Relaxed);
+    let prefetch_triggers = state.metrics.prefetch_triggers.load(Ordering::Relaxed);
+    let prefetch_hits = state.metrics.prefetch_hits.load(Ordering::Relaxed);
+    let (avg_lat_us, avg_lat_ms) = state.metrics.get_avg_latency();
+    let (lat_sub1, lat_1_5, lat_5_15, lat_15_50, lat_above50) = state.metrics.get_latency_distribution();
 
     let rps = state.metrics.get_rps();
     let rps_peak = state.metrics.get_rps_peak();
@@ -471,10 +476,28 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
         "avgLatency": avg_latency,
         "blockRate": if reqs > 0 { format!("{:.1}%", (threats_blocked as f64 / reqs as f64) * 100.0) } else { "0.0%".to_string() },
         "narrative": narrative,
+        "performance": {
+            "avgLatencyUs": avg_lat_us,
+            "avgLatencyMs": if avg_lat_ms > 0.0 { avg_lat_ms } else { avg_latency as f64 },
+            "swrServes": swr_serves,
+            "fastNegHits": fast_neg_hits,
+            "prefetchTriggers": prefetch_triggers,
+            "prefetchHits": prefetch_hits,
+            "latencyDistribution": {
+                "sub1ms": lat_sub1,
+                "from1to5ms": lat_1_5,
+                "from5to15ms": lat_5_15,
+                "from15to50ms": lat_15_50,
+                "above50ms": lat_above50
+            }
+        },
         "cache": {
             "hits": hits,
             "misses": misses,
             "hitRate": hit_rate,
+            "swrServes": swr_serves,
+            "fastNegHits": fast_neg_hits,
+            "prefetchHits": prefetch_hits,
             "size": cache_len,
             "bytes": cache_bytes,
             "memoryMB": cache_mem_mb,
@@ -502,7 +525,7 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "learningCycles": brain_cycles,
             "domainIQSize": domain_iq_size,
             "markovSize": markov_size,
-            "brainSyncBytes": brain_sync_bytes,
+            "brainSyncBytes": 0u64,
             "brainSyncAge": 0,
             "brainUptimeSec": uptime_secs,
             "autoBlockActive": auto_blocks,
@@ -2343,7 +2366,7 @@ async fn doh_post_handler(
         .or(params.client.as_deref())
         .or_else(|| headers.get("x-device-id").and_then(|h| h.to_str().ok()));
 
-    process_dns_query(&state, &body, client_ip, dev_ref, "DoH (POST)").await
+    process_dns_query(state, &body, client_ip, dev_ref, "DoH (POST)").await
 }
 
 async fn doh_get_handler(
@@ -2391,10 +2414,11 @@ async fn doh_get_handler(
         return (StatusCode::BAD_REQUEST, "Missing ?dns= parameter").into_response();
     };
 
-    process_dns_query(&state, &wire_bytes, client_ip, dev_ref, "DoH (GET)").await
+    process_dns_query(state, &wire_bytes, client_ip, dev_ref, "DoH (GET)").await
 }
 
-async fn process_dns_query(state: &AppState, query_wire: &[u8], client_ip: IpAddr, dev_tag: Option<&str>, proto: &str) -> Response {
+async fn process_dns_query(state: Arc<AppState>, query_wire: &[u8], client_ip: IpAddr, dev_tag: Option<&str>, proto: &str) -> Response {
+    let query_start = std::time::Instant::now();
     let client_str = client_ip.to_string();
     let log_id = dev_tag.unwrap_or(&client_str);
     state.metrics.record_query(log_id, "doh");
@@ -2402,6 +2426,7 @@ async fn process_dns_query(state: &AppState, query_wire: &[u8], client_ip: IpAdd
     let parsed = match parse_dns_query(query_wire) {
         Some(p) => p,
         None => {
+            state.metrics.record_latency(query_start.elapsed());
             return (StatusCode::BAD_REQUEST, "Malformed DNS wire packet").into_response();
         }
     };
@@ -2409,9 +2434,36 @@ async fn process_dns_query(state: &AppState, query_wire: &[u8], client_ip: IpAdd
     let q = match parsed.question {
         Some(q) => q,
         None => {
+            state.metrics.record_latency(query_start.elapsed());
             return (StatusCode::BAD_REQUEST, "No DNS question").into_response();
         }
     };
+
+    // 1. Predictive AI Dependency Prefetching: Learn transitions & proactively prefetch subresources
+    state.brain.record_sequence(&q.name);
+    let prefetch_cands = state.brain.get_prefetch_candidates(&q.name);
+    for cand in prefetch_cands {
+        if !state.is_domain_blocked(&cand) {
+            let state_p = state.clone();
+            tokio::spawn(async move {
+                state_p.metrics.prefetch_triggers.fetch_add(1, Ordering::Relaxed);
+                state_p.brain.prefetch_triggers.fetch_add(1, Ordering::Relaxed);
+                let mut p_wire = vec![0x53, 0x57, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+                for label in cand.split('.') {
+                    if !label.is_empty() {
+                        p_wire.push(label.len() as u8);
+                        p_wire.extend_from_slice(label.as_bytes());
+                    }
+                }
+                p_wire.push(0x00);
+                p_wire.extend_from_slice(&1u16.to_be_bytes()); // QTYPE A
+                p_wire.extend_from_slice(&1u16.to_be_bytes()); // QCLASS IN
+                if let Some((resp, _)) = state_p.upstreams.resolve(&p_wire).await {
+                    state_p.cache.insert(&cand, 1, resp, 300).await;
+                }
+            });
+        }
+    }
 
     // Record client query for rogue client & fingerprinting detection
     if let Some(flag) = state.fingerprint.record_query(client_ip, &q.name) {
@@ -2422,7 +2474,7 @@ async fn process_dns_query(state: &AppState, query_wire: &[u8], client_ip: IpAdd
     // Record into 24-hour heatmap
     state.record_heatmap(&q.name);
 
-    // 0. Local Threat, Blocklist & Whitelist Policy Check (Whitelist has absolute precedence!)
+    // 0. Local Threat, Blocklist & Whitelist Policy Check (with Fast-Path Negative Absorber in <10µs)
     let (is_blocked, is_nxdomain, reason) = state.check_domain(&q.name);
     if is_blocked {
         state.record_detected_block(&q.name, reason);
@@ -2433,6 +2485,7 @@ async fn process_dns_query(state: &AppState, query_wire: &[u8], client_ip: IpAdd
         state.log_query(&q.name, q.qtype, log_id, proto, "BLOCKED", 3, 0, reason, "Filter");
         state.cache.insert_negative(&q.name, 60).await;
         let resp_bytes = build_blocked_response(query_wire, is_nxdomain);
+        state.metrics.record_latency(query_start.elapsed());
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/dns-message")
@@ -2458,6 +2511,7 @@ async fn process_dns_query(state: &AppState, query_wire: &[u8], client_ip: IpAdd
         let resp_bytes = build_blocked_response(query_wire, true);
         state.wal.append_query(&q.name, q.qtype, log_id, 3, 0, "NEG_HIT");
         state.log_query(&q.name, q.qtype, log_id, proto, "NEG_HIT", 3, 0, "threat_negative_cache", "AeroCache");
+        state.metrics.record_latency(query_start.elapsed());
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/dns-message")
@@ -2481,6 +2535,7 @@ async fn process_dns_query(state: &AppState, query_wire: &[u8], client_ip: IpAdd
             state.log_query(&q.name, q.qtype, log_id, proto, "GSB_BLOCK", 3, 0, "google_safe_browsing", "Google Safe Browsing");
             state.cache.insert_negative(&q.name, 120).await;
             let resp_bytes = build_blocked_response(query_wire, true);
+            state.metrics.record_latency(query_start.elapsed());
             return Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "application/dns-message")
@@ -2491,18 +2546,49 @@ async fn process_dns_query(state: &AppState, query_wire: &[u8], client_ip: IpAdd
         }
     }
 
-    // 3. Cache Lookup
-    if let Some(cached_wire) = state.cache.get(&q.name, q.qtype, parsed.tx_id).await {
-        state.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
-        state.fingerprint.record_response(client_ip, 0);
-        state.wal.append_query(&q.name, q.qtype, log_id, 0, 0, "HIT");
-        state.log_query(&q.name, q.qtype, log_id, proto, "HIT", 0, 0, "none", "AeroCache");
-        return Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "application/dns-message")
-            .header("x-cache", "HIT")
-            .body(Bytes::from(cached_wire).into())
-            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    // 3. Cache Lookup with RFC 8767 Stale-While-Revalidate (SWR)
+    match state.cache.get_with_swr(&q.name, q.qtype, parsed.tx_id).await {
+        crate::dns::cache::CacheLookupResult::Fresh(cached_wire) => {
+            state.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
+            state.fingerprint.record_response(client_ip, 0);
+            state.wal.append_query(&q.name, q.qtype, log_id, 0, 0, "HIT");
+            state.log_query(&q.name, q.qtype, log_id, proto, "HIT", 0, 0, "none", "AeroCache");
+            state.metrics.record_latency(query_start.elapsed());
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/dns-message")
+                .header("x-cache", "HIT")
+                .body(Bytes::from(cached_wire).into())
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
+        crate::dns::cache::CacheLookupResult::Stale(cached_wire) => {
+            state.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
+            state.metrics.swr_serves.fetch_add(1, Ordering::Relaxed);
+            state.fingerprint.record_response(client_ip, 0);
+            state.wal.append_query(&q.name, q.qtype, log_id, 0, 0, "STALE_HIT");
+            state.log_query(&q.name, q.qtype, log_id, proto, "STALE_HIT", 0, 0, "swr_serve_stale", "AeroCache");
+
+            // Background async revalidation without blocking client response
+            let state_bg = state.clone();
+            let q_name = q.name.clone();
+            let q_type = q.qtype;
+            let wire_clone = query_wire.to_vec();
+            tokio::spawn(async move {
+                if let Some((upstream_resp, _)) = state_bg.upstreams.resolve(&wire_clone).await {
+                    state_bg.cache.insert(&q_name, q_type, upstream_resp, 300).await;
+                }
+            });
+
+            state.metrics.record_latency(query_start.elapsed());
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/dns-message")
+                .header("x-cache", "STALE_HIT")
+                .header("x-swr", "revalidating")
+                .body(Bytes::from(cached_wire).into())
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
+        crate::dns::cache::CacheLookupResult::Miss => {}
     }
 
     state.metrics.cache_misses.fetch_add(1, Ordering::Relaxed);
@@ -2533,6 +2619,7 @@ async fn process_dns_query(state: &AppState, query_wire: &[u8], client_ip: IpAdd
                 state.log_query(&q.name, q.qtype, log_id, proto, "REBIND_BLOCK", 3, lat, "dns_rebind_attack", "Rebind Defense");
                 state.cache.insert_negative(&q.name, 120).await;
                 let blocked = build_blocked_response(query_wire, true);
+                state.metrics.record_latency(query_start.elapsed());
                 return Response::builder()
                     .status(StatusCode::OK)
                     .header(header::CONTENT_TYPE, "application/dns-message")
@@ -2546,6 +2633,7 @@ async fn process_dns_query(state: &AppState, query_wire: &[u8], client_ip: IpAdd
         state.cache.insert(&q.name, q.qtype, upstream_resp.clone(), 300).await;
         state.wal.append_query(&q.name, q.qtype, log_id, rcode, lat, "RESOLVED");
         state.log_query(&q.name, q.qtype, log_id, proto, "RESOLVED", rcode, lat, "none", &upstream_name);
+        state.metrics.record_latency(query_start.elapsed());
 
         Response::builder()
             .status(StatusCode::OK)
@@ -2558,6 +2646,7 @@ async fn process_dns_query(state: &AppState, query_wire: &[u8], client_ip: IpAdd
         state.wal.append_query(&q.name, q.qtype, log_id, 2, 0, "FAIL");
         state.log_query(&q.name, q.qtype, log_id, proto, "FAIL", 2, 0, "servfail", "none");
         let fail = build_servfail_response(query_wire);
+        state.metrics.record_latency(query_start.elapsed());
         Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/dns-message")

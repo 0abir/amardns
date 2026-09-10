@@ -91,21 +91,20 @@ impl BloomFilter {
         x ^ (x >> 31)
     }
 
-    /// Dual independent 64-bit hash generation in a single sequential pass over bytes
+    /// Dual independent 64-bit hash generation streaming lowercase bytes without heap allocation
     #[inline(always)]
-    fn dual_hash(key: &str) -> (u64, u64) {
-        let bytes = key.as_bytes();
-
+    pub fn dual_hash_bytes<I: Iterator<Item = u8>>(bytes: I) -> (u64, u64) {
         // Hash 1: FNV-1a 64-bit with golden ratio prime
         let mut h1 = 0xcbf29ce484222325u64;
         // Hash 2: Secondary seed with rotated prime multipliers
         let mut h2 = 0x517cc1b727220a95u64;
 
-        for &b in bytes {
-            h1 ^= b as u64;
+        for b in bytes {
+            let lower = b.to_ascii_lowercase() as u64;
+            h1 ^= lower;
             h1 = h1.wrapping_mul(0x100000001b3);
 
-            h2 = (h2 ^ (b as u64)).wrapping_mul(0x9e3779b97f4a7c15);
+            h2 = (h2 ^ lower).wrapping_mul(0x9e3779b97f4a7c15);
             h2 = h2.rotate_left(13);
         }
 
@@ -116,14 +115,20 @@ impl BloomFilter {
         (h1_mixed, h2_mixed)
     }
 
-    /// Inserts a domain into the Bloom filter using bitwise power-of-two masking
+    /// Convenience dual-hash wrapper for string slices
+    #[inline(always)]
+    pub fn dual_hash(key: &str) -> (u64, u64) {
+        Self::dual_hash_bytes(key.trim().trim_end_matches('.').bytes())
+    }
+
+    /// Inserts a domain into the Bloom filter using bitwise power-of-two masking (zero heap allocation)
     pub fn insert(&mut self, key: &str) {
-        let clean = key.trim().trim_end_matches('.').to_ascii_lowercase();
+        let clean = key.trim().trim_end_matches('.');
         if clean.is_empty() {
             return;
         }
 
-        let (h1, h2) = Self::dual_hash(&clean);
+        let (h1, h2) = Self::dual_hash_bytes(clean.bytes());
         let mask = self.bit_mask;
         for i in 0..self.num_hashes {
             let bit_idx = (h1.wrapping_add((i as u64).wrapping_mul(h2)) as usize) & mask;
@@ -134,16 +139,16 @@ impl BloomFilter {
         self.count.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Checks whether a domain may be in the filter.
+    /// Checks whether a domain may be in the filter with ZERO heap allocations.
     /// Exits early on the very first 0-bit encountered (typically 1-2 memory probes on miss).
     #[inline(always)]
     pub fn contains(&self, key: &str) -> bool {
-        let clean = key.trim().trim_end_matches('.').to_ascii_lowercase();
+        let clean = key.trim().trim_end_matches('.');
         if clean.is_empty() {
             return false;
         }
 
-        let (h1, h2) = Self::dual_hash(&clean);
+        let (h1, h2) = Self::dual_hash_bytes(clean.bytes());
         let mask = self.bit_mask;
         for i in 0..self.num_hashes {
             let bit_idx = (h1.wrapping_add((i as u64).wrapping_mul(h2)) as usize) & mask;
@@ -154,6 +159,117 @@ impl BloomFilter {
             }
         }
         true
+    }
+
+    /// Zero-allocation DNS wire format domain lookup in the Bloom filter.
+    /// Traverses raw RFC 1035 labels directly from wire[offset..],
+    /// hashing lowercased bytes on the fly without heap String allocation.
+    pub fn contains_wire(&self, wire: &[u8], mut offset: usize) -> bool {
+        if offset >= wire.len() {
+            return false;
+        }
+
+        let mut h1 = 0xcbf29ce484222325u64;
+        let mut h2 = 0x517cc1b727220a95u64;
+        let mut first = true;
+        let mut total_len = 0;
+
+        while offset < wire.len() {
+            let len = wire[offset] as usize;
+            if len == 0 {
+                break;
+            }
+            if len & 0xc0 == 0xc0 {
+                // Compression pointer
+                break;
+            }
+            if len > 63 || offset + 1 + len > wire.len() {
+                return false;
+            }
+            offset += 1;
+
+            if !first {
+                h1 ^= b'.' as u64;
+                h1 = h1.wrapping_mul(0x100000001b3);
+                h2 = (h2 ^ (b'.' as u64)).wrapping_mul(0x9e3779b97f4a7c15);
+                h2 = h2.rotate_left(13);
+                total_len += 1;
+            }
+            first = false;
+
+            for &b in &wire[offset..offset + len] {
+                let lower = b.to_ascii_lowercase() as u64;
+                h1 ^= lower;
+                h1 = h1.wrapping_mul(0x100000001b3);
+                h2 = (h2 ^ lower).wrapping_mul(0x9e3779b97f4a7c15);
+                h2 = h2.rotate_left(13);
+            }
+            total_len += len;
+            offset += len;
+            if total_len > 255 {
+                return false;
+            }
+        }
+
+        if first {
+            return false;
+        }
+
+        let h1_mixed = Self::splitmix64(h1);
+        let h2_mixed = Self::splitmix64(h2) | 1;
+
+        let mask = self.bit_mask;
+        for i in 0..self.num_hashes {
+            let bit_idx = (h1_mixed.wrapping_add((i as u64).wrapping_mul(h2_mixed)) as usize) & mask;
+            let word_idx = bit_idx >> 6;
+            let bit_pos = bit_idx & 63;
+            if (self.words[word_idx] & (1u64 << bit_pos)) == 0 {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Checks the wire domain and all parent subdomains (e.g. a.b.c.com -> b.c.com -> c.com)
+    /// completely in-place with zero heap allocations.
+    pub fn contains_wire_with_subdomains(&self, wire: &[u8], offset: usize) -> bool {
+        if offset >= wire.len() {
+            return false;
+        }
+
+        // Count total labels
+        let mut label_offsets = [0usize; 16];
+        let mut label_count = 0;
+        let mut scan = offset;
+
+        while scan < wire.len() && label_count < 16 {
+            let len = wire[scan] as usize;
+            if len == 0 || (len & 0xc0 == 0xc0) {
+                break;
+            }
+            if len > 63 || scan + 1 + len > wire.len() {
+                return false;
+            }
+            label_offsets[label_count] = scan;
+            label_count += 1;
+            scan += 1 + len;
+        }
+
+        if label_count == 0 {
+            return false;
+        }
+
+        // Check each subdomain starting from full domain down to 2nd-level domain
+        // (stop before checking TLD alone, so skip last label)
+        for i in 0..label_count {
+            if label_count - i <= 1 {
+                break; // Skip TLD
+            }
+            if self.contains_wire(wire, label_offsets[i]) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Clears all bits in the bitset and resets counter
@@ -277,5 +393,32 @@ mod tests {
         let filter = BloomFilter::with_capacity(100_000, 0.01);
         assert!(filter.capacity_bits().is_power_of_two());
         assert!(filter.num_hashes() >= 3);
+    }
+
+    #[test]
+    fn test_bloom_filter_zero_alloc_wire_parity() {
+        let mut filter = BloomFilter::with_capacity(1000, 0.001);
+        filter.insert("track.adserver.com");
+
+        // Construct raw DNS wire bytes for "sub.track.adserver.com"
+        // Wire: [3, 's', 'u', 'b', 5, 't', 'r', 'a', 'c', 'k', 8, 'a', 'd', 's', 'e', 'r', 'v', 'e', 'r', 3, 'c', 'o', 'm', 0]
+        let mut wire = vec![0u8; 12]; // 12-byte header
+        wire.extend_from_slice(&[3, b's', b'u', b'b']);
+        wire.extend_from_slice(&[5, b't', b'r', b'a', b'c', b'k']);
+        wire.extend_from_slice(&[8, b'a', b'd', b's', b'e', b'r', b'v', b'e', b'r']);
+        wire.extend_from_slice(&[3, b'c', b'o', b'm', 0]);
+
+        // Direct wire lookup for the exact domain
+        let track_offset = 12 + 4; // Skip "sub."
+        assert!(filter.contains_wire(&wire, track_offset));
+
+        // Subdomain wire lookup from offset 12 (detects parent "track.adserver.com")
+        assert!(filter.contains_wire_with_subdomains(&wire, 12));
+
+        // Non-existent domain wire lookup
+        let mut clean_wire = vec![0u8; 12];
+        clean_wire.extend_from_slice(&[6, b'g', b'o', b'o', b'g', b'l', b'e', 3, b'c', b'o', b'm', 0]);
+        assert!(!filter.contains_wire(&clean_wire, 12));
+        assert!(!filter.contains_wire_with_subdomains(&clean_wire, 12));
     }
 }

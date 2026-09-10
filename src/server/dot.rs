@@ -115,6 +115,7 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
         }
 
         // DNS query successfully received - record metrics once
+        let query_start = std::time::Instant::now();
         state.metrics.record_query(&client_ip.to_string(), "dot");
 
         let query_wire = &buf[..msg_len];
@@ -122,6 +123,7 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
         let parsed = match parse_dns_query(query_wire) {
             Some(p) => p,
             None => {
+                state.metrics.record_latency(query_start.elapsed());
                 let fail = build_servfail_response(query_wire);
                 if send_length_prefixed(&mut socket, &fail).await.is_err() {
                     break;
@@ -133,6 +135,7 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
         let q = match parsed.question {
             Some(q) => q,
             None => {
+                state.metrics.record_latency(query_start.elapsed());
                 let fail = build_servfail_response(query_wire);
                 if send_length_prefixed(&mut socket, &fail).await.is_err() {
                     break;
@@ -140,6 +143,32 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
                 continue;
             }
         };
+
+        // 1. Predictive AI Dependency Prefetching: Learn transitions & proactively prefetch subresources
+        state.brain.record_sequence(&q.name);
+        let prefetch_cands = state.brain.get_prefetch_candidates(&q.name);
+        for cand in prefetch_cands {
+            if !state.is_domain_blocked(&cand) {
+                let state_p = state.clone();
+                tokio::spawn(async move {
+                    state_p.metrics.prefetch_triggers.fetch_add(1, Ordering::Relaxed);
+                    state_p.brain.prefetch_triggers.fetch_add(1, Ordering::Relaxed);
+                    let mut p_wire = vec![0x53, 0x57, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+                    for label in cand.split('.') {
+                        if !label.is_empty() {
+                            p_wire.push(label.len() as u8);
+                            p_wire.extend_from_slice(label.as_bytes());
+                        }
+                    }
+                    p_wire.push(0x00);
+                    p_wire.extend_from_slice(&1u16.to_be_bytes()); // QTYPE A
+                    p_wire.extend_from_slice(&1u16.to_be_bytes()); // QCLASS IN
+                    if let Some((resp, _)) = state_p.upstreams.resolve(&p_wire).await {
+                        state_p.cache.insert(&cand, 1, resp, 300).await;
+                    }
+                });
+            }
+        }
 
         // Rogue client detection & query fingerprinting
         if let Some(flag) = state.fingerprint.record_query(client_ip, &q.name) {
@@ -150,7 +179,7 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
         // Record heatmap
         state.record_heatmap(&q.name);
 
-        // 0. Threat & Whitelist policy check (Whitelist has ultimate priority over blocklists and negative cache)
+        // 0. Threat & Whitelist policy check (with Fast-Path Negative Absorber in <10µs)
         let (is_blocked, is_nxdomain, reason) = state.check_domain(&q.name);
         if is_blocked {
             state.record_detected_block(&q.name, reason);
@@ -161,6 +190,7 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
             state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "BLOCKED", 3, 0, reason, "Filter");
             state.cache.insert_negative(&q.name, 60).await;
             let blocked = build_blocked_response(query_wire, is_nxdomain);
+            state.metrics.record_latency(query_start.elapsed());
             if send_length_prefixed(&mut socket, &blocked).await.is_err() {
                 break;
             }
@@ -183,13 +213,14 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
             let blocked = build_blocked_response(query_wire, true);
             state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), 3, 0, "NEG_HIT");
             state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "NEG_HIT", 3, 0, "threat_negative_cache", "AeroCache");
+            state.metrics.record_latency(query_start.elapsed());
             if send_length_prefixed(&mut socket, &blocked).await.is_err() {
                 break;
             }
             continue;
         }
 
-        // Google Safe Browsing Cloud Threat Check
+        // 2. Google Safe Browsing Cloud Threat Check
         if state.blocking_enabled.load(Ordering::Relaxed) && !state.is_exempt(&q.name) {
             if let Some(threat_type) = state.safe_browsing.check_domain(&q.name).await {
                 state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
@@ -203,6 +234,7 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
                 state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "GSB_BLOCK", 3, 0, "google_safe_browsing", "Google Safe Browsing");
                 state.cache.insert_negative(&q.name, 120).await;
                 let blocked = build_blocked_response(query_wire, true);
+                state.metrics.record_latency(query_start.elapsed());
                 if send_length_prefixed(&mut socket, &blocked).await.is_err() {
                     break;
                 }
@@ -210,21 +242,49 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
             }
         }
 
-        // Cache lookup
-        if let Some(cached_resp) = state.cache.get(&q.name, q.qtype, parsed.tx_id).await {
-            state.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
-            state.fingerprint.record_response(client_ip, 0);
-            state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), 0, 0, "HIT");
-            state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "HIT", 0, 0, "none", "AeroCache");
-            if send_length_prefixed(&mut socket, &cached_resp).await.is_err() {
-                break;
+        // 3. Cache lookup with RFC 8767 Stale-While-Revalidate (SWR)
+        match state.cache.get_with_swr(&q.name, q.qtype, parsed.tx_id).await {
+            crate::dns::cache::CacheLookupResult::Fresh(cached_resp) => {
+                state.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
+                state.fingerprint.record_response(client_ip, 0);
+                state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), 0, 0, "HIT");
+                state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "HIT", 0, 0, "none", "AeroCache");
+                state.metrics.record_latency(query_start.elapsed());
+                if send_length_prefixed(&mut socket, &cached_resp).await.is_err() {
+                    break;
+                }
+                continue;
             }
-            continue;
+            crate::dns::cache::CacheLookupResult::Stale(cached_resp) => {
+                state.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
+                state.metrics.swr_serves.fetch_add(1, Ordering::Relaxed);
+                state.fingerprint.record_response(client_ip, 0);
+                state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), 0, 0, "STALE_HIT");
+                state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "STALE_HIT", 0, 0, "swr_serve_stale", "AeroCache");
+
+                // Background async revalidation
+                let state_bg = state.clone();
+                let q_name = q.name.clone();
+                let q_type = q.qtype;
+                let wire_clone = query_wire.to_vec();
+                tokio::spawn(async move {
+                    if let Some((upstream_resp, _)) = state_bg.upstreams.resolve(&wire_clone).await {
+                        state_bg.cache.insert(&q_name, q_type, upstream_resp, 300).await;
+                    }
+                });
+
+                state.metrics.record_latency(query_start.elapsed());
+                if send_length_prefixed(&mut socket, &cached_resp).await.is_err() {
+                    break;
+                }
+                continue;
+            }
+            crate::dns::cache::CacheLookupResult::Miss => {}
         }
 
         state.metrics.cache_misses.fetch_add(1, Ordering::Relaxed);
 
-        // Forward to upstream
+        // 4. Forward to upstream
         let start_upstream = std::time::Instant::now();
         if let Some((upstream_resp, upstream_name)) = state.upstreams.resolve(query_wire).await {
             let lat = start_upstream.elapsed().as_millis() as u32;
@@ -250,6 +310,7 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
                     state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "REBIND_BLOCK", 3, lat, "dns_rebind_attack", "Rebind Defense");
                     state.cache.insert_negative(&q.name, 120).await;
                     let blocked = build_blocked_response(query_wire, true);
+                    state.metrics.record_latency(query_start.elapsed());
                     if send_length_prefixed(&mut socket, &blocked).await.is_err() {
                         break;
                     }
@@ -260,6 +321,7 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
             state.cache.insert(&q.name, q.qtype, upstream_resp.clone(), 300).await;
             state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), rcode, lat, "RESOLVED");
             state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "RESOLVED", rcode, lat, "none", &upstream_name);
+            state.metrics.record_latency(query_start.elapsed());
             if send_length_prefixed(&mut socket, &upstream_resp).await.is_err() {
                 break;
             }
@@ -268,6 +330,7 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
             state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), 2, 0, "FAIL");
             state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "FAIL", 2, 0, "servfail", "none");
             let fail = build_servfail_response(query_wire);
+            state.metrics.record_latency(query_start.elapsed());
             if send_length_prefixed(&mut socket, &fail).await.is_err() {
                 break;
             }

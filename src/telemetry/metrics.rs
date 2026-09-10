@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -33,6 +33,17 @@ pub struct Metrics {
     pub swarm_alarms: AtomicU64,
     pub dot_queries: AtomicU64,
     pub doh_queries: AtomicU64,
+    // Microsecond Latency Histogram & Turbocharger telemetry
+    pub lat_sub_1ms: AtomicU64,     // < 1,000 µs (RAM cache hits, fast-filter drops, SWR hits)
+    pub lat_1_to_5ms: AtomicU64,    // 1,000 - 5,000 µs (Local fast-path processing)
+    pub lat_5_to_15ms: AtomicU64,   // 5,000 - 15,000 µs (Warm upstream HTTP/2 pipe responses)
+    pub lat_15_to_50ms: AtomicU64,  // 15,000 - 50,000 µs (Standard DoH upstream resolution)
+    pub lat_above_50ms: AtomicU64,  // > 50,000 µs (Hedged / slow connection)
+    pub total_lat_micros: AtomicU64,
+    pub fast_neg_hits: AtomicU64,
+    pub swr_serves: AtomicU64,
+    pub prefetch_triggers: AtomicU64,
+    pub prefetch_hits: AtomicU64,
     start_time: Instant,
     boot_timestamp: u64,
     rps_buckets: Mutex<[u32; 60]>,
@@ -68,6 +79,16 @@ impl Metrics {
             swarm_alarms: AtomicU64::new(0),
             dot_queries: AtomicU64::new(0),
             doh_queries: AtomicU64::new(0),
+            lat_sub_1ms: AtomicU64::new(0),
+            lat_1_to_5ms: AtomicU64::new(0),
+            lat_5_to_15ms: AtomicU64::new(0),
+            lat_15_to_50ms: AtomicU64::new(0),
+            lat_above_50ms: AtomicU64::new(0),
+            total_lat_micros: AtomicU64::new(0),
+            fast_neg_hits: AtomicU64::new(0),
+            swr_serves: AtomicU64::new(0),
+            prefetch_triggers: AtomicU64::new(0),
+            prefetch_hits: AtomicU64::new(0),
             start_time: Instant::now(),
             boot_timestamp: now_unix,
             rps_buckets: Mutex::new([0; 60]),
@@ -77,6 +98,46 @@ impl Metrics {
             devices: Mutex::new(HashMap::new()),
             users: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Records query processing duration into microsecond latency histogram
+    pub fn record_latency(&self, duration: Duration) {
+        let micros = duration.as_micros() as u64;
+        self.total_lat_micros.fetch_add(micros, Ordering::Relaxed);
+        if micros < 1_000 {
+            self.lat_sub_1ms.fetch_add(1, Ordering::Relaxed);
+        } else if micros < 5_000 {
+            self.lat_1_to_5ms.fetch_add(1, Ordering::Relaxed);
+        } else if micros < 15_000 {
+            self.lat_5_to_15ms.fetch_add(1, Ordering::Relaxed);
+        } else if micros < 50_000 {
+            self.lat_15_to_50ms.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.lat_above_50ms.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Returns average latency in microseconds and milliseconds
+    pub fn get_avg_latency(&self) -> (f64, f64) {
+        let reqs = self.requests.load(Ordering::Relaxed);
+        if reqs == 0 {
+            return (0.0, 0.0);
+        }
+        let total_us = self.total_lat_micros.load(Ordering::Relaxed) as f64;
+        let avg_us = (total_us / reqs as f64 * 10.0).round() / 10.0;
+        let avg_ms = (avg_us / 1000.0 * 100.0).round() / 100.0;
+        (avg_us, avg_ms)
+    }
+
+    /// Returns latency distribution count tuple: (sub_1ms, 1_5ms, 5_15ms, 15_50ms, above_50ms)
+    pub fn get_latency_distribution(&self) -> (u64, u64, u64, u64, u64) {
+        (
+            self.lat_sub_1ms.load(Ordering::Relaxed),
+            self.lat_1_to_5ms.load(Ordering::Relaxed),
+            self.lat_5_to_15ms.load(Ordering::Relaxed),
+            self.lat_15_to_50ms.load(Ordering::Relaxed),
+            self.lat_above_50ms.load(Ordering::Relaxed),
+        )
     }
 
     /// Records an incoming DNS query with client IP, updating real-time RPS, active devices, and users
@@ -159,6 +220,16 @@ impl Metrics {
         self.swarm_alarms.store(0, Ordering::Relaxed);
         self.dot_queries.store(0, Ordering::Relaxed);
         self.doh_queries.store(0, Ordering::Relaxed);
+        self.lat_sub_1ms.store(0, Ordering::Relaxed);
+        self.lat_1_to_5ms.store(0, Ordering::Relaxed);
+        self.lat_5_to_15ms.store(0, Ordering::Relaxed);
+        self.lat_15_to_50ms.store(0, Ordering::Relaxed);
+        self.lat_above_50ms.store(0, Ordering::Relaxed);
+        self.total_lat_micros.store(0, Ordering::Relaxed);
+        self.fast_neg_hits.store(0, Ordering::Relaxed);
+        self.swr_serves.store(0, Ordering::Relaxed);
+        self.prefetch_triggers.store(0, Ordering::Relaxed);
+        self.prefetch_hits.store(0, Ordering::Relaxed);
         if let Ok(mut b) = self.rps_buckets.lock() { *b = [0; 60]; }
         if let Ok(mut s) = self.rps_smooth.lock() { *s = 0.0; }
         if let Ok(mut p) = self.rps_peak.lock() { *p = 0.0; }
@@ -298,5 +369,41 @@ impl Metrics {
         } else {
             Vec::new()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_latency_histogram_distribution() {
+        let m = Metrics::new();
+
+        m.record_query("1.1.1.1", "doh");
+        m.record_latency(Duration::from_micros(250)); // < 1ms
+
+        m.record_query("1.1.1.1", "doh");
+        m.record_latency(Duration::from_micros(2_500)); // 1-5ms
+
+        m.record_query("1.1.1.1", "doh");
+        m.record_latency(Duration::from_micros(8_000)); // 5-15ms
+
+        m.record_query("1.1.1.1", "doh");
+        m.record_latency(Duration::from_micros(25_000)); // 15-50ms
+
+        m.record_query("1.1.1.1", "doh");
+        m.record_latency(Duration::from_micros(75_000)); // > 50ms
+
+        let (sub1, f1_5, f5_15, f15_50, above50) = m.get_latency_distribution();
+        assert_eq!(sub1, 1);
+        assert_eq!(f1_5, 1);
+        assert_eq!(f5_15, 1);
+        assert_eq!(f15_50, 1);
+        assert_eq!(above50, 1);
+
+        let (avg_us, avg_ms) = m.get_avg_latency();
+        assert!(avg_us > 0.0);
+        assert!(avg_ms > 0.0);
     }
 }

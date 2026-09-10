@@ -112,6 +112,16 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // 6c. Proactive Upstream Warm-Pipes (Every 20 seconds keepalive pings over HTTP/2)
+    let warm_state = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(20));
+        loop {
+            interval.tick().await;
+            warm_state.upstreams.keepalive_ping().await;
+        }
+    });
+
     // 7. Shutdown coordination channel
     let (shutdown_tx, shutdown_rx_dot) = tokio::sync::watch::channel(());
 

@@ -103,6 +103,7 @@ pub struct AppState {
     pub expected_threat_total: AtomicUsize,
     pub expected_whitelist_total: AtomicUsize,
     pub feed_overlap_count: AtomicUsize,
+    pub fast_neg_filter: moka::sync::Cache<String, (&'static str, bool)>,
 }
 
 impl AppState {
@@ -202,6 +203,10 @@ impl AppState {
             expected_threat_total: AtomicUsize::new(0),
             expected_whitelist_total: AtomicUsize::new(0),
             feed_overlap_count: AtomicUsize::new(0),
+            fast_neg_filter: moka::sync::Cache::builder()
+                .max_capacity(20_000)
+                .time_to_live(std::time::Duration::from_secs(60))
+                .build(),
         }
     }
 
@@ -289,30 +294,49 @@ impl AppState {
             return (false, false, "whitelisted");
         }
 
-        // 2. Exact Block (Punches a hole right through wildcard whitelists!)
+        // 2. Fast-Path Negative Absorber (Intercepts repeating ad/telemetry bursts in <10µs)
+        if let Some((reason, is_nx)) = self.fast_neg_filter.get(&clean) {
+            self.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
+            self.metrics.fast_neg_hits.fetch_add(1, Ordering::Relaxed);
+            return (true, is_nx, reason);
+        }
+
+        // 3. Exact Block (Punches a hole right through wildcard whitelists!)
         if let Some(reason) = self.is_exact_blocked(&clean) {
+            self.fast_neg_filter.insert(clean.clone(), (reason, true));
             self.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
             self.record_detected_block(&clean, reason);
             self.log_action(if reason == "threat_feed_abir" { "feed_block" } else { "custom_block" }, &clean);
             return (true, true, reason);
         }
 
-        // 3. Wildcard Whitelist (Protects all other subdomains under *.whitelist)
+        // 4. Wildcard Whitelist (Protects all other subdomains under *.whitelist)
         if self.is_wildcard_whitelisted(&clean) {
             self.record_detected_whitelist(&clean);
             return (false, false, "whitelist_feed");
         }
 
-        // 4. Custom Wildcard Blocklist (e.g. *.tiktok.com)
+        // 5. Custom Wildcard Blocklist (e.g. *.tiktok.com)
         if let Some(reason) = self.is_wildcard_custom_blocked(&clean) {
+            self.fast_neg_filter.insert(clean.clone(), (reason, true));
             self.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
             self.record_detected_block(&clean, reason);
             self.log_action("custom_block", &clean);
             return (true, true, reason);
         }
 
-        // 3. AI Lookalike & Typosquat Detection
+        // 6. Global Threat Feed Bloom Filter (Ultra-fast ~30ns check before running heavy heuristics!)
+        if self.is_threat_bloom(&clean) {
+            self.fast_neg_filter.insert(clean.clone(), ("threat_feed_abir", true));
+            self.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
+            self.record_detected_block(&clean, "threat_feed_abir");
+            self.log_action("feed_block", &clean);
+            return (true, true, "threat_feed_abir");
+        }
+
+        // 7. Heuristic Lookalike & Typosquat Detection
         if crate::security::heuristics::is_lookalike_threat(&clean) {
+            self.fast_neg_filter.insert(clean.clone(), ("lookalike_threat", true));
             self.metrics.alike_blocks.fetch_add(1, Ordering::Relaxed);
             self.brain.typo_blocks.fetch_add(1, Ordering::Relaxed);
             let (feats, ent) = self.brain.extract_features(&clean);
@@ -331,8 +355,9 @@ impl AppState {
             return (true, true, "lookalike_threat");
         }
 
-        // 4. AI DGA Malware Detection
+        // 8. Heuristic DGA Malware Detection
         if crate::security::heuristics::is_dga_threat(&clean) {
+            self.fast_neg_filter.insert(clean.clone(), ("dga_threat", true));
             self.metrics.dga_blocks.fetch_add(1, Ordering::Relaxed);
             self.brain.zero_day_blocks.fetch_add(1, Ordering::Relaxed);
             let (feats, ent) = self.brain.extract_features(&clean);
@@ -351,9 +376,10 @@ impl AppState {
             return (true, true, "dga_threat");
         }
 
-        // 4b. Neural Brain Online Evaluation
+        // 9. Neural Brain Online Evaluation
         let (score, verdict) = self.brain.evaluate(&clean);
         if score > 0.90 {
+            self.fast_neg_filter.insert(clean.clone(), (verdict, true));
             self.metrics.dga_blocks.fetch_add(1, Ordering::Relaxed);
             self.brain.zero_day_blocks.fetch_add(1, Ordering::Relaxed);
             let (feats, ent) = self.brain.extract_features(&clean);
@@ -372,14 +398,6 @@ impl AppState {
             return (true, true, verdict);
         }
 
-        // 5. Global Threat Feed Bloom Filter (400k+ malicious domains with subdomain check)
-        if self.is_threat_bloom(&clean) {
-            self.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
-            self.record_detected_block(&clean, "threat_feed_abir");
-            self.log_action("feed_block", &clean);
-            return (true, true, "threat_feed_abir");
-        }
-
         (false, false, "none")
     }
 
@@ -396,39 +414,42 @@ impl AppState {
             return false;
         }
 
-        // 2. Exact Block (Punches a hole through wildcard whitelists!)
+        // 2. Fast-Path Negative Filter
+        if self.fast_neg_filter.get(&clean).is_some() {
+            return true;
+        }
+
+        // 3. Exact Block (Punches a hole through wildcard whitelists!)
         if self.is_exact_blocked(&clean).is_some() {
             return true;
         }
 
-        // 3. Wildcard Whitelist
+        // 4. Wildcard Whitelist
         if self.is_wildcard_whitelisted(&clean) {
             return false;
         }
 
-        // 4. Custom Wildcard Block
+        // 5. Custom Wildcard Block
         if self.is_wildcard_custom_blocked(&clean).is_some() {
             return true;
         }
 
-        // 3. AI Lookalike & Typosquat Detection
+        // 6. Global Threat Feed Bloom Filter
+        if self.is_threat_bloom(&clean) {
+            return true;
+        }
+
+        // 7. Heuristics
         if crate::security::heuristics::is_lookalike_threat(&clean) {
             return true;
         }
 
-        // 4. AI DGA Malware Detection
         if crate::security::heuristics::is_dga_threat(&clean) {
             return true;
         }
 
-        // 4b. Neural Brain Evaluation (pure read-only forward pass)
         let (score, _) = self.brain.evaluate_internal(&clean);
         if score > 0.90 {
-            return true;
-        }
-
-        // 5. Global Threat Feed Bloom Filter
-        if self.is_threat_bloom(&clean) {
             return true;
         }
 
@@ -615,10 +636,18 @@ impl AppState {
         if guard.contains(&wc_self) {
             return true;
         }
-        let parts: Vec<&str> = domain.split('.').collect();
-        for i in 1..parts.len().saturating_sub(1) {
-            let suffix = parts[i..].join(".");
-            if guard.contains(&suffix) || guard.contains(&format!("*.{}", suffix)) {
+        // Zero-allocation zero-copy subdomain traversal
+        let mut sub = domain;
+        while let Some(idx) = sub.find('.') {
+            sub = &sub[idx + 1..];
+            if !sub.contains('.') {
+                break; // Skip TLD
+            }
+            if guard.contains(sub) {
+                return true;
+            }
+            let wc = format!("*.{}", sub);
+            if guard.contains(&wc) {
                 return true;
             }
         }

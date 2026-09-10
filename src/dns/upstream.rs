@@ -212,6 +212,57 @@ impl UpstreamPool {
         self.ranked_nodes().into_iter().next()
     }
 
+    /// Sends proactive keep-alive pings over HTTP/2 to top ranked nodes.
+    /// Keeps TCP/TLS connections permanently warm in reqwest's pool,
+    /// measures real-time upstream latency, and eliminates cold-start TLS latency.
+    pub async fn keepalive_ping(&self) {
+        let nodes = self.ranked_nodes();
+        if nodes.is_empty() {
+            return;
+        }
+
+        // Minimal RFC 1035 query packet for "." IN NS (17 bytes)
+        let ping_wire = vec![
+            0x12, 0x34, // ID
+            0x01, 0x00, // Standard query, RD=1
+            0x00, 0x01, // QDCOUNT = 1
+            0x00, 0x00, // ANCOUNT = 0
+            0x00, 0x00, // NSCOUNT = 0
+            0x00, 0x00, // ARCOUNT = 0
+            0x00,       // Root label '.'
+            0x00, 0x02, // QTYPE = NS (2)
+            0x00, 0x01, // QCLASS = IN (1)
+        ];
+
+        let mut handles = Vec::new();
+        for node in nodes.into_iter().take(2) {
+            let client = self.client.clone();
+            let wire = ping_wire.clone();
+            handles.push(tokio::spawn(async move {
+                let start = Instant::now();
+                let res = client
+                    .post(&node.url)
+                    .header("content-type", "application/dns-message")
+                    .header("accept", "application/dns-message")
+                    .timeout(Duration::from_millis(1500))
+                    .body(wire)
+                    .send()
+                    .await;
+
+                if let Ok(resp) = res {
+                    if resp.status().is_success() {
+                        let lat = start.elapsed().as_millis().max(1) as u32;
+                        node.record_success(lat);
+                    }
+                }
+            }));
+        }
+
+        for h in handles {
+            let _ = h.await;
+        }
+    }
+
     /// Resolves DNS wire query using ultra-fast hedged queries across the top 2 resolvers
     pub async fn resolve(&self, query_wire: &[u8]) -> Option<(Vec<u8>, String)> {
         let nodes = self.ranked_nodes();

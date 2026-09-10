@@ -39,6 +39,10 @@ pub struct AIBrain {
     pub domain_iq: RwLock<HashMap<String, DomainKnowledge>>,
     pub markov_model: RwLock<HashMap<String, u32>>,
     pub neural_weights: RwLock<[f32; 8]>,
+    pub domain_transitions: RwLock<HashMap<String, HashMap<String, u32>>>,
+    pub last_query_sequence: parking_lot::Mutex<Option<(String, std::time::Instant)>>,
+    pub prefetch_triggers: AtomicU64,
+    pub prefetch_hits: AtomicU64,
     pub training_cycles: AtomicU64,
     pub decisions_made: AtomicU64,
     pub recent_decisions: RwLock<Vec<AIDecisionRecord>>,
@@ -52,15 +56,60 @@ impl AIBrain {
         Self {
             domain_iq: RwLock::new(HashMap::new()),
             markov_model: RwLock::new(HashMap::new()),
-            // Initial calibrated baseline weights for feature vector:
-            // [length, entropy, vowel_ratio, digit_ratio, consonants, markov_anomaly, typo, safe_history]
             neural_weights: RwLock::new([0.10, 0.25, -0.50, 0.35, 0.30, 0.35, 0.40, -0.60]),
+            domain_transitions: RwLock::new(HashMap::new()),
+            last_query_sequence: parking_lot::Mutex::new(None),
+            prefetch_triggers: AtomicU64::new(0),
+            prefetch_hits: AtomicU64::new(0),
             training_cycles: AtomicU64::new(0),
             decisions_made: AtomicU64::new(0),
             recent_decisions: RwLock::new(Vec::new()),
             zero_day_blocks: AtomicU64::new(0),
             typo_blocks: AtomicU64::new(0),
             fp_suppressions: AtomicU64::new(0),
+        }
+    }
+
+    /// Records client query sequence to learn domain correlation transitions (A -> B)
+    pub fn record_sequence(&self, domain: &str) {
+        let clean = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+        if clean.is_empty() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let mut last_guard = self.last_query_sequence.lock();
+        if let Some((prev_domain, prev_time)) = last_guard.as_ref() {
+            let elapsed = now.duration_since(*prev_time).as_secs_f64();
+            // If consecutive queries arrive within 2.5s and domains differ, record correlation
+            if elapsed <= 2.5 && prev_domain != &clean {
+                let mut transitions = self.domain_transitions.write();
+                if transitions.len() >= 500 && !transitions.contains_key(prev_domain) {
+                    if let Some(k) = transitions.keys().next().cloned() {
+                        transitions.remove(&k);
+                    }
+                }
+                let child_map = transitions.entry(prev_domain.clone()).or_insert_with(HashMap::new);
+                if child_map.len() < 8 || child_map.contains_key(&clean) {
+                    let counter = child_map.entry(clean.clone()).or_insert(0);
+                    *counter = counter.saturating_add(1);
+                }
+            }
+        }
+        *last_guard = Some((clean, now));
+    }
+
+    /// Retrieves high-confidence predicted subresources for proactive prefetching
+    pub fn get_prefetch_candidates(&self, domain: &str) -> Vec<String> {
+        let clean = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+        let transitions = self.domain_transitions.read();
+        if let Some(children) = transitions.get(&clean) {
+            let mut candidates: Vec<(&String, &u32)> = children.iter()
+                .filter(|(_, &count)| count >= 2)
+                .collect();
+            candidates.sort_by(|a, b| b.1.cmp(a.1));
+            candidates.into_iter().take(2).map(|(d, _)| d.clone()).collect()
+        } else {
+            Vec::new()
         }
     }
 
@@ -331,6 +380,17 @@ impl AIBrain {
         let blocks: Vec<String> = custom_blocklist.keys().cloned().collect();
         let whitelist: Vec<String> = custom_whitelist.iter().cloned().collect();
 
+        // Learned domain transitions
+        let transitions_guard = self.domain_transitions.read();
+        let mut transitions_json = serde_json::Map::new();
+        for (parent, children) in transitions_guard.iter() {
+            let mut ch_map = serde_json::Map::new();
+            for (ch, cnt) in children.iter() {
+                ch_map.insert(ch.clone(), serde_json::json!(cnt));
+            }
+            transitions_json.insert(parent.clone(), serde_json::Value::Object(ch_map));
+        }
+
         serde_json::json!({
             "version": "1.0.0",
             "engine": "AmarDNS Perpetual AI Brain",
@@ -340,12 +400,14 @@ impl AIBrain {
             "neuralWeights": *weights_guard,
             "domainIQ": domain_iq_json,
             "markov": markov_json,
+            "domainTransitions": transitions_json,
             "customBlocklist": blocks,
             "customWhitelist": whitelist,
             "summary": {
                 "domainsLearned": iq_guard.len().max(heatmap.len()),
                 "bigramsLearned": markov_guard.len(),
-                "neuralParams": weights_guard.len()
+                "neuralParams": weights_guard.len(),
+                "transitionsLearned": transitions_guard.len()
             }
         })
     }
@@ -353,6 +415,21 @@ impl AIBrain {
     /// Imports trained brain knowledge from backup, updating neural weights, Domain IQ, and Markov models.
     pub fn import_json(&self, data: &serde_json::Value) -> Result<usize, String> {
         let mut loaded = 0usize;
+
+        // Restore domain transitions
+        if let Some(trans_obj) = data.get("domainTransitions").and_then(|v| v.as_object()) {
+            let mut transitions = self.domain_transitions.write();
+            for (parent, ch_val) in trans_obj.iter() {
+                if let Some(ch_obj) = ch_val.as_object() {
+                    let entry = transitions.entry(parent.clone()).or_insert_with(HashMap::new);
+                    for (ch, cnt_val) in ch_obj.iter() {
+                        if let Some(cnt) = cnt_val.as_u64() {
+                            entry.insert(ch.clone(), cnt as u32);
+                        }
+                    }
+                }
+            }
+        }
 
         // Restore neural weights
         if let Some(weights_arr) = data.get("neuralWeights").and_then(|v| v.as_array()) {
@@ -501,5 +578,24 @@ mod tests {
         let res = new_brain.import_json(&exported);
         assert!(res.is_ok());
         assert!(new_brain.domain_iq.read().len() >= 2);
+    }
+
+    #[test]
+    fn test_predictive_dependency_prefetch_learning() {
+        let brain = AIBrain::new();
+
+        // Sequence: user visits youtube.com, then immediately visits i.ytimg.com twice
+        brain.record_sequence("youtube.com");
+        brain.record_sequence("i.ytimg.com");
+
+        // Repeat sequence to cross threshold >= 2
+        brain.record_sequence("youtube.com");
+        brain.record_sequence("i.ytimg.com");
+
+        let candidates = brain.get_prefetch_candidates("youtube.com");
+        assert_eq!(candidates, vec!["i.ytimg.com"]);
+
+        // Unknown domain has no predictions
+        assert!(brain.get_prefetch_candidates("unknown-site.org").is_empty());
     }
 }

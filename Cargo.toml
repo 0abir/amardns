@@ -14,7 +14,7 @@ bytes = "1.6"
 # DNS Protocol wire handling: custom zero-GC RFC 1035 parser (src/dns/parser.rs)
 
 # High-performance in-memory caching
-moka = { version = "0.12", features = ["future"] }
+moka = { version = "0.12", features = ["future", "sync"] }
 parking_lot = "0.12"
 
 # Serialization & HTTP client for CDN threat feed sync
