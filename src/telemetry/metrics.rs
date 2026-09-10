@@ -44,6 +44,11 @@ pub struct Metrics {
     pub swr_serves: AtomicU64,
     pub prefetch_triggers: AtomicU64,
     pub prefetch_hits: AtomicU64,
+    // New feature counters
+    pub ttl_guard_blocks: AtomicU64,
+    pub cname_flattened: AtomicU64,
+    pub race_wins: AtomicU64,
+    pub schedule_blocks: AtomicU64,
     start_time: Instant,
     boot_timestamp: u64,
     rps_buckets: Mutex<[u32; 60]>,
@@ -89,6 +94,10 @@ impl Metrics {
             swr_serves: AtomicU64::new(0),
             prefetch_triggers: AtomicU64::new(0),
             prefetch_hits: AtomicU64::new(0),
+            ttl_guard_blocks: AtomicU64::new(0),
+            cname_flattened: AtomicU64::new(0),
+            race_wins: AtomicU64::new(0),
+            schedule_blocks: AtomicU64::new(0),
             start_time: Instant::now(),
             boot_timestamp: now_unix,
             rps_buckets: Mutex::new([0; 60]),
@@ -230,6 +239,10 @@ impl Metrics {
         self.swr_serves.store(0, Ordering::Relaxed);
         self.prefetch_triggers.store(0, Ordering::Relaxed);
         self.prefetch_hits.store(0, Ordering::Relaxed);
+        self.ttl_guard_blocks.store(0, Ordering::Relaxed);
+        self.cname_flattened.store(0, Ordering::Relaxed);
+        self.race_wins.store(0, Ordering::Relaxed);
+        self.schedule_blocks.store(0, Ordering::Relaxed);
         if let Ok(mut b) = self.rps_buckets.lock() { *b = [0; 60]; }
         if let Ok(mut s) = self.rps_smooth.lock() { *s = 0.0; }
         if let Ok(mut p) = self.rps_peak.lock() { *p = 0.0; }
@@ -364,7 +377,7 @@ impl Metrics {
         if let Ok(mut map) = self.devices.lock() {
             map.retain(|_, v| v.last_seen >= cutoff);
             let mut list: Vec<DeviceEntry> = map.values().cloned().collect();
-            list.sort_by(|a, b| b.count.cmp(&a.count));
+            list.sort_by_key(|a| std::cmp::Reverse(a.count));
             list
         } else {
             Vec::new()

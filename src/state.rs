@@ -8,9 +8,13 @@ use tracing::info;
 use crate::config::Config;
 use crate::dns::cache::DnsCache;
 use crate::dns::upstream::UpstreamPool;
+use crate::dns::passive_dns::PassiveDnsStore;
+use crate::dns::ttl_learner::TtlLearner;
 use crate::security::bloom::BloomFilter;
 use crate::security::rate_limit::RateLimiter;
 use crate::security::safe_browsing::SafeBrowsingClient;
+use crate::security::schedule::ScheduleStore;
+use crate::security::feed_manager::FeedManager;
 use crate::storage::wal::WalStorage;
 use crate::telemetry::metrics::Metrics;
 
@@ -104,6 +108,21 @@ pub struct AppState {
     pub expected_whitelist_total: AtomicUsize,
     pub feed_overlap_count: AtomicUsize,
     pub fast_neg_filter: moka::sync::Cache<String, (&'static str, bool)>,
+    // Feature 4: Passive DNS Timeline
+    pub passive_dns: PassiveDnsStore,
+    // Feature 5: Canary Domain Detection
+    pub canary_domain: String,
+    pub canary_hits: AtomicU64,
+    // Feature 6: TTL Manipulation Guard
+    pub ttl_guard_enabled: AtomicBool,
+    // Feature 9: Scheduled Blocking
+    pub schedule_store: ScheduleStore,
+    // Feature 10: Blocklist Feed Subscriptions
+    pub feed_manager: FeedManager,
+    // Feature 13: Smart TTL Learning
+    pub ttl_learner: TtlLearner,
+    // Feature 8: Real-Time SSE Log Stream broadcaster
+    pub log_broadcaster: tokio::sync::broadcast::Sender<String>,
 }
 
 impl AppState {
@@ -207,6 +226,24 @@ impl AppState {
                 .max_capacity(20_000)
                 .time_to_live(std::time::Duration::from_secs(60))
                 .build(),
+            passive_dns: PassiveDnsStore::new(),
+            canary_domain: {
+                // Generate a unique canary domain using boot timestamp + process ID
+                let ts = SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos();
+                format!("canary-{:x}.amardns.internal", ts & 0xFFFFFFFF)
+            },
+            canary_hits: AtomicU64::new(0),
+            ttl_guard_enabled: AtomicBool::new(true),
+            schedule_store: ScheduleStore::new(),
+            feed_manager: FeedManager::new(),
+            ttl_learner: TtlLearner::new(),
+            log_broadcaster: {
+                let (tx, _) = tokio::sync::broadcast::channel(256);
+                tx
+            },
         }
     }
 
@@ -242,6 +279,7 @@ impl AppState {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn log_query(
         &self,
         domain: &str,
@@ -260,6 +298,7 @@ impl AppState {
             .as_millis() as u64;
         let id = self.next_log_id.fetch_add(1, Ordering::Relaxed);
         let qtype_str = crate::dns::parser::qtype_to_str(qtype).to_string();
+        let qtype_str_sse = qtype_str.clone(); // keep a copy for SSE broadcast
         let mut guard = self.recent_queries.write();
         guard.push(QueryLog {
             id,
@@ -276,6 +315,15 @@ impl AppState {
         });
         if guard.len() > 300 {
             guard.drain(0..100);
+        }
+        // Feature 8: Broadcast to live SSE stream subscribers (non-blocking)
+        if self.log_broadcaster.receiver_count() > 0 {
+            let log_json = serde_json::json!({
+                "id": id, "t": now, "domain": domain, "qtype": qtype_str_sse,
+                "client": client, "proto": proto, "status": status,
+                "rcode": rcode, "lat": lat_ms, "reason": reason, "upstream": upstream
+            }).to_string();
+            let _ = self.log_broadcaster.send(log_json);
         }
     }
 
@@ -299,6 +347,14 @@ impl AppState {
             self.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
             self.metrics.fast_neg_hits.fetch_add(1, Ordering::Relaxed);
             return (true, is_nx, reason);
+        }
+
+        // 2b. Feature 9: Scheduled Blocking — time-based rules
+        if let Some(_reason) = self.schedule_store.is_blocked_now(&clean) {
+            self.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
+            self.metrics.schedule_blocks.fetch_add(1, Ordering::Relaxed);
+            self.fast_neg_filter.insert(clean.clone(), ("schedule_block", false));
+            return (true, false, "schedule_block");
         }
 
         // 3. Exact Block (Punches a hole right through wildcard whitelists!)
@@ -462,11 +518,11 @@ impl AppState {
         if self.is_exact_whitelisted(&clean) {
             return true;
         }
-        // 2. An exact block revokes exemption for that specific subdomain (punches through wildcard whitelist)
-        if self.is_exact_blocked(&clean).is_some() {
+        // 2. An exact block or threat feed revokes exemption (punches through wildcard whitelist)
+        if self.is_exact_blocked(&clean).is_some() || self.is_threat_bloom(&clean) {
             return false;
         }
-        // 3. Wildcard whitelist exempts remaining subdomains
+        // 3. Dynamic wildcard whitelist exempts subdomains
         self.is_wildcard_whitelisted(&clean)
     }
 
@@ -673,7 +729,7 @@ impl AppState {
         self.brain.train(&clean, false, 0);
         self.brain.fp_suppressions.fetch_add(1, Ordering::Relaxed);
         let cycles = self.brain.training_cycles.load(Ordering::Relaxed);
-        if self.brain.recent_decisions.read().len() < 30 || cycles % 10 == 0 {
+        if self.brain.recent_decisions.read().len() < 30 || cycles.is_multiple_of(10) {
             let (feats, ent) = self.brain.extract_features(&clean);
             let (score, _) = self.brain.evaluate_internal(&clean);
             self.brain.record_decision(
@@ -800,11 +856,10 @@ pub fn domain_matches_pattern(pattern: &str, domain: &str) -> bool {
     }
 
     // Plain rule without wildcard: "root.tld" also inherently covers all subdomains in DNS filters
-    if !clean_pat.contains('*') {
-        if clean_dom.ends_with(&format!(".{}", clean_pat)) {
+    if !clean_pat.contains('*')
+        && clean_dom.ends_with(&format!(".{}", clean_pat)) {
             return true;
         }
-    }
 
     // Arbitrary glob matching (*tracker*, *.ads.*, ad.*, *.xyz)
     if clean_pat.contains('*') {

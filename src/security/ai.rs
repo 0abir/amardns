@@ -42,6 +42,7 @@ pub struct AIBrain {
     pub domain_transitions: RwLock<HashMap<String, HashMap<String, u32>>>,
     pub last_query_sequence: parking_lot::Mutex<Option<(String, std::time::Instant)>>,
     pub prefetch_triggers: AtomicU64,
+    #[allow(dead_code)]
     pub prefetch_hits: AtomicU64,
     pub training_cycles: AtomicU64,
     pub decisions_made: AtomicU64,
@@ -88,7 +89,7 @@ impl AIBrain {
                         transitions.remove(&k);
                     }
                 }
-                let child_map = transitions.entry(prev_domain.clone()).or_insert_with(HashMap::new);
+                let child_map = transitions.entry(prev_domain.clone()).or_default();
                 if child_map.len() < 8 || child_map.contains_key(&clean) {
                     let counter = child_map.entry(clean.clone()).or_insert(0);
                     *counter = counter.saturating_add(1);
@@ -214,6 +215,7 @@ impl AIBrain {
         self.evaluate_internal(domain)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_decision(
         &self,
         domain: &str,
@@ -421,7 +423,7 @@ impl AIBrain {
             let mut transitions = self.domain_transitions.write();
             for (parent, ch_val) in trans_obj.iter() {
                 if let Some(ch_obj) = ch_val.as_object() {
-                    let entry = transitions.entry(parent.clone()).or_insert_with(HashMap::new);
+                    let entry = transitions.entry(parent.clone()).or_default();
                     for (ch, cnt_val) in ch_obj.iter() {
                         if let Some(cnt) = cnt_val.as_u64() {
                             entry.insert(ch.clone(), cnt as u32);

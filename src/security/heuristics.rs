@@ -219,7 +219,7 @@ impl ClientFingerprintTracker {
         // Prevent unbounded memory growth
         if map.len() > 5000 {
             map.retain(|_, v| {
-                v.flagged.is_some() && v.flagged_at.map_or(false, |t| now.duration_since(t).as_millis() < FLAG_EXPIRY_MS as u128)
+                v.flagged.is_some() && v.flagged_at.is_some_and(|t| now.duration_since(t).as_millis() < FLAG_EXPIRY_MS as u128)
             });
         }
 

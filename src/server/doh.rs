@@ -183,6 +183,44 @@ pub fn create_doh_router(state: Arc<AppState>) -> Router {
         .route("/api/ai/brain", get(get_ai_brain))
         .route("/api/ai/brain/", get(get_ai_brain))
         .route("/api/ai/brain/:key", get(get_ai_brain_key))
+
+        // Feature 4: Passive DNS Timeline
+        .route("/api/passive-dns", get(passive_dns_handler))
+        .route("/api/passive-dns/drifts", get(passive_dns_drifts_handler))
+
+        // Feature 5: Canary Domain Detection
+        .route("/api/canary", get(canary_handler))
+        .route("/api/canary/:key", get(canary_key_handler))
+
+        // Feature 6: TTL Guard toggle
+        .route("/api/settings/ttl-guard", get(get_ttl_guard).post(set_ttl_guard))
+        .route("/api/settings/ttl-guard/:key", get(get_ttl_guard_key).post(set_ttl_guard_key))
+
+        // Feature 8: Real-Time SSE Log Stream
+        .route("/api/logs/stream", get(logs_stream_handler))
+        .route("/api/logs/stream/:key", get(logs_stream_handler_key))
+        .route("/:key/api/logs/stream", get(logs_stream_handler_key))
+
+        // Feature 9: Scheduled Blocking Rules
+        .route("/api/schedule", get(get_schedule).post(add_schedule))
+        .route("/api/schedule/:id", delete(delete_schedule))
+
+        // Feature 10: Blocklist Feed Subscriptions
+        .route("/api/feeds", get(get_feeds))
+        .route("/api/feeds/:key", get(get_feeds_key))
+        .route("/api/feeds/sync", post(sync_feeds))
+        .route("/api/feeds/sync/:key", post(sync_feeds_key))
+        .route("/api/feeds/:id/toggle", post(toggle_feed))
+
+        // Feature 11+13: Cache & TTL stats
+        .route("/api/cache/stats", get(cache_stats_handler))
+        .route("/api/cache/stats/:key", get(cache_stats_key))
+        .route("/api/ttl/volatile", get(volatile_domains_handler))
+        .route("/api/ttl/volatile/:key", get(volatile_domains_key))
+
+        // DoH JSON API (RFC 8427) — browser-testable
+        .route("/resolve", get(doh_json_handler))
+
         .with_state(state)
 }
 
@@ -371,7 +409,7 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
         let iq_ratio = (domain_iq_size as f64 / 2000.0).min(1.0);
         let markov_ratio = (markov_size as f64 / 1000.0).min(1.0);
         let score = (iq_ratio * 35.0 + markov_ratio * 35.0 + cycle_factor * 30.0).round() as u32;
-        score.min(100).max(0)
+        score.min(100)
     };
     let major = 1 + (brain_cycles / 1000);
     let minor = (brain_cycles / 100) % 10;
@@ -536,6 +574,14 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "gsbBlocks": gsb_blocked,
             "rebindBlocks": rebind_blocks,
             "repBlocks": rep_blocks,
+            "ttlGuardBlocks": state.metrics.ttl_guard_blocks.load(Ordering::Relaxed),
+            "cnameFlattened": state.metrics.cname_flattened.load(Ordering::Relaxed),
+            "raceWins": state.metrics.race_wins.load(Ordering::Relaxed),
+            "scheduleBlocks": state.metrics.schedule_blocks.load(Ordering::Relaxed),
+            "canaryHits": state.canary_hits.load(Ordering::Relaxed),
+            "softLimitHits": state.rate_limiter.get_soft_limit_hits(),
+            "passiveDnsCount": state.passive_dns.domain_count(),
+            "feedCount": state.feed_manager.list_feeds().len(),
             "abirBlocks": threats_blocked,
             "abirSize": threat_bloom_cnt,
             "abirTotalEntries": effective_threat_total,
@@ -690,6 +736,47 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "customBlocked": blk_cnt,
             "customWhitelisted": wl_cnt + cm_cnt
         },
+        // ── New Features Dashboard Data ──────────────────────────────────────
+        "features": {
+            "ttlGuard": {
+                "enabled": state.ttl_guard_enabled.load(Ordering::Relaxed),
+                "blocks": state.metrics.ttl_guard_blocks.load(Ordering::Relaxed)
+            },
+            "cnameFlattening": {
+                "resolved": state.metrics.cname_flattened.load(Ordering::Relaxed)
+            },
+            "upstreamRacing": {
+                "wins": state.metrics.race_wins.load(Ordering::Relaxed)
+            },
+            "scheduledBlocking": {
+                "activeRules": state.schedule_store.list_rules().len(),
+                "totalBlocks": state.metrics.schedule_blocks.load(Ordering::Relaxed)
+            },
+            "passiveDns": {
+                "trackedDomains": state.passive_dns.domain_count(),
+                "totalObservations": state.passive_dns.total_observations.load(Ordering::Relaxed),
+                "driftEvents": state.passive_dns.drift_events.load(Ordering::Relaxed)
+            },
+            "feedSubscriptions": {
+                "totalFeeds": state.feed_manager.list_feeds().len(),
+                "totalSyncedDomains": state.feed_manager.total_synced_domains.load(Ordering::Relaxed)
+            },
+            "cacheCompression": {
+                "engine": "zstd level-1",
+                "ratio": format!("{:.1}%", state.cache.compression_ratio())
+            },
+            "canary": {
+                "domain": state.canary_domain.clone(),
+                "hits": state.canary_hits.load(Ordering::Relaxed),
+                "status": if state.canary_hits.load(Ordering::Relaxed) > 0 { "leak_detected" } else { "clean" }
+            },
+            "smartTtl": {
+                "trackedDomains": state.ttl_learner.domain_count()
+            },
+            "rateLimiter": {
+                "softLimitHits": state.rate_limiter.get_soft_limit_hits()
+            }
+        },
         "upstreams": upstreams,
         "recentQueries": state.recent_queries.read().iter().rev().take(100).cloned().collect::<Vec<_>>()
     });
@@ -808,9 +895,9 @@ async fn handle_get_ai_brain(
     let mut chart_points = Vec::with_capacity(8);
     {
         let guard = state.heatmap.read();
-        for (_domain, rec) in guard.iter() {
-            for h in 0..24 {
-                hourly_totals[h] = hourly_totals[h].saturating_add(rec.hourly[h] as u64);
+        for rec in guard.values() {
+            for (h, total) in hourly_totals.iter_mut().enumerate() {
+                *total = total.saturating_add(rec.hourly[h] as u64);
             }
         }
         for i in 0..8 {
@@ -1799,7 +1886,7 @@ async fn get_heatmap_top(
     }
     let guard = state.heatmap.read();
     let mut entries: Vec<_> = guard.iter().collect();
-    entries.sort_by(|a, b| b.1.total.cmp(&a.1.total));
+    entries.sort_by_key(|a| std::cmp::Reverse(a.1.total));
 
     let top: Vec<serde_json::Value> = entries.iter().take(32).map(|(domain, rec)| {
         let max_val = *rec.hourly.iter().max().unwrap_or(&0);
@@ -1831,7 +1918,7 @@ async fn get_heatmap_top_key(
     }
     let guard = state.heatmap.read();
     let mut entries: Vec<_> = guard.iter().collect();
-    entries.sort_by(|a, b| b.1.total.cmp(&a.1.total));
+    entries.sort_by_key(|a| std::cmp::Reverse(a.1.total));
 
     let top: Vec<serde_json::Value> = entries.iter().take(32).map(|(domain, rec)| {
         let max_val = *rec.hourly.iter().max().unwrap_or(&0);
@@ -2474,6 +2561,24 @@ async fn process_dns_query(state: Arc<AppState>, query_wire: &[u8], client_ip: I
     // Record into 24-hour heatmap
     state.record_heatmap(&q.name);
 
+    // Feature 5: Canary Domain Detection — detect DNS leak if canary is queried externally
+    {
+        let q_clean = q.name.trim_end_matches('.').to_ascii_lowercase();
+        if q_clean == state.canary_domain {
+            state.canary_hits.fetch_add(1, Ordering::Relaxed);
+            state.log_action("canary_query", &format!("Canary domain queried by {}", client_ip));
+            let nxdomain = build_blocked_response(query_wire, true);
+            state.metrics.record_latency(query_start.elapsed());
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/dns-message")
+                .header("x-cache", "CANARY")
+                .body(Bytes::from(nxdomain).into())
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
+
+    }
+
     // 0. Local Threat, Blocklist & Whitelist Policy Check (with Fast-Path Negative Absorber in <10µs)
     let (is_blocked, is_nxdomain, reason) = state.check_domain(&q.name);
     if is_blocked {
@@ -2593,13 +2698,70 @@ async fn process_dns_query(state: Arc<AppState>, query_wire: &[u8], client_ip: I
 
     state.metrics.cache_misses.fetch_add(1, Ordering::Relaxed);
 
-    // 4. Forward to upstream pool
+    // 4. Forward to upstream pool with race fallback
     let start_upstream = std::time::Instant::now();
-    if let Some((upstream_resp, upstream_name)) = state.upstreams.resolve(query_wire).await {
+    let resolve_result = match state.upstreams.resolve(query_wire).await {
+        Some(res) => Some(res),
+        None => {
+            state.metrics.race_wins.fetch_add(1, Ordering::Relaxed);
+            state.upstreams.resolve_race(query_wire).await
+        }
+    };
+
+    if let Some((upstream_resp, upstream_name)) = resolve_result {
         let lat = start_upstream.elapsed().as_millis() as u32;
         let rcode = if upstream_resp.len() >= 4 { (upstream_resp[3] & 0x0F) as u16 } else { 0 };
         if let Some(flag) = state.fingerprint.record_response(client_ip, rcode) {
             state.log_action("rogue_client_detected", &format!("{}: {}", client_ip, flag));
+        }
+
+        // Feature 4: Record passive DNS timeline (non-blocking)
+        {
+            let ips = crate::dns::parser::extract_a_records(&upstream_resp);
+            if !ips.is_empty() {
+                if let Some(drift) = state.passive_dns.record(&q.name, &ips) {
+                    state.log_anomaly("passive_dns_drift", &format!(
+                        "IP change detected for {}: {:?} -> {:?}", q.name, drift, ips
+                    ));
+                }
+            }
+        }
+
+        // Feature 6: TTL Manipulation Guard — detect fast-flux botnets (extremely low TTL + DGA pattern)
+        // Robust & universal check: ultra-low TTL (<= 5s) combined with verified algorithmic threat
+        // (DGA entropy AND AI brain confirmation). Necessary services (VoIP, CDNs, banking, APIs)
+        // are NEVER harmed.
+        if state.ttl_guard_enabled.load(Ordering::Relaxed)
+            && state.blocking_enabled.load(Ordering::Relaxed)
+            && !state.is_exempt(&q.name)
+            && rcode == 0
+        {
+            if let Some(min_ttl) = crate::dns::parser::extract_min_ttl(&upstream_resp) {
+                let is_dga_suspect = crate::security::heuristics::is_dga_threat(&q.name);
+                let (ai_score, _) = state.brain.evaluate_internal(&q.name);
+                if min_ttl <= 5 && is_dga_suspect && ai_score > 0.85 {
+                    state.metrics.ttl_guard_blocks.fetch_add(1, Ordering::Relaxed);
+                    state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
+                    state.log_action("ttl_guard_block", &format!(
+                        "{} TTL={}s (fast-flux/DGA confirmed, AI={:.2})", q.name, min_ttl, ai_score
+                    ));
+                    state.log_anomaly("ttl_manipulation_guard", &format!(
+                        "Fast-flux botnet blocked: low TTL {}s + DGA pattern + AI {:.2} on {}", min_ttl, ai_score, q.name
+                    ));
+                    state.wal.append_query(&q.name, q.qtype, log_id, 3, lat, "TTL_GUARD_BLOCK");
+                    state.log_query(&q.name, q.qtype, log_id, proto, "TTL_GUARD_BLOCK", 3, lat, "ttl_manipulation_guard", "TTL Guard");
+                    state.cache.insert_negative(&q.name, 30).await;
+                    let blocked = build_blocked_response(query_wire, false);
+                    state.metrics.record_latency(query_start.elapsed());
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "application/dns-message")
+                        .header("x-cache", "BLOCKED")
+                        .header("x-block-reason", "ttl_manipulation_guard")
+                        .body(Bytes::from(blocked).into())
+                        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+                }
+            }
         }
 
         // 4b. DNS Rebinding Protection: Block public domains resolving to private/loopback/link-local IP addresses
@@ -2630,10 +2792,19 @@ async fn process_dns_query(state: Arc<AppState>, query_wire: &[u8], client_ip: I
             }
         }
 
-        state.cache.insert(&q.name, q.qtype, upstream_resp.clone(), 300).await;
+        // Feature 13: Smart TTL learning — observe the upstream TTL and use adaptive cache TTL
+        let smart_ttl = if let Some(raw_ttl) = crate::dns::parser::extract_answer_ttl(&upstream_resp) {
+            state.ttl_learner.observe(&q.name, raw_ttl);
+            state.ttl_learner.smart_ttl(&q.name, raw_ttl)
+        } else {
+            300
+        };
+
+        state.cache.insert(&q.name, q.qtype, upstream_resp.clone(), smart_ttl).await;
         state.wal.append_query(&q.name, q.qtype, log_id, rcode, lat, "RESOLVED");
         state.log_query(&q.name, q.qtype, log_id, proto, "RESOLVED", rcode, lat, "none", &upstream_name);
         state.metrics.record_latency(query_start.elapsed());
+
 
         Response::builder()
             .status(StatusCode::OK)
@@ -2679,4 +2850,646 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, ()> {
         }
     }
     Ok(out)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// NEW FEATURE HANDLERS (Features 4–13)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Feature 4: Passive DNS Timeline ─────────────────────────────────────────
+
+// Feature 4: Passive DNS lookup uses DomainReq (already defined above)
+#[derive(Deserialize)]
+struct DomainLookupParams { domain: Option<String> }
+
+async fn passive_dns_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(params): Query<DomainLookupParams>,
+) -> Response {
+    let auth = check_auth(&state, None, &headers, "/api/passive-dns");
+    if !auth.is_view_or_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Unauthorized"}))).into_response();
+    }
+    let domain = params.domain.unwrap_or_default();
+    if domain.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"ok":false,"error":"domain query parameter required"}))).into_response();
+    }
+    let timeline = state.passive_dns.get_timeline(&domain);
+    Json(serde_json::json!({
+        "ok": true,
+        "domain": domain,
+        "observations": timeline.len(),
+        "timeline": timeline,
+        "totalObservations": state.passive_dns.total_observations.load(std::sync::atomic::Ordering::Relaxed),
+        "driftEvents": state.passive_dns.drift_events.load(std::sync::atomic::Ordering::Relaxed),
+        "trackedDomains": state.passive_dns.domain_count()
+    })).into_response()
+}
+
+async fn passive_dns_drifts_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    let auth = check_auth(&state, None, &headers, "/api/passive-dns/drifts");
+    if !auth.is_view_or_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Unauthorized"}))).into_response();
+    }
+    let drifts = state.passive_dns.get_recent_drifts(50);
+    Json(serde_json::json!({
+        "ok": true,
+        "driftCount": state.passive_dns.drift_events.load(std::sync::atomic::Ordering::Relaxed),
+        "recentDrifts": drifts
+    })).into_response()
+}
+
+// ── Feature 5: Canary Domain ─────────────────────────────────────────────────
+
+async fn canary_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    handle_canary(&state, None, &headers).await
+}
+
+async fn canary_key_handler(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_canary(&state, Some(&key), &headers).await
+}
+
+async fn handle_canary(state: &AppState, key: Option<&str>, headers: &HeaderMap) -> Response {
+    let auth = check_auth(state, key, headers, "/api/canary");
+    if !auth.is_view_or_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Unauthorized"}))).into_response();
+    }
+    let hits = state.canary_hits.load(std::sync::atomic::Ordering::Relaxed);
+    Json(serde_json::json!({
+        "ok": true,
+        "canaryDomain": state.canary_domain,
+        "hits": hits,
+        "status": if hits > 0 { "leak_detected" } else { "clean" },
+        "note": "Query this domain from a suspected device. If hits increases, that device is leaking DNS to AmarDNS bypassing your config."
+    })).into_response()
+}
+
+// ── Feature 6: TTL Guard ─────────────────────────────────────────────────────
+
+async fn get_ttl_guard(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    handle_get_ttl_guard(&state, None, &headers).await
+}
+
+async fn get_ttl_guard_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_get_ttl_guard(&state, Some(&key), &headers).await
+}
+
+async fn handle_get_ttl_guard(state: &AppState, key: Option<&str>, headers: &HeaderMap) -> Response {
+    let auth = check_auth(state, key, headers, "/api/settings/ttl-guard");
+    if !auth.is_view_or_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Unauthorized"}))).into_response();
+    }
+    Json(serde_json::json!({
+        "ok": true,
+        "ttlGuardEnabled": state.ttl_guard_enabled.load(std::sync::atomic::Ordering::Relaxed),
+        "ttlGuardBlocks": state.metrics.ttl_guard_blocks.load(std::sync::atomic::Ordering::Relaxed),
+        "threshold": "5s with confirmed DGA pattern — legitimate dynamic TTLs (CDNs, VoIP) are fully allowed"
+    })).into_response()
+}
+
+async fn set_ttl_guard(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<BoolSetting>,
+) -> Response {
+    handle_set_ttl_guard(&state, None, &headers, body).await
+}
+
+async fn set_ttl_guard_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<BoolSetting>,
+) -> Response {
+    handle_set_ttl_guard(&state, Some(&key), &headers, body).await
+}
+
+async fn handle_set_ttl_guard(state: &AppState, key: Option<&str>, headers: &HeaderMap, body: BoolSetting) -> Response {
+    let auth = check_auth(state, key, headers, "/api/settings/ttl-guard");
+    if !auth.is_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Admin key required"}))).into_response();
+    }
+    state.ttl_guard_enabled.store(body.enabled, std::sync::atomic::Ordering::Relaxed);
+    Json(serde_json::json!({
+        "ok": true,
+        "ttlGuardEnabled": body.enabled,
+        "message": if body.enabled { "TTL Guard enabled — fast-flux/DGA protection active" } else { "TTL Guard disabled" }
+    })).into_response()
+}
+
+// ── Feature 8: SSE Real-Time Log Stream ──────────────────────────────────────
+
+fn build_logs_stream(state: Arc<AppState>) -> Response {
+    let mut rx = state.log_broadcaster.subscribe();
+
+    // Build a streaming body that pushes SSE events as DNS queries arrive
+    let stream = async_stream::stream! {
+        // Send an initial "connected" event
+        let hello = "data: {\"type\":\"connected\",\"server\":\"AmarDNS\"}\n\n";
+        yield Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(hello));
+
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(25), rx.recv()).await {
+                Ok(Ok(msg)) => {
+                    let sse = format!("data: {}\n\n", msg);
+                    yield Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(sse));
+                }
+                Ok(Err(_)) => break, // broadcaster dropped
+                Err(_) => {
+                    // Keepalive ping every 25s
+                    yield Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(": keepalive\n\n"));
+                }
+            }
+        }
+    };
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header("Cache-Control", "no-cache")
+        .header("X-Accel-Buffering", "no")
+        .body(axum::body::Body::from_stream(stream))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+async fn logs_stream_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    let auth = check_auth(&state, None, &headers, "/api/logs/stream");
+    if !auth.is_view_or_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Unauthorized"}))).into_response();
+    }
+    build_logs_stream(state)
+}
+
+async fn logs_stream_handler_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let auth = check_auth(&state, Some(&key), &headers, "/api/logs/stream");
+    if !auth.is_view_or_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Unauthorized"}))).into_response();
+    }
+    build_logs_stream(state)
+}
+
+
+// ── Feature 9: Scheduled Blocking Rules ──────────────────────────────────────
+
+async fn get_schedule(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    let auth = check_auth(&state, None, &headers, "/api/schedule");
+    if !auth.is_view_or_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Unauthorized"}))).into_response();
+    }
+    let rules = state.schedule_store.list_rules();
+    Json(serde_json::json!({
+        "ok": true,
+        "count": rules.len(),
+        "scheduleBlocks": state.metrics.schedule_blocks.load(std::sync::atomic::Ordering::Relaxed),
+        "rules": rules
+    })).into_response()
+}
+
+#[derive(Deserialize)]
+struct AddScheduleReq {
+    domain: String,
+    #[serde(rename = "startHour")] start_hour: u8,
+    #[serde(rename = "endHour")] end_hour: u8,
+    #[serde(rename = "tzOffset", default)] tz_offset: i8,
+    #[serde(default)] reason: String,
+}
+
+async fn add_schedule(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<AddScheduleReq>,
+) -> Response {
+    let auth = check_auth(&state, None, &headers, "/api/schedule");
+    if !auth.is_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Admin key required"}))).into_response();
+    }
+    let reason = if body.reason.is_empty() {
+        format!("Blocked {}-{}h", body.start_hour, body.end_hour)
+    } else { body.reason };
+    let id = state.schedule_store.add_rule(body.domain.clone(), body.start_hour, body.end_hour, body.tz_offset, reason);
+    Json(serde_json::json!({
+        "ok": true,
+        "id": id,
+        "domain": body.domain,
+        "startHour": body.start_hour,
+        "endHour": body.end_hour,
+        "tzOffset": body.tz_offset,
+        "message": "Schedule rule added"
+    })).into_response()
+}
+
+async fn delete_schedule(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+) -> Response {
+    let auth = check_auth(&state, None, &headers, "/api/schedule");
+    if !auth.is_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Admin key required"}))).into_response();
+    }
+    let removed = state.schedule_store.remove_rule(id);
+    Json(serde_json::json!({
+        "ok": removed,
+        "id": id,
+        "message": if removed { "Rule removed" } else { "Rule not found" }
+    })).into_response()
+}
+
+// ── Feature 10: Blocklist Feed Subscriptions ─────────────────────────────────
+
+async fn get_feeds(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    let auth = check_auth(&state, None, &headers, "/api/feeds");
+    if !auth.is_view_or_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Unauthorized"}))).into_response();
+    }
+    let feeds = state.feed_manager.list_feeds();
+    Json(serde_json::json!({
+        "ok": true,
+        "count": feeds.len(),
+        "totalSyncedDomains": state.feed_manager.total_synced_domains.load(std::sync::atomic::Ordering::Relaxed),
+        "feeds": feeds
+    })).into_response()
+}
+
+async fn get_feeds_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let auth = check_auth(&state, Some(&key), &headers, "/api/feeds");
+    if !auth.is_view_or_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Unauthorized"}))).into_response();
+    }
+    let feeds = state.feed_manager.list_feeds();
+    Json(serde_json::json!({
+        "ok": true,
+        "count": feeds.len(),
+        "totalSyncedDomains": state.feed_manager.total_synced_domains.load(std::sync::atomic::Ordering::Relaxed),
+        "feeds": feeds
+    })).into_response()
+}
+
+async fn toggle_feed(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+) -> Response {
+    let auth = check_auth(&state, None, &headers, "/api/feeds");
+    if !auth.is_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Admin key required"}))).into_response();
+    }
+    let ok = state.feed_manager.toggle_feed(id);
+    Json(serde_json::json!({
+        "ok": ok,
+        "feedId": id,
+        "message": if ok { "Feed toggled" } else { "Feed not found" }
+    })).into_response()
+}
+
+async fn sync_feeds(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    handle_sync_feeds(&state, None, &headers).await
+}
+
+async fn sync_feeds_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_sync_feeds(&state, Some(&key), &headers).await
+}
+
+async fn handle_sync_feeds(state: &Arc<AppState>, key: Option<&str>, headers: &HeaderMap) -> Response {
+    let auth = check_auth(state, key, headers, "/api/feeds/sync");
+    if !auth.is_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Admin key required"}))).into_response();
+    }
+
+    let enabled = state.feed_manager.enabled_feeds();
+    if enabled.is_empty() {
+        return Json(serde_json::json!({
+            "ok": true,
+            "message": "No feeds enabled. Enable feeds via /api/feeds/:id/toggle first.",
+            "synced": 0
+        })).into_response();
+    }
+
+    let state_clone = (*state).clone();
+    tokio::spawn(async move {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .user_agent("AmarDNS/1.0 blocklist-sync")
+            .build()
+            .unwrap_or_default();
+
+        for (feed_id, url, format) in enabled {
+            tracing::info!("Syncing blocklist feed {} from {}", feed_id, url);
+            match http.get(&url).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    if let Ok(text) = resp.text().await {
+                        let domains = crate::security::feed_manager::FeedManager::parse_domains(&text, &format);
+                        let count = domains.len() as u64;
+                        // Insert domains into the bloom filter
+                        {
+                            let mut bloom = state_clone.threat_bloom.write();
+                            for domain in &domains {
+                                bloom.insert(domain);
+                            }
+                        }
+                        state_clone.feed_manager.update_sync_stats(feed_id, count);
+                        tracing::info!("Feed {} synced: {} domains", feed_id, count);
+                    }
+                }
+                Ok(resp) => tracing::warn!("Feed {} sync failed: HTTP {}", feed_id, resp.status()),
+                Err(e) => tracing::warn!("Feed {} sync error: {}", feed_id, e),
+            }
+        }
+    });
+
+    Json(serde_json::json!({
+        "ok": true,
+        "message": "Feed sync started in background. Check /api/feeds for status.",
+        "syncing": true
+    })).into_response()
+}
+
+// ── Feature 11+13: Cache Stats & Volatile Domains ────────────────────────────
+
+async fn cache_stats_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    let auth = check_auth(&state, None, &headers, "/api/cache/stats");
+    if !auth.is_view_or_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Unauthorized"}))).into_response();
+    }
+    let (count, compressed_bytes, mb, capacity) = state.cache.get_stats();
+    let ratio = state.cache.compression_ratio();
+    Json(serde_json::json!({
+        "ok": true,
+        "entries": count,
+        "capacityLimit": capacity,
+        "compressedBytes": compressed_bytes,
+        "compressedMb": mb,
+        "compressionRatio": format!("{:.1}%", ratio),
+        "engine": "zstd level-1",
+        "trackedDomains": state.ttl_learner.domain_count()
+    })).into_response()
+}
+
+async fn cache_stats_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let auth = check_auth(&state, Some(&key), &headers, "/api/cache/stats");
+    if !auth.is_view_or_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Unauthorized"}))).into_response();
+    }
+    let (count, compressed_bytes, mb, capacity) = state.cache.get_stats();
+    let ratio = state.cache.compression_ratio();
+    Json(serde_json::json!({
+        "ok": true,
+        "entries": count,
+        "capacityLimit": capacity,
+        "compressedBytes": compressed_bytes,
+        "compressedMb": mb,
+        "compressionRatio": format!("{:.1}%", ratio),
+        "engine": "zstd level-1",
+        "trackedDomains": state.ttl_learner.domain_count()
+    })).into_response()
+}
+
+async fn volatile_domains_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    let auth = check_auth(&state, None, &headers, "/api/ttl/volatile");
+    if !auth.is_view_or_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Unauthorized"}))).into_response();
+    }
+    let volatile = state.ttl_learner.volatile_domains(20);
+    Json(serde_json::json!({
+        "ok": true,
+        "note": "Domains with shortest learned TTLs (most dynamic/CDN-heavy)",
+        "count": volatile.len(),
+        "domains": volatile
+    })).into_response()
+}
+
+async fn volatile_domains_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let auth = check_auth(&state, Some(&key), &headers, "/api/ttl/volatile");
+    if !auth.is_view_or_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Unauthorized"}))).into_response();
+    }
+    let volatile = state.ttl_learner.volatile_domains(20);
+    Json(serde_json::json!({
+        "ok": true,
+        "note": "Domains with shortest learned TTLs (most dynamic/CDN-heavy)",
+        "count": volatile.len(),
+        "domains": volatile
+    })).into_response()
+}
+
+// ── DoH JSON API (RFC 8427 / Cloudflare / Google style) ──────────────────────
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct DohJsonParams {
+    pub name: Option<String>,
+    pub r#type: Option<String>,
+    #[serde(rename = "do")]
+    pub dnssec_ok: Option<bool>,
+    pub cd: Option<bool>,
+}
+
+fn parse_qtype_param(t: Option<&str>) -> u16 {
+    match t {
+        None => 1, // A
+        Some(s) => match s.to_ascii_uppercase().as_str() {
+            "A" => 1,
+            "NS" => 2,
+            "CNAME" => 5,
+            "SOA" => 6,
+            "PTR" => 12,
+            "MX" => 15,
+            "TXT" => 16,
+            "AAAA" => 28,
+            "SRV" => 33,
+            "ANY" => 255,
+            other => other.parse::<u16>().unwrap_or(1),
+        },
+    }
+}
+
+async fn doh_json_handler(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Query(params): Query<DohJsonParams>,
+) -> Response {
+    let domain = match params.name {
+        Some(ref n) if !n.trim().is_empty() => n.trim().to_ascii_lowercase(),
+        _ => {
+            let mut resp = (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "Status": 2, // SERVFAIL
+                    "TC": false, "RD": true, "RA": false, "AD": false, "CD": false,
+                    "Question": [],
+                    "Comment": "Missing required parameter: name"
+                })),
+            ).into_response();
+            resp.headers_mut().insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+            return resp;
+        }
+    };
+
+    let qtype = parse_qtype_param(params.r#type.as_deref());
+    let clean_domain = domain.trim_end_matches('.').to_string();
+    let client_ip = addr.ip();
+    let query_start = std::time::Instant::now();
+    let _log_id = state.metrics.requests.fetch_add(1, Ordering::Relaxed);
+    state.metrics.doh_queries.fetch_add(1, Ordering::Relaxed);
+    state.metrics.record_query(&client_ip.to_string(), "doh_json");
+
+    // Canary check
+    if clean_domain == state.canary_domain {
+        state.canary_hits.fetch_add(1, Ordering::Relaxed);
+        let mut resp = Json(serde_json::json!({
+            "Status": 3, // NXDOMAIN
+            "TC": false, "RD": true, "RA": true, "AD": false, "CD": false,
+            "Question": [{"name": format!("{}.", clean_domain), "type": qtype}],
+            "Comment": "Canary domain queried"
+        })).into_response();
+        resp.headers_mut().insert(header::CONTENT_TYPE, "application/dns-json".parse().unwrap());
+        resp.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
+        resp.headers_mut().insert("x-cache", "CANARY".parse().unwrap());
+        return resp;
+    }
+
+    // Blocklist check
+    let (is_blocked, is_nx, reason) = state.check_domain(&clean_domain);
+    if is_blocked {
+        state.record_detected_block(&clean_domain, reason);
+        state.log_query(&clean_domain, qtype, &client_ip.to_string(), "DoH (JSON)", "BLOCKED", if is_nx { 3 } else { 0 }, 0, reason, "0.0.0.0");
+        state.metrics.record_latency(query_start.elapsed());
+        let answer = if is_nx {
+            serde_json::json!([])
+        } else {
+            serde_json::json!([{
+                "name": format!("{}.", clean_domain),
+                "type": 1,
+                "TTL": 300,
+                "data": "0.0.0.0"
+            }])
+        };
+        let mut resp = Json(serde_json::json!({
+            "Status": if is_nx { 3 } else { 0 },
+            "TC": false, "RD": true, "RA": true, "AD": false, "CD": false,
+            "Question": [{"name": format!("{}.", clean_domain), "type": qtype}],
+            "Answer": answer,
+            "Comment": format!("Blocked by policy: {}", reason)
+        })).into_response();
+        resp.headers_mut().insert(header::CONTENT_TYPE, "application/dns-json".parse().unwrap());
+        resp.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
+        resp.headers_mut().insert("x-cache", "BLOCKED".parse().unwrap());
+        return resp;
+    }
+
+    // Cache check
+    if let Some(cached_wire) = state.cache.get(&clean_domain, qtype, 0x1234).await {
+        state.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
+        let (rcode, answers) = crate::dns::parser::parse_answers_for_doh_json(&cached_wire, &clean_domain);
+        state.log_query(&clean_domain, qtype, &client_ip.to_string(), "DoH (JSON)", "HIT", rcode as u16, 0, "cache_hit", "cache");
+        state.metrics.record_latency(query_start.elapsed());
+        let mut resp = Json(serde_json::json!({
+            "Status": rcode,
+            "TC": false, "RD": true, "RA": true, "AD": false, "CD": false,
+            "Question": [{"name": format!("{}.", clean_domain), "type": qtype}],
+            "Answer": answers
+        })).into_response();
+        resp.headers_mut().insert(header::CONTENT_TYPE, "application/dns-json".parse().unwrap());
+        resp.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
+        resp.headers_mut().insert("x-cache", "HIT".parse().unwrap());
+        return resp;
+    }
+
+    // Upstream resolution
+    state.metrics.cache_misses.fetch_add(1, Ordering::Relaxed);
+    let wire = crate::dns::parser::build_query_wire(&clean_domain, qtype);
+    match state.upstreams.resolve_race(&wire).await {
+        Some((resp_wire, upstream_name)) => {
+            let (rcode, answers) = crate::dns::parser::parse_answers_for_doh_json(&resp_wire, &clean_domain);
+            if rcode == 0 && !resp_wire.is_empty() {
+                let ttl = crate::dns::parser::extract_answer_ttl(&resp_wire).unwrap_or(300);
+                state.cache.insert(&clean_domain, qtype, resp_wire.clone(), ttl).await;
+            }
+            let elapsed_ms = query_start.elapsed().as_millis() as u32;
+            state.log_query(&clean_domain, qtype, &client_ip.to_string(), "DoH (JSON)", "MISS", rcode as u16, elapsed_ms, "upstream", &upstream_name);
+            state.metrics.record_latency(query_start.elapsed());
+            let mut resp = Json(serde_json::json!({
+                "Status": rcode,
+                "TC": false, "RD": true, "RA": true, "AD": false, "CD": false,
+                "Question": [{"name": format!("{}.", clean_domain), "type": qtype}],
+                "Answer": answers
+            })).into_response();
+            resp.headers_mut().insert(header::CONTENT_TYPE, "application/dns-json".parse().unwrap());
+            resp.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
+            resp.headers_mut().insert("x-cache", "MISS".parse().unwrap());
+            resp
+        }
+        None => {
+            state.metrics.record_latency(query_start.elapsed());
+            let mut resp = (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "Status": 2, // SERVFAIL
+                    "TC": false, "RD": true, "RA": false, "AD": false, "CD": false,
+                    "Question": [{"name": format!("{}.", clean_domain), "type": qtype}],
+                    "Comment": "All upstreams failed to respond"
+                })),
+            ).into_response();
+            resp.headers_mut().insert(header::CONTENT_TYPE, "application/dns-json".parse().unwrap());
+            resp.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
+            resp.headers_mut().insert("x-cache", "ERROR".parse().unwrap());
+            resp
+        }
+    }
 }

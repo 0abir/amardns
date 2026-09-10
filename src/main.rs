@@ -122,6 +122,64 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Feature 10: Daily blocklist feed subscription sync
+    let feed_state = state.clone();
+    tokio::spawn(async move {
+        // Initial sync 5 minutes after boot (lets system stabilize first)
+        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .user_agent("AmarDNS/1.0 blocklist-feed-sync")
+            .build()
+            .unwrap_or_default();
+        let mut daily = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
+        loop {
+            daily.tick().await;
+            let feeds = feed_state.feed_manager.enabled_feeds();
+            for (feed_id, url, format) in feeds {
+                tracing::info!("[feed] Syncing {} from {}", feed_id, url);
+                if let Ok(resp) = http.get(&url).send().await {
+                    if resp.status().is_success() {
+                        if let Ok(text) = resp.text().await {
+                            let domains = crate::security::feed_manager::FeedManager::parse_domains(&text, &format);
+                            let count = domains.len() as u64;
+                            {
+                                let mut bloom = feed_state.threat_bloom.write();
+                                for domain in &domains {
+                                    bloom.insert(domain);
+                                }
+                            }
+                            feed_state.feed_manager.update_sync_stats(feed_id, count);
+                            tracing::info!("[feed] {} synced {} domains", feed_id, count);
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // 6e. Boot Pre-warming: Prime cache with top popular domains 3s after startup
+    let prewarm_state = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let top_domains = [
+            "google.com", "cloudflare.com", "apple.com",
+            "microsoft.com", "github.com", "amazon.com", "wikipedia.org",
+            "openai.com", "netflix.com", "youtube.com"
+        ];
+        tracing::info!("[prewarm] Pre-warming cache with top domains...");
+        let mut primed = 0;
+        for domain in &top_domains {
+            let wire = crate::dns::parser::build_query_wire(domain, 1);
+            if let Some((resp, _)) = prewarm_state.upstreams.resolve_race(&wire).await {
+                let ttl = crate::dns::parser::extract_answer_ttl(&resp).unwrap_or(300);
+                prewarm_state.cache.insert(domain, 1, resp, ttl).await;
+                primed += 1;
+            }
+        }
+        tracing::info!("[prewarm] Cache pre-warming complete: {}/{} domains primed into zero-latency cache", primed, top_domains.len());
+    });
+
     // 7. Shutdown coordination channel
     let (shutdown_tx, shutdown_rx_dot) = tokio::sync::watch::channel(());
 

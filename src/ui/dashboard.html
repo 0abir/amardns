@@ -1268,11 +1268,24 @@ function render(d){
   ]);
 
   // Threat Intel Summary card
-  var totalBlocked=(ai.repBlocks||0)+(ai.dgaBlocked||0)+(ai.rebindBlocks||0)+(ai.alikeBlocks||0)+(ai.autoBlockActive||0)+(ai.abirBlocks||0);
+  var feat=d.features||{};
+  var ttlBlocks=(feat.ttlGuard&&feat.ttlGuard.blocks)||ai.ttlGuardBlocks||0;
+  var canaryHits=(feat.canary&&feat.canary.hits)||ai.canaryHits||0;
+  var raceWins=(feat.upstreamRacing&&feat.upstreamRacing.wins)||ai.raceWins||0;
+  var schedBlocks=(feat.scheduledBlocking&&feat.scheduledBlocking.totalBlocks)||ai.scheduleBlocks||0;
+  var totalBlocked=(ai.repBlocks||0)+(ai.dgaBlocked||0)+(ai.rebindBlocks||0)+(ai.alikeBlocks||0)+(ai.autoBlockActive||0)+(ai.abirBlocks||0)+ttlBlocks+schedBlocks;
   var threatLevel=totalBlocked===0?'All Clear':totalBlocked<10?'Low Activity':totalBlocked<50?'Elevated':'High Activity';
   var threatColor=totalBlocked===0?'cv-g':totalBlocked<10?'cv-t':totalBlocked<50?'cv-w':'cv-b';
   renderDP('dp-threat-summary',[
     ['Status',threatLevel,threatColor],
+    ['TTL Manipulation Guard',feat.ttlGuard&&feat.ttlGuard.enabled!==false?'ACTIVE ('+fmt(ttlBlocks)+' blocked)':'OFF',ttlBlocks>0?'cv-b':'cv-g'],
+    ['Canary Detector',canaryHits>0?'LEAK DETECTED ('+fmt(canaryHits)+')':'ARMED (Clean)',canaryHits>0?'cv-b':'cv-g'],
+    ['Upstream Hedged Race',fmt(raceWins)+' wins','cv-g'],
+    ['Passive DNS Timeline',fmt((feat.passiveDns&&feat.passiveDns.trackedDomains)||ai.passiveDnsCount||0)+' domains · '+fmt((feat.passiveDns&&feat.passiveDns.driftEvents)||0)+' drifts','cv-t'],
+    ['Feed Subscriptions',fmt((feedSub=feat.feedSubscriptions)&&feedSub.totalFeeds||ai.feedCount||0)+' feeds · '+fmt((feedSub&&feedSub.totalSyncedDomains)||0)+' synced','cv-g'],
+    ['Scheduled Blocking',fmt(feat.scheduledBlocking&&feat.scheduledBlocking.activeRules||0)+' rules ('+fmt(schedBlocks)+' blocked)','cv-w'],
+    ['Cache Compression (zstd)',(feat.cacheCompression&&feat.cacheCompression.ratio)||'Active','cv-t'],
+    ['Burst Rate Watcher',fmt((feat.rateLimiter&&feat.rateLimiter.softLimitHits)||ai.softLimitHits||0)+' bursts',((feat.rateLimiter&&feat.rateLimiter.softLimitHits>0)||ai.softLimitHits>0)?'cv-w':'cv-g'],
     ['DGA / Algorithmic Blocked',fmt(ai.dgaBlocked),ai.dgaBlocked>0?'cv-b':'cv-g'],
     ['Alike Domains Detected',fmt(ai.alikeBlocks),ai.alikeBlocks>0?'cv-w':'cv-b'],
     ['DNS Rebinding Attempts',fmt(ai.rebindBlocks),ai.rebindBlocks>0?'cv-b':'cv-g'],
@@ -3098,6 +3111,34 @@ $('wltags').addEventListener('click',function(e){
   }
 });
 $('comtags').addEventListener('click',function(e){var x=e.target.closest('.btag-x');if(!x)return;removeCommon(x,x.dataset.domain);});
+
+// Feature 8: Real-Time SSE Log Stream for live query monitoring
+var _sseSource=null;
+function initSSE(){
+  if(typeof EventSource==='undefined'||_sseSource)return;
+  try{
+    var sseUrl=BASE+'/api/logs/stream'+(_KEY?('/'+encodeURIComponent(_KEY)):'');
+    _sseSource=new EventSource(sseUrl);
+    _sseSource.onmessage=function(e){
+      if(!e||!e.data)return;
+      try{
+        var item=JSON.parse(e.data);
+        if(!item||item.type==='connected'||!item.domain)return;
+        if(!_logPaused&&Array.isArray(_logs)){
+          if(!_logs.some(function(x){return x.id===item.id;})){
+            _logs.unshift(item);
+            if(_logs.length>300)_logs.pop();
+            renderLogs(_D||{});
+          }
+        }
+      }catch(err){}
+    };
+    _sseSource.onerror=function(){
+      if(_sseSource){_sseSource.close();_sseSource=null;setTimeout(initSSE,10000);}
+    };
+  }catch(e){}
+}
+initSSE();
 }());
 </script>
 </body>

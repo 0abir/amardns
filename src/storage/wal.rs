@@ -46,7 +46,7 @@ impl WalStorage {
 
         if let Ok(file) = File::open(&self.file_path) {
             let reader = BufReader::new(file);
-            for line in reader.lines().flatten() {
+            for line in reader.lines().map_while(Result::ok) {
                 lines_count += 1;
                 let trimmed = line.trim();
                 if let Some(domain) = trimmed.strip_prefix("+B:") {
@@ -76,7 +76,7 @@ impl WalStorage {
             if let Some(f) = lock.as_mut() {
                 let _ = writeln!(f, "Q:{}:{}:{}:{}:{}:{}", qname, qtype, client_ip, rcode, lat_ms, action);
                 let rec = self.total_records.fetch_add(1, Ordering::Relaxed) + 1;
-                if rec % 20 == 0 {
+                if rec.is_multiple_of(20) {
                     let _ = f.flush();
                 }
             }
@@ -186,7 +186,7 @@ impl WalStorage {
 
         if let Ok(file) = File::open(&self.file_path) {
             let reader = BufReader::new(file);
-            for line in reader.lines().flatten() {
+            for line in reader.lines().map_while(Result::ok) {
                 let trimmed = line.trim();
                 if trimmed.starts_with("+B:")
                     || trimmed.starts_with("-B:")

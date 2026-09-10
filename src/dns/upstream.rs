@@ -43,7 +43,7 @@ impl UpstreamNode {
         self.successes.fetch_add(1, Ordering::Relaxed);
         let cons = self.consecutive_successes.fetch_add(1, Ordering::Relaxed) + 1;
         // Circuit breaker healing: every 2 consecutive successes, heal 1 error!
-        if cons % 2 == 0 {
+        if cons.is_multiple_of(2) {
             let errs = self.errors.load(Ordering::Relaxed);
             if errs > 0 {
                 self.errors.store(errs.saturating_sub(1), Ordering::Relaxed);
@@ -669,6 +669,57 @@ impl UpstreamPool {
                 "healthy": healthy
             })
         }).collect()
+    }
+
+    /// Fires queries to all healthy upstreams simultaneously and returns the first valid response.
+    /// This is the "turbo fallback" for worst-case latency scenarios.
+    pub async fn resolve_race(&self, query_wire: &[u8]) -> Option<(Vec<u8>, String)> {
+        let nodes = self.ranked_nodes();
+        let healthy_nodes: Vec<_> = nodes.into_iter()
+            .filter(|n| n.errors.load(Ordering::Relaxed) < 10)
+            .collect();
+
+        if healthy_nodes.is_empty() {
+            return self.resolve(query_wire).await;
+        }
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(Vec<u8>, String)>(1);
+        let client = self.client.clone();
+
+        for node in healthy_nodes {
+            let tx = tx.clone();
+            let wire = query_wire.to_vec();
+            let client = client.clone();
+            tokio::spawn(async move {
+                let start = Instant::now();
+                node.pulls.fetch_add(1, Ordering::Relaxed);
+                let res = client
+                    .post(&node.url)
+                    .header("content-type", "application/dns-message")
+                    .header("accept", "application/dns-message")
+                    .timeout(Duration::from_millis(2000))
+                    .body(wire)
+                    .send()
+                    .await;
+
+                if let Ok(resp) = res {
+                    if resp.status().is_success() {
+                        if let Ok(bytes) = resp.bytes().await {
+                            if bytes.len() >= 12 {
+                                let lat = start.elapsed().as_millis() as u32;
+                                node.record_success(lat);
+                                let _ = tx.try_send((bytes.to_vec(), node.provider.clone()));
+                            }
+                        }
+                    }
+                }
+                // If failed, don't send — other spawns will win
+            });
+        }
+        drop(tx); // close sender side so recv terminates if all fail
+
+        // First response wins
+        rx.recv().await
     }
 }
 

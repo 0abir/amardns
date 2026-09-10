@@ -2,9 +2,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use moka::future::Cache;
 
+/// zstd compression level 1 — fastest, ~60-70% size reduction on DNS wire responses
+const ZSTD_LEVEL: i32 = 1;
+
 #[derive(Clone)]
 pub struct CachedResponse {
-    pub raw_response: Vec<u8>,
+    pub compressed: Vec<u8>,  // zstd-compressed wire response
+    #[allow(dead_code)]
+    pub original_len: usize,  // uncompressed byte length
     pub created_at: Instant,
     pub original_ttl: u32,
     pub stale_grace_secs: u32,
@@ -22,6 +27,8 @@ pub struct DnsCache {
     neg_cache: Cache<String, (Instant, u32)>,
     neg_hits: AtomicU64,
     swr_hits: AtomicU64,
+    compressed_bytes: AtomicU64,
+    uncompressed_bytes: AtomicU64,
     max_capacity: u64,
 }
 
@@ -38,6 +45,8 @@ impl DnsCache {
                 .build(),
             neg_hits: AtomicU64::new(0),
             swr_hits: AtomicU64::new(0),
+            compressed_bytes: AtomicU64::new(0),
+            uncompressed_bytes: AtomicU64::new(0),
             max_capacity,
         }
     }
@@ -56,23 +65,24 @@ impl DnsCache {
     }
 
     /// Fast lookup supporting RFC 8767 Stale-While-Revalidate (Serve-Stale).
-    /// Returns:
-    /// - Fresh: within original TTL (no upstream query needed)
-    /// - Stale: expired but within grace period (sub-0.1ms immediate return with 5s downstream TTL; triggers background revalidation)
-    /// - Miss: completely expired or not in cache
     pub async fn get_with_swr(&self, qname: &str, qtype: u16, client_tx_id: u16) -> CacheLookupResult {
         let key = Self::make_key(qname, qtype);
         if let Some(entry) = self.cache.get(&key).await {
             let elapsed_secs = entry.created_at.elapsed().as_secs() as u32;
+            // Decompress stored response
+            let raw = match zstd::decode_all(entry.compressed.as_slice()) {
+                Ok(r) => r,
+                Err(_) => return CacheLookupResult::Miss,
+            };
             if elapsed_secs < entry.original_ttl {
-                let mut out = entry.raw_response.clone();
+                let mut out = raw;
                 if out.len() >= 2 {
                     out[0..2].copy_from_slice(&client_tx_id.to_be_bytes());
                 }
                 return CacheLookupResult::Fresh(out);
             } else if elapsed_secs < entry.original_ttl.saturating_add(entry.stale_grace_secs) {
                 self.swr_hits.fetch_add(1, Ordering::Relaxed);
-                let mut out = entry.raw_response.clone();
+                let mut out = raw;
                 if out.len() >= 2 {
                     out[0..2].copy_from_slice(&client_tx_id.to_be_bytes());
                 }
@@ -101,8 +111,15 @@ impl DnsCache {
         let key = Self::make_key(qname, qtype);
         let safe_ttl = ttl.clamp(10, 86400);
         let safe_grace = grace_secs.clamp(30, 3600);
+        let original_len = raw_response.len();
+        // Compress the response wire bytes
+        let compressed = zstd::encode_all(raw_response.as_slice(), ZSTD_LEVEL)
+            .unwrap_or(raw_response); // fallback: store uncompressed
+        self.compressed_bytes.fetch_add(compressed.len() as u64, Ordering::Relaxed);
+        self.uncompressed_bytes.fetch_add(original_len as u64, Ordering::Relaxed);
         let entry = CachedResponse {
-            raw_response,
+            compressed,
+            original_len,
             created_at: Instant::now(),
             original_ttl: safe_ttl,
             stale_grace_secs: safe_grace,
@@ -213,15 +230,30 @@ impl DnsCache {
         self.neg_hits.store(0, Ordering::Relaxed);
     }
 
+    #[allow(dead_code)]
     pub fn get_swr_hits(&self) -> u64 {
         self.swr_hits.load(Ordering::Relaxed)
     }
 
     pub fn get_stats(&self) -> (usize, u64, f64, u64) {
         let count = self.cache.entry_count() as usize;
-        let bytes = (count as u64) * 256;
+        let compressed = self.compressed_bytes.load(Ordering::Relaxed);
+        let uncompressed = self.uncompressed_bytes.load(Ordering::Relaxed);
+        let bytes = if compressed > 0 { compressed } else { (count as u64) * 256 };
         let mb = (bytes as f64 / (1024.0 * 1024.0) * 100.0).round() / 100.0;
+        let _ = uncompressed; // available for future reporting
         (count, bytes, mb, self.max_capacity)
+    }
+
+    /// Returns compression ratio as a percentage (e.g. 65.0 = 65% smaller)
+    pub fn compression_ratio(&self) -> f64 {
+        let comp = self.compressed_bytes.load(Ordering::Relaxed);
+        let uncomp = self.uncompressed_bytes.load(Ordering::Relaxed);
+        if uncomp == 0 {
+            return 0.0;
+        }
+        let ratio = (1.0 - (comp as f64 / uncomp as f64)) * 100.0;
+        (ratio * 10.0).round() / 10.0
     }
 
     #[allow(dead_code)]

@@ -8,10 +8,13 @@ struct Bucket {
     last_update: Instant,
 }
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 pub struct RateLimiter {
     capacity: f64,
     refill_rate: f64, // tokens per second
     buckets: Mutex<HashMap<IpAddr, Bucket>>,
+    pub soft_limit_hits: AtomicU64,
 }
 
 impl RateLimiter {
@@ -20,12 +23,14 @@ impl RateLimiter {
             capacity,
             refill_rate,
             buckets: Mutex::new(HashMap::new()),
+            soft_limit_hits: AtomicU64::new(0),
         }
     }
 
     /// Checks if a request from the given IP is allowed under the rate limit.
     /// In AmarDNS, users are NEVER blocked, throttled, or dropped regardless of their query behavior or volume.
     /// Token buckets are tracked for rate monitoring and velocity metrics, but always returns true.
+    /// If an IP bursts past its capacity, soft_limit_hits is incremented for visibility.
     pub fn check(&self, ip: IpAddr) -> bool {
         let now = Instant::now();
         if let Ok(mut map) = self.buckets.lock() {
@@ -44,9 +49,15 @@ impl RateLimiter {
 
             if bucket.tokens >= 1.0 {
                 bucket.tokens -= 1.0;
+            } else {
+                self.soft_limit_hits.fetch_add(1, Ordering::Relaxed);
             }
         }
         true
+    }
+
+    pub fn get_soft_limit_hits(&self) -> u64 {
+        self.soft_limit_hits.load(Ordering::Relaxed)
     }
 }
 
@@ -80,6 +91,22 @@ mod tests {
         for _ in 0..50 {
             assert!(limiter.check(public_ip));
         }
+    }
+
+    #[test]
+    fn test_rate_limiter_tracks_soft_limit_hits() {
+        let limiter = RateLimiter::new(2.0, 0.0); // 2 tokens, 0 refill
+        let public_ip = IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1));
+        assert!(limiter.check(public_ip)); // 1 token left
+        assert!(limiter.check(public_ip)); // 0 tokens left
+        assert_eq!(limiter.get_soft_limit_hits(), 0);
+
+        // 3rd query exceeds capacity: still returns true, but increments counter
+        assert!(limiter.check(public_ip));
+        assert_eq!(limiter.get_soft_limit_hits(), 1);
+
+        assert!(limiter.check(public_ip));
+        assert_eq!(limiter.get_soft_limit_hits(), 2);
     }
 }
 

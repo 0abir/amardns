@@ -48,7 +48,7 @@ pub fn constant_time_eq_str(a: &str, b: &str) -> bool {
 
 /// Helper to decode a hex string into bytes.
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     let mut bytes = Vec::with_capacity(s.len() / 2);

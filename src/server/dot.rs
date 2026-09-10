@@ -179,6 +179,20 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
         // Record heatmap
         state.record_heatmap(&q.name);
 
+        // Canary and Local DNS Overrides Check
+        let q_clean = q.name.trim_end_matches('.').to_ascii_lowercase();
+        if q_clean == state.canary_domain {
+            state.canary_hits.fetch_add(1, Ordering::Relaxed);
+            let nxdomain = build_blocked_response(query_wire, true);
+            state.metrics.record_latency(query_start.elapsed());
+            if send_length_prefixed(&mut socket, &nxdomain).await.is_err() {
+                break;
+            }
+            continue;
+        }
+
+
+
         // 0. Threat & Whitelist policy check (with Fast-Path Negative Absorber in <10µs)
         let (is_blocked, is_nxdomain, reason) = state.check_domain(&q.name);
         if is_blocked {
@@ -284,16 +298,66 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
 
         state.metrics.cache_misses.fetch_add(1, Ordering::Relaxed);
 
-        // 4. Forward to upstream
+        // 4. Forward to upstream pool with race fallback
         let start_upstream = std::time::Instant::now();
-        if let Some((upstream_resp, upstream_name)) = state.upstreams.resolve(query_wire).await {
+        let resolve_result = match state.upstreams.resolve(query_wire).await {
+            Some(res) => Some(res),
+            None => {
+                state.metrics.race_wins.fetch_add(1, Ordering::Relaxed);
+                state.upstreams.resolve_race(query_wire).await
+            }
+        };
+
+        if let Some((upstream_resp, upstream_name)) = resolve_result {
             let lat = start_upstream.elapsed().as_millis() as u32;
             let rcode = if upstream_resp.len() >= 4 { (upstream_resp[3] & 0x0F) as u16 } else { 0 };
             if let Some(flag) = state.fingerprint.record_response(client_ip, rcode) {
                 state.log_action("rogue_client_detected", &format!("{}: {}", client_ip, flag));
             }
 
-            // DNS Rebinding Protection: Block public domains resolving to private/loopback/link-local IP addresses
+            // Feature 4: Passive DNS timeline
+            let ips = crate::dns::parser::extract_a_records(&upstream_resp);
+            if !ips.is_empty() {
+                if let Some(drift) = state.passive_dns.record(&q.name, &ips) {
+                    state.log_anomaly("passive_dns_drift", &format!(
+                        "IP change for {}: {:?}", q.name, drift
+                    ));
+                }
+            }
+
+            // Feature 6: TTL Manipulation Guard — detect fast-flux botnets (extremely low TTL + DGA pattern)
+            // Robust & universal check: ultra-low TTL (<= 5s) combined with verified algorithmic threat
+            // (DGA entropy AND AI brain confirmation). Necessary services (VoIP, CDNs, banking, APIs)
+            // are NEVER harmed.
+            if state.ttl_guard_enabled.load(Ordering::Relaxed)
+                && state.blocking_enabled.load(Ordering::Relaxed)
+                && !state.is_exempt(&q.name)
+                && rcode == 0
+            {
+                if let Some(min_ttl) = crate::dns::parser::extract_min_ttl(&upstream_resp) {
+                    let is_dga_suspect = crate::security::heuristics::is_dga_threat(&q.name);
+                    let (ai_score, _) = state.brain.evaluate_internal(&q.name);
+                    if min_ttl <= 5 && is_dga_suspect && ai_score > 0.85 {
+                        state.metrics.ttl_guard_blocks.fetch_add(1, Ordering::Relaxed);
+                        state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
+                        state.log_action("ttl_guard_block", &format!("{} TTL={}s (fast-flux/DGA confirmed, AI={:.2})", q.name, min_ttl, ai_score));
+                        state.log_anomaly("ttl_manipulation_guard", &format!(
+                            "Fast-flux botnet blocked: low TTL {}s + DGA pattern + AI {:.2} on {}", min_ttl, ai_score, q.name
+                        ));
+                        state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), 3, lat, "TTL_GUARD_BLOCK");
+                        state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "TTL_GUARD_BLOCK", 3, lat, "ttl_manipulation_guard", "TTL Guard");
+                        state.cache.insert_negative(&q.name, 30).await;
+                        let blocked = build_blocked_response(query_wire, false);
+                        state.metrics.record_latency(query_start.elapsed());
+                        if send_length_prefixed(&mut socket, &blocked).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                }
+            }
+
+            // DNS Rebinding Protection
             if state.blocking_enabled.load(Ordering::Relaxed)
                 && !state.is_exempt(&q.name)
                 && !crate::dns::parser::is_rebind_exempt_domain(&q.name)
@@ -318,7 +382,15 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
                 }
             }
 
-            state.cache.insert(&q.name, q.qtype, upstream_resp.clone(), 300).await;
+            // Feature 13: Smart TTL learning
+            let smart_ttl = if let Some(raw_ttl) = crate::dns::parser::extract_answer_ttl(&upstream_resp) {
+                state.ttl_learner.observe(&q.name, raw_ttl);
+                state.ttl_learner.smart_ttl(&q.name, raw_ttl)
+            } else {
+                300
+            };
+
+            state.cache.insert(&q.name, q.qtype, upstream_resp.clone(), smart_ttl).await;
             state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), rcode, lat, "RESOLVED");
             state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "RESOLVED", rcode, lat, "none", &upstream_name);
             state.metrics.record_latency(query_start.elapsed());

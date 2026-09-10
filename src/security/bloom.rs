@@ -18,6 +18,7 @@ pub struct BloomFilter {
     count: AtomicUsize,
 }
 
+#[allow(dead_code)]
 impl BloomFilter {
     /// Creates a new BloomFilter configured dynamically for expected capacity and target false positive rate.
     pub fn with_capacity(expected_elements: usize, target_fp_rate: f64) -> Self {
@@ -261,11 +262,8 @@ impl BloomFilter {
 
         // Check each subdomain starting from full domain down to 2nd-level domain
         // (stop before checking TLD alone, so skip last label)
-        for i in 0..label_count {
-            if label_count - i <= 1 {
-                break; // Skip TLD
-            }
-            if self.contains_wire(wire, label_offsets[i]) {
+        for &offset in label_offsets.iter().take(label_count.saturating_sub(1)) {
+            if self.contains_wire(wire, offset) {
                 return true;
             }
         }

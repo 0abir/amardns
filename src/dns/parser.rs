@@ -418,5 +418,285 @@ mod tests {
         resp[last_idx..].copy_from_slice(&[8, 8, 8, 8]);
         assert_eq!(extract_rebind_ip(&resp), None);
     }
+
+    #[test]
+    fn test_build_query_wire_and_parse_doh_json() {
+        let wire = build_query_wire("example.com", 1);
+        let parsed = parse_dns_query(&wire).expect("valid generated wire query");
+        let q = parsed.question.expect("question exists");
+        assert_eq!(q.name, "example.com");
+        assert_eq!(q.qtype, 1);
+
+        // Synthetic response wire for example.com -> 93.184.216.34
+        let mut resp = wire.clone();
+        resp[2] = (resp[2] | 0x80) & 0xFB; // QR = 1
+        resp[3] = (resp[3] | 0x80) & 0xF0; // RA = 1
+        resp[6] = 0x00; resp[7] = 0x01;     // ANCOUNT = 1
+        // Answer record: pointer 0xC00C, type A (1), class IN (1), TTL 300, len 4, IP 93.184.216.34
+        resp.extend_from_slice(&[0xC0, 0x0C]);
+        resp.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+        resp.extend_from_slice(&[0x00, 0x00, 0x01, 0x2C]);
+        resp.extend_from_slice(&[0x00, 0x04, 93, 184, 216, 34]);
+
+        let (rcode, answers) = parse_answers_for_doh_json(&resp, "example.com");
+        assert_eq!(rcode, 0);
+        assert_eq!(answers.len(), 1);
+        assert_eq!(answers[0].data, "93.184.216.34");
+        assert_eq!(answers[0].ttl, 300);
+        assert_eq!(answers[0].r#type, 1);
+    }
 }
 
+/// Extracts all IPv4 addresses from the Answer section of a DNS response wire packet.
+/// Used by the passive DNS timeline to record domain→IP history.
+pub fn extract_a_records(buf: &[u8]) -> Vec<std::net::IpAddr> {
+    let mut ips = Vec::new();
+    if buf.len() < 12 { return ips; }
+    let qdcount = u16::from_be_bytes([buf[4], buf[5]]) as usize;
+    let ancount = u16::from_be_bytes([buf[6], buf[7]]) as usize;
+    if ancount == 0 { return ips; }
+
+    let mut pos = 12;
+    // Skip question section
+    for _ in 0..qdcount {
+        while pos < buf.len() {
+            let len = buf[pos] as usize;
+            if len == 0 { pos += 1; break; }
+            if (len & 0xc0) == 0xc0 { pos += 2; break; }
+            pos += 1 + len;
+        }
+        pos += 4;
+        if pos > buf.len() { return ips; }
+    }
+    // Walk answers
+    for _ in 0..ancount {
+        if pos >= buf.len() { break; }
+        while pos < buf.len() {
+            let len = buf[pos] as usize;
+            if len == 0 { pos += 1; break; }
+            if (len & 0xc0) == 0xc0 { pos += 2; break; }
+            pos += 1 + len;
+        }
+        if pos + 10 > buf.len() { break; }
+        let rtype = u16::from_be_bytes([buf[pos], buf[pos + 1]]);
+        let rdlen = u16::from_be_bytes([buf[pos + 8], buf[pos + 9]]) as usize;
+        pos += 10;
+        if pos + rdlen > buf.len() { break; }
+        if rtype == 1 && rdlen == 4 {
+            ips.push(std::net::IpAddr::V4(Ipv4Addr::new(buf[pos], buf[pos+1], buf[pos+2], buf[pos+3])));
+        } else if rtype == 28 && rdlen == 16 {
+            let mut b = [0u8; 16];
+            b.copy_from_slice(&buf[pos..pos+16]);
+            ips.push(std::net::IpAddr::V6(Ipv6Addr::from(b)));
+        }
+        pos += rdlen;
+    }
+    ips
+}
+
+/// Extracts the minimum TTL from all answer records. Used by the TTL Manipulation Guard.
+/// Returns None if no answer records found.
+pub fn extract_min_ttl(buf: &[u8]) -> Option<u32> {
+    if buf.len() < 12 { return None; }
+    let qdcount = u16::from_be_bytes([buf[4], buf[5]]) as usize;
+    let ancount = u16::from_be_bytes([buf[6], buf[7]]) as usize;
+    if ancount == 0 { return None; }
+
+    let mut pos = 12;
+    for _ in 0..qdcount {
+        while pos < buf.len() {
+            let len = buf[pos] as usize;
+            if len == 0 { pos += 1; break; }
+            if (len & 0xc0) == 0xc0 { pos += 2; break; }
+            pos += 1 + len;
+        }
+        pos += 4;
+        if pos > buf.len() { return None; }
+    }
+
+    let mut min_ttl: Option<u32> = None;
+    for _ in 0..ancount {
+        if pos >= buf.len() { break; }
+        while pos < buf.len() {
+            let len = buf[pos] as usize;
+            if len == 0 { pos += 1; break; }
+            if (len & 0xc0) == 0xc0 { pos += 2; break; }
+            pos += 1 + len;
+        }
+        if pos + 10 > buf.len() { break; }
+        let ttl = u32::from_be_bytes([buf[pos+4], buf[pos+5], buf[pos+6], buf[pos+7]]);
+        let rdlen = u16::from_be_bytes([buf[pos+8], buf[pos+9]]) as usize;
+        pos += 10 + rdlen;
+        min_ttl = Some(min_ttl.map(|m: u32| m.min(ttl)).unwrap_or(ttl));
+    }
+    min_ttl
+}
+
+/// Extracts the TTL from the first answer record. Used by SmartTTL learner.
+pub fn extract_answer_ttl(buf: &[u8]) -> Option<u32> {
+    if buf.len() < 12 { return None; }
+    let qdcount = u16::from_be_bytes([buf[4], buf[5]]) as usize;
+    let ancount = u16::from_be_bytes([buf[6], buf[7]]) as usize;
+    if ancount == 0 { return None; }
+
+    let mut pos = 12;
+    for _ in 0..qdcount {
+        while pos < buf.len() {
+            let len = buf[pos] as usize;
+            if len == 0 { pos += 1; break; }
+            if (len & 0xc0) == 0xc0 { pos += 2; break; }
+            pos += 1 + len;
+        }
+        pos += 4;
+        if pos > buf.len() { return None; }
+    }
+    // Skip name of first answer
+    while pos < buf.len() {
+        let len = buf[pos] as usize;
+        if len == 0 { pos += 1; break; }
+        if (len & 0xc0) == 0xc0 { pos += 2; break; }
+        pos += 1 + len;
+    }
+    if pos + 8 > buf.len() { return None; }
+    Some(u32::from_be_bytes([buf[pos+4], buf[pos+5], buf[pos+6], buf[pos+7]]))
+}
+
+/// Builds a standard recursive DNS query wire packet for a domain and qtype.
+pub fn build_query_wire(domain: &str, qtype: u16) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(64);
+    // Transaction ID
+    buf.extend_from_slice(&[0x12, 0x34]);
+    // Flags: RD=1 (recursion desired), standard query (0x0100)
+    buf.extend_from_slice(&[0x01, 0x00]);
+    // QDCOUNT: 1
+    buf.extend_from_slice(&[0x00, 0x01]);
+    // ANCOUNT: 0, NSCOUNT: 0, ARCOUNT: 0
+    buf.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    // Question: domain labels
+    for part in domain.trim_end_matches('.').split('.') {
+        if !part.is_empty() {
+            buf.push(part.len() as u8);
+            buf.extend_from_slice(part.as_bytes());
+        }
+    }
+    buf.push(0x00); // root label
+    // QTYPE & QCLASS: IN (1)
+    buf.extend_from_slice(&qtype.to_be_bytes());
+    buf.extend_from_slice(&[0x00, 0x01]);
+    buf
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DohAnswerRecord {
+    pub name: String,
+    pub r#type: u16,
+    #[serde(rename = "TTL")]
+    pub ttl: u32,
+    pub data: String,
+}
+
+/// Safely parse a DNS domain name from a packet starting at pos, following compression pointers.
+pub fn parse_domain_name_at(buf: &[u8], mut pos: usize) -> Option<String> {
+    let mut name = String::new();
+    let mut jumps = 0;
+    while pos < buf.len() && jumps < 16 {
+        let len = buf[pos] as usize;
+        if len == 0 { break; }
+        if (len & 0xc0) == 0xc0 {
+            if pos + 1 >= buf.len() { return None; }
+            pos = ((len & 0x3f) << 8) | (buf[pos + 1] as usize);
+            jumps += 1;
+            continue;
+        }
+        pos += 1;
+        if pos + len > buf.len() { return None; }
+        if !name.is_empty() { name.push('.'); }
+        for &b in &buf[pos..pos + len] {
+            name.push((b as char).to_ascii_lowercase());
+        }
+        pos += len;
+    }
+    if name.is_empty() { None } else { Some(name) }
+}
+
+/// Parses the answers from a raw wire DNS response into RFC 8427 format.
+/// Returns (rcode, answers).
+pub fn parse_answers_for_doh_json(buf: &[u8], query_domain: &str) -> (u8, Vec<DohAnswerRecord>) {
+    if buf.len() < 12 {
+        return (2, Vec::new()); // SERVFAIL
+    }
+    let rcode = buf[3] & 0x0F;
+    let qdcount = u16::from_be_bytes([buf[4], buf[5]]) as usize;
+    let ancount = u16::from_be_bytes([buf[6], buf[7]]) as usize;
+    if ancount == 0 {
+        return (rcode, Vec::new());
+    }
+
+    let mut pos = 12;
+    // Skip question section
+    for _ in 0..qdcount {
+        while pos < buf.len() {
+            let len = buf[pos] as usize;
+            if len == 0 { pos += 1; break; }
+            if (len & 0xc0) == 0xc0 { pos += 2; break; }
+            pos += 1 + len;
+        }
+        pos += 4;
+        if pos > buf.len() { return (rcode, Vec::new()); }
+    }
+
+    let mut answers = Vec::with_capacity(ancount);
+    for _ in 0..ancount {
+        if pos >= buf.len() { break; }
+        // Parse record name
+        let rec_name = parse_domain_name_at(buf, pos).unwrap_or_else(|| query_domain.to_string());
+        // Skip over the name in the record
+        while pos < buf.len() {
+            let len = buf[pos] as usize;
+            if len == 0 { pos += 1; break; }
+            if (len & 0xc0) == 0xc0 { pos += 2; break; }
+            pos += 1 + len;
+        }
+        if pos + 10 > buf.len() { break; }
+        let rtype = u16::from_be_bytes([buf[pos], buf[pos + 1]]);
+        let ttl = u32::from_be_bytes([buf[pos + 4], buf[pos + 5], buf[pos + 6], buf[pos + 7]]);
+        let rdlen = u16::from_be_bytes([buf[pos + 8], buf[pos + 9]]) as usize;
+        pos += 10;
+        if pos + rdlen > buf.len() { break; }
+
+        let data = match rtype {
+            1 if rdlen == 4 => {
+                format!("{}.{}.{}.{}", buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3])
+            }
+            28 if rdlen == 16 => {
+                let mut octets = [0u8; 16];
+                octets.copy_from_slice(&buf[pos..pos + 16]);
+                std::net::Ipv6Addr::from(octets).to_string()
+            }
+            5 => {
+                parse_domain_name_at(buf, pos).unwrap_or_else(|| "<unknown>".to_string())
+            }
+            16 => {
+                if rdlen > 1 {
+                    String::from_utf8_lossy(&buf[pos + 1..pos + rdlen]).to_string()
+                } else {
+                    String::new()
+                }
+            }
+            _ => {
+                buf[pos..pos + rdlen].iter().map(|b| format!("{:02x}", b)).collect::<String>()
+            }
+        };
+
+        answers.push(DohAnswerRecord {
+            name: if rec_name.ends_with('.') { rec_name } else { format!("{}.", rec_name) },
+            r#type: rtype,
+            ttl,
+            data,
+        });
+
+        pos += rdlen;
+    }
+
+    (rcode, answers)
+}
