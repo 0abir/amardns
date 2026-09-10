@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 const MAX_ENTRIES_PER_DOMAIN: usize = 50;
 const MAX_AGE_SECS: u64 = 7 * 24 * 3600; // 7 days
+const MAX_TRACKED_DOMAINS: usize = 10_000; // Cap to prevent memory leaks in passive DNS store
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PassiveDnsEntry {
@@ -52,6 +53,11 @@ impl PassiveDnsStore {
         let new_ip_strs: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
 
         let mut map = self.inner.write();
+        if map.len() >= MAX_TRACKED_DOMAINS && !map.contains_key(&clean) {
+            if let Some(oldest_key) = map.keys().next().cloned() {
+                map.remove(&oldest_key);
+            }
+        }
         let rec = map.entry(clean).or_default();
 
         // Evict stale entries

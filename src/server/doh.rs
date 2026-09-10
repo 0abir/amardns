@@ -3012,7 +3012,11 @@ fn build_logs_stream(state: Arc<AppState>) -> Response {
                     let sse = format!("data: {}\n\n", msg);
                     yield Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(sse));
                 }
-                Ok(Err(_)) => break, // broadcaster dropped
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
+                    // Client lagged slightly under heavy query bursts; continue streaming next events
+                    continue;
+                }
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break, // broadcaster dropped
                 Err(_) => {
                     // Keepalive ping every 25s
                     yield Ok::<bytes::Bytes, std::convert::Infallible>(bytes::Bytes::from(": keepalive\n\n"));

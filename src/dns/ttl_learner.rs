@@ -5,6 +5,7 @@ const MAX_SAMPLES: usize = 20;
 const EMA_ALPHA: f64 = 0.3; // weight for new observations
 const MIN_SMART_TTL: u32 = 10;
 const MAX_SMART_TTL: u32 = 3600;
+const MAX_LEARNED_DOMAINS: usize = 10_000; // Cap to prevent memory leaks in TTL learner
 
 struct TtlStats {
     samples: VecDeque<u32>,
@@ -53,6 +54,11 @@ impl TtlLearner {
         }
         let clean = domain.trim_end_matches('.').to_ascii_lowercase();
         let mut map = self.inner.write();
+        if map.len() >= MAX_LEARNED_DOMAINS && !map.contains_key(&clean) {
+            if let Some(k) = map.keys().next().cloned() {
+                map.remove(&k);
+            }
+        }
         if let Some(stats) = map.get_mut(&clean) {
             stats.observe(ttl);
         } else {

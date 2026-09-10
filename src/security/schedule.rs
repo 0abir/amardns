@@ -53,6 +53,8 @@ pub struct ScheduleStore {
     pub schedule_blocks: AtomicU64,
 }
 
+const MAX_SCHEDULE_RULES: usize = 500;
+
 impl ScheduleStore {
     pub fn new() -> Self {
         Self {
@@ -77,7 +79,11 @@ impl ScheduleStore {
             reason,
             created_at: now,
         };
-        self.rules.write().push(rule);
+        let mut rules = self.rules.write();
+        if rules.len() >= MAX_SCHEDULE_RULES {
+            rules.remove(0);
+        }
+        rules.push(rule);
         id
     }
 
