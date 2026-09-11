@@ -3141,6 +3141,7 @@ function initSSE(){
   try{
     var sseUrl=BASE+'/api/logs/stream'+(_KEY?('/'+encodeURIComponent(_KEY)):'');
     _sseSource=new EventSource(sseUrl);
+    var _sseRenderTimer=null;
     _sseSource.onmessage=function(e){
       if(!e||!e.data)return;
       try{
@@ -3150,7 +3151,12 @@ function initSSE(){
           if(!_logs.some(function(x){return x.id===item.id;})){
             _logs.unshift(item);
             if(_logs.length>300)_logs.pop();
-            renderLogs(_D||{});
+            if(!_sseRenderTimer){
+              _sseRenderTimer=setTimeout(function(){
+                _sseRenderTimer=null;
+                renderLogs(_D||{});
+              },60);
+            }
           }
         }
       }catch(err){}

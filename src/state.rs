@@ -121,8 +121,9 @@ pub struct AppState {
     pub feed_manager: FeedManager,
     // Feature 13: Smart TTL Learning
     pub ttl_learner: TtlLearner,
-    // Feature 8: Real-Time SSE Log Stream broadcaster
+    // Feature 8: Real-Time SSE Log Stream broadcaster & cooldown tracker
     pub log_broadcaster: tokio::sync::broadcast::Sender<String>,
+    pub last_sse_broadcast_ms: AtomicU64,
 }
 
 impl AppState {
@@ -243,6 +244,7 @@ impl AppState {
                 let (tx, _) = tokio::sync::broadcast::channel(256);
                 tx
             },
+            last_sse_broadcast_ms: AtomicU64::new(0),
         }
     }
 
@@ -318,14 +320,20 @@ impl AppState {
         if guard.len() > 150 {
             guard.drain(0..75);
         }
-        // Feature 8: Broadcast to live SSE stream subscribers (non-blocking)
+        // Feature 8: Broadcast to live SSE stream subscribers (non-blocking with adaptive cooldown)
         if self.log_broadcaster.receiver_count() > 0 {
-            let log_json = serde_json::json!({
-                "id": id, "t": now, "domain": domain, "qtype": qtype_str_sse,
-                "client": client, "proto": proto, "status": status,
-                "rcode": rcode, "lat": lat_ms, "reason": reason, "upstream": upstream
-            }).to_string();
-            let _ = self.log_broadcaster.send(log_json);
+            let is_threat = status != "ALLOW" || (!reason.is_empty() && reason != "none");
+            let min_gap_ms = if is_threat { 5 } else { 15 }; // Capped at ~66 FPS for clean queries, ~200/s for threats
+            let last = self.last_sse_broadcast_ms.load(Ordering::Relaxed);
+            if now >= last.saturating_add(min_gap_ms) || is_threat {
+                self.last_sse_broadcast_ms.store(now, Ordering::Relaxed);
+                let log_json = serde_json::json!({
+                    "id": id, "t": now, "domain": domain, "qtype": qtype_str_sse,
+                    "client": client, "proto": proto, "status": status,
+                    "rcode": rcode, "lat": lat_ms, "reason": reason, "upstream": upstream
+                }).to_string();
+                let _ = self.log_broadcaster.send(log_json);
+            }
         }
     }
 

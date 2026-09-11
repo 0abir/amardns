@@ -383,9 +383,8 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
                 }
             }
 
-            // DNS Rebinding Protection
+            // DNS Rebinding Protection (Enforced unconditionally even if domain is in whitelist or common domains)
             if state.blocking_enabled.load(Ordering::Relaxed)
-                && !state.is_exempt(&q.name)
                 && !crate::dns::parser::is_rebind_exempt_domain(&q.name)
             {
                 if let Some(rebind_ip) = crate::dns::parser::extract_rebind_ip(&upstream_resp) {

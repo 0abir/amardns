@@ -3100,8 +3100,8 @@ async fn process_dns_query(state: Arc<AppState>, query_wire: &[u8], client_ip: I
         }
 
         // 4b. DNS Rebinding Protection: Block public domains resolving to private/loopback/link-local IP addresses
+        // (Enforced unconditionally even if domain is in whitelist or common domains)
         if state.blocking_enabled.load(Ordering::Relaxed)
-            && !state.is_exempt(&q.name)
             && !crate::dns::parser::is_rebind_exempt_domain(&q.name)
         {
             if let Some(rebind_ip) = crate::dns::parser::extract_rebind_ip(&upstream_resp) {

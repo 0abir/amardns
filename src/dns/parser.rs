@@ -176,44 +176,76 @@ pub fn build_servfail_response(query_buf: &[u8]) -> Vec<u8> {
     resp
 }
 
-/// Checks if an IPv4 address is in a private, loopback, or link-local range.
+/// Checks if an IPv4 address is in a private, loopback, link-local, multicast, or reserved range.
 pub fn is_rebind_ipv4(ip: &Ipv4Addr) -> bool {
     let octets = ip.octets();
-    // 127.0.0.0/8 (Loopback / Localhost)
-    if ip.is_loopback() {
+    // 0.0.0.0/8 (Current network / "This host on this network", RFC 1122)
+    if octets[0] == 0 {
         return true;
     }
     // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 (RFC 1918 Private LAN)
     if ip.is_private() {
         return true;
     }
-    // 169.254.0.0/16 (Link-local & AWS/GCP/Azure Cloud Metadata e.g. 169.254.169.254)
-    if ip.is_link_local() {
-        return true;
-    }
-    // 0.0.0.0/8 (Current network / wildcard)
-    if octets[0] == 0 {
-        return true;
-    }
-    // 100.64.0.0/10 (Shared Address Space / CGNAT)
+    // 100.64.0.0/10 (Shared Address Space / CGNAT, RFC 6598)
     if octets[0] == 100 && (octets[1] & 0xC0) == 64 {
         return true;
     }
-    // 255.255.255.255 (Broadcast)
+    // 127.0.0.0/8 (Loopback / Localhost, RFC 1122)
+    if ip.is_loopback() {
+        return true;
+    }
+    // 169.254.0.0/16 (Link-local & AWS/GCP/Azure Cloud Metadata e.g. 169.254.169.254, RFC 3927)
+    if ip.is_link_local() {
+        return true;
+    }
+    // 192.0.0.0/24 (IETF Protocol Assignments, RFC 6890)
+    if octets[0] == 192 && octets[1] == 0 && octets[2] == 0 {
+        return true;
+    }
+    // 192.0.2.0/24 (TEST-NET-1, RFC 5737)
+    if octets[0] == 192 && octets[1] == 0 && octets[2] == 2 {
+        return true;
+    }
+    // 192.88.99.0/24 (6to4 Relay Anycast, RFC 7526)
+    if octets[0] == 192 && octets[1] == 88 && octets[2] == 99 {
+        return true;
+    }
+    // 198.18.0.0/15 (Network Interconnect Device Benchmark, RFC 2544)
+    if octets[0] == 198 && (octets[1] & 0xFE) == 18 {
+        return true;
+    }
+    // 198.51.100.0/24 (TEST-NET-2, RFC 5737)
+    if octets[0] == 198 && octets[1] == 51 && octets[2] == 100 {
+        return true;
+    }
+    // 203.0.113.0/24 (TEST-NET-3, RFC 5737)
+    if octets[0] == 203 && octets[1] == 0 && octets[2] == 113 {
+        return true;
+    }
+    // 224.0.0.0/4 (Multicast, RFC 5771)
+    if ip.is_multicast() {
+        return true;
+    }
+    // 240.0.0.0/4 (Reserved for future use / Class E, RFC 1112)
+    if octets[0] >= 240 {
+        return true;
+    }
+    // 255.255.255.255 (Broadcast, RFC 919)
     if ip.is_broadcast() {
         return true;
     }
     false
 }
 
-/// Checks if an IPv6 address is in a private, loopback, or link-local range.
+/// Checks if an IPv6 address is in a private, loopback, link-local, multicast, or reserved range.
 pub fn is_rebind_ipv6(ip: &Ipv6Addr) -> bool {
     let seg = ip.segments();
-    // ::1 (Loopback)
+    // ::1 (Loopback, RFC 4291)
     if ip.is_loopback() {
         return true;
     }
-    // :: (Unspecified)
+    // :: (Unspecified, RFC 4291)
     if ip.is_unspecified() {
         return true;
     }
@@ -225,13 +257,46 @@ pub fn is_rebind_ipv6(ip: &Ipv6Addr) -> bool {
     if (seg[0] & 0xffc0) == 0xfe80 {
         return true;
     }
-    // IPv4-mapped IPv6 (::ffff:a.b.c.d)
+    // Multicast (ff00::/8) - RFC 4291
+    if ip.is_multicast() {
+        return true;
+    }
+    // Discard prefix (100::/64, RFC 6666)
+    if seg[0] == 0x0100 && seg[1] == 0 && seg[2] == 0 && seg[3] == 0 {
+        return true;
+    }
+    // Documentation prefix (2001:db8::/32, RFC 3849)
+    if seg[0] == 0x2001 && seg[1] == 0x0db8 {
+        return true;
+    }
+    // Benchmarking (2001:2::/48, RFC 5180)
+    if seg[0] == 0x2001 && seg[1] == 0x0002 && seg[2] == 0 {
+        return true;
+    }
+    // ORCHIDv2 (2001:10::/28, RFC 7343)
+    if seg[0] == 0x2001 && (seg[1] & 0xfff0) == 0x0010 {
+        return true;
+    }
+    // IPv4-mapped IPv6 (::ffff:0:0/96 or ::ffff:0:0:0/96)
     let octets = ip.octets();
-    if octets[0..10] == [0; 10] && octets[10] == 0xff && octets[11] == 0xff {
+    if (octets[0..10] == [0; 10] && octets[10] == 0xff && octets[11] == 0xff)
+        || (octets[0..12] == [0; 12])
+    {
         let v4 = Ipv4Addr::new(octets[12], octets[13], octets[14], octets[15]);
         if is_rebind_ipv4(&v4) {
             return true;
         }
+    }
+    // NAT64 / Well-Known IPv4-IPv6 Translation Prefix (64:ff9b::/96, RFC 6052)
+    if seg[0] == 0x0064 && seg[1] == 0xff9b && seg[2] == 0 && seg[3] == 0 && seg[4] == 0 && seg[5] == 0 {
+        let v4 = Ipv4Addr::new(octets[12], octets[13], octets[14], octets[15]);
+        if is_rebind_ipv4(&v4) {
+            return true;
+        }
+    }
+    // NAT64 Local Translation Prefix (64:ff9b:1::/48, RFC 8215)
+    if seg[0] == 0x0064 && seg[1] == 0xff9b && seg[2] == 0x0001 {
+        return true;
     }
     false
 }
@@ -443,9 +508,30 @@ mod tests {
         resp[last_idx..].copy_from_slice(&[169, 254, 169, 254]);
         assert_eq!(extract_rebind_ip(&resp), Some(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254))));
 
+        // Change answer to CGNAT 100.64.0.1
+        resp[last_idx..].copy_from_slice(&[100, 64, 0, 1]);
+        assert_eq!(extract_rebind_ip(&resp), Some(IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1))));
+
+        // Change answer to Multicast 224.0.0.251
+        resp[last_idx..].copy_from_slice(&[224, 0, 0, 251]);
+        assert_eq!(extract_rebind_ip(&resp), Some(IpAddr::V4(Ipv4Addr::new(224, 0, 0, 251))));
+
+        // Change answer to Reserved 240.0.0.1
+        resp[last_idx..].copy_from_slice(&[240, 0, 0, 1]);
+        assert_eq!(extract_rebind_ip(&resp), Some(IpAddr::V4(Ipv4Addr::new(240, 0, 0, 1))));
+
         // Change answer to public IP 8.8.8.8 -> Should NOT be detected
         resp[last_idx..].copy_from_slice(&[8, 8, 8, 8]);
         assert_eq!(extract_rebind_ip(&resp), None);
+
+        // Test IPv6 Rebinding helpers
+        assert!(is_rebind_ipv6(&"fe80::1".parse().unwrap()));
+        assert!(is_rebind_ipv6(&"fc00::1".parse().unwrap()));
+        assert!(is_rebind_ipv6(&"::1".parse().unwrap()));
+        assert!(is_rebind_ipv6(&"::ffff:127.0.0.1".parse().unwrap()));
+        assert!(is_rebind_ipv6(&"::ffff:192.168.1.1".parse().unwrap()));
+        assert!(is_rebind_ipv6(&"64:ff9b::169.254.169.254".parse().unwrap()));
+        assert!(!is_rebind_ipv6(&"2606:4700:4700::1111".parse().unwrap()));
     }
 
     #[test]
