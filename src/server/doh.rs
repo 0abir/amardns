@@ -201,13 +201,6 @@ pub fn create_doh_router(state: Arc<AppState>) -> Router {
         .route("/api/schedule", get(get_schedule).post(add_schedule))
         .route("/api/schedule/:id", delete(delete_schedule))
 
-        // Feature 10: Blocklist Feed Subscriptions
-        .route("/api/feeds", get(get_feeds))
-        .route("/api/feeds/:key", get(get_feeds_key))
-        .route("/api/feeds/sync", post(sync_feeds))
-        .route("/api/feeds/sync/:key", post(sync_feeds_key))
-        .route("/api/feeds/:id/toggle", post(toggle_feed))
-
         // Feature 11+13: Cache & TTL stats
         .route("/api/cache/stats", get(cache_stats_handler))
         .route("/api/cache/stats/:key", get(cache_stats_key))
@@ -757,7 +750,9 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "expectedThreatTotal": effective_threat_total,
             "expectedWhitelistTotal": effective_white_total,
             "crossMatched": abir_crossmatched && common_crossmatched,
-            "feedOverlapCount": feed_overlap
+            "feedOverlapCount": feed_overlap,
+            "feedSyncInProgress": state.is_feed_syncing.load(Ordering::Relaxed),
+            "isFeedSyncing": state.is_feed_syncing.load(Ordering::Relaxed)
         },
         "ai": {
             "activeDevices": dev_count,
@@ -794,7 +789,6 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "softLimitHits": state.rate_limiter.get_soft_limit_hits(),
             "blockedCount": state.rate_limiter.get_blocked_count(),
             "passiveDnsCount": state.passive_dns.domain_count(),
-            "feedCount": state.feed_manager.list_feeds().len(),
             "abirBlocks": threats_blocked,
             "abirSize": threat_bloom_cnt,
             "abirTotalEntries": effective_threat_total,
@@ -810,6 +804,8 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "abirCrossMatched": abir_crossmatched,
             "commonCrossMatched": common_crossmatched,
             "feedOverlapCount": feed_overlap,
+            "isFeedSyncing": state.is_feed_syncing.load(Ordering::Relaxed),
+            "feedSyncInProgress": state.is_feed_syncing.load(Ordering::Relaxed),
             "bloom": {
                 "threat": {
                     "count": threat_bloom_cnt,
@@ -975,10 +971,6 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
                 "trackedDomains": state.passive_dns.domain_count(),
                 "totalObservations": state.passive_dns.total_observations.load(Ordering::Relaxed),
                 "driftEvents": state.passive_dns.drift_events.load(Ordering::Relaxed)
-            },
-            "feedSubscriptions": {
-                "totalFeeds": state.feed_manager.list_feeds().len(),
-                "totalSyncedDomains": state.feed_manager.total_synced_domains.load(Ordering::Relaxed)
             },
             "cacheCompression": {
                 "engine": "Direct Wire Format (Zero-Copy Raw Wire)",
@@ -2389,7 +2381,7 @@ async fn nuclear_wipe_key(
 }
 
 async fn handle_nuclear_wipe(
-    state: &AppState,
+    state: &Arc<AppState>,
     key: Option<&str>,
     headers: &HeaderMap,
     payload: NuclearWipeReq,
@@ -2423,8 +2415,8 @@ async fn handle_nuclear_wipe(
     state.is_private_mode.store(false, Ordering::Relaxed);
     state.log_action("nuclear_wipe", "System state purged to factory defaults");
 
-    // Automatically rebuild structure: reload threat feeds cleanly in background (zero disk writes)
-    let _ = state.sync_threat_feeds().await;
+    // Automatically rebuild structure: spawn continuous background retry polling until threat feeds succeed
+    state.trigger_background_feed_sync();
 
     // Cluster peer-sync across Fly.io instances
     let is_peer_sync = headers.get("x-peer-sync").and_then(|v| v.to_str().ok()) == Some("1");
@@ -2445,7 +2437,7 @@ async fn handle_nuclear_wipe(
         }
     }
 
-    Json(serde_json::json!({ "ok": true, "message": "Nuclear wipe completed & threat feeds reloaded" })).into_response()
+    Json(serde_json::json!({ "ok": true, "message": "Nuclear wipe completed & threat feed background sync queued" })).into_response()
 }
 
 async fn get_nuke_token(
@@ -3468,129 +3460,6 @@ async fn delete_schedule(
         "ok": removed,
         "id": id,
         "message": if removed { "Rule removed" } else { "Rule not found" }
-    })).into_response()
-}
-
-// ── Feature 10: Blocklist Feed Subscriptions ─────────────────────────────────
-
-async fn get_feeds(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Response {
-    let auth = check_auth(&state, None, &headers, "/api/feeds");
-    if !auth.is_view_or_admin() {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Unauthorized"}))).into_response();
-    }
-    let feeds = state.feed_manager.list_feeds();
-    Json(serde_json::json!({
-        "ok": true,
-        "count": feeds.len(),
-        "totalSyncedDomains": state.feed_manager.total_synced_domains.load(std::sync::atomic::Ordering::Relaxed),
-        "feeds": feeds
-    })).into_response()
-}
-
-async fn get_feeds_key(
-    State(state): State<Arc<AppState>>,
-    Path(key): Path<String>,
-    headers: HeaderMap,
-) -> Response {
-    let auth = check_auth(&state, Some(&key), &headers, "/api/feeds");
-    if !auth.is_view_or_admin() {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Unauthorized"}))).into_response();
-    }
-    let feeds = state.feed_manager.list_feeds();
-    Json(serde_json::json!({
-        "ok": true,
-        "count": feeds.len(),
-        "totalSyncedDomains": state.feed_manager.total_synced_domains.load(std::sync::atomic::Ordering::Relaxed),
-        "feeds": feeds
-    })).into_response()
-}
-
-async fn toggle_feed(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Path(id): Path<u64>,
-) -> Response {
-    let auth = check_auth(&state, None, &headers, "/api/feeds");
-    if !auth.is_admin() {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Admin key required"}))).into_response();
-    }
-    let ok = state.feed_manager.toggle_feed(id);
-    Json(serde_json::json!({
-        "ok": ok,
-        "feedId": id,
-        "message": if ok { "Feed toggled" } else { "Feed not found" }
-    })).into_response()
-}
-
-async fn sync_feeds(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> Response {
-    handle_sync_feeds(&state, None, &headers).await
-}
-
-async fn sync_feeds_key(
-    State(state): State<Arc<AppState>>,
-    Path(key): Path<String>,
-    headers: HeaderMap,
-) -> Response {
-    handle_sync_feeds(&state, Some(&key), &headers).await
-}
-
-async fn handle_sync_feeds(state: &Arc<AppState>, key: Option<&str>, headers: &HeaderMap) -> Response {
-    let auth = check_auth(state, key, headers, "/api/feeds/sync");
-    if !auth.is_admin() {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Admin key required"}))).into_response();
-    }
-
-    let enabled = state.feed_manager.enabled_feeds();
-    if enabled.is_empty() {
-        return Json(serde_json::json!({
-            "ok": true,
-            "message": "No feeds enabled. Enable feeds via /api/feeds/:id/toggle first.",
-            "synced": 0
-        })).into_response();
-    }
-
-    let state_clone = (*state).clone();
-    tokio::spawn(async move {
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .user_agent("AmarDNS/1.0 blocklist-sync")
-            .build()
-            .unwrap_or_default();
-
-        for (feed_id, url, format) in enabled {
-            tracing::info!("Syncing blocklist feed {} from {}", feed_id, url);
-            match http.get(&url).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    if let Ok(text) = resp.text().await {
-                        let domains = crate::security::feed_manager::FeedManager::parse_domains(&text, &format);
-                        let count = domains.len() as u64;
-                        // Insert domains into the bloom filter
-                        {
-                            let mut bloom = state_clone.threat_bloom.write();
-                            for domain in &domains {
-                                bloom.insert(domain);
-                            }
-                        }
-                        state_clone.feed_manager.update_sync_stats(feed_id, count);
-                        tracing::info!("Feed {} synced: {} domains", feed_id, count);
-                    }
-                }
-                Ok(resp) => tracing::warn!("Feed {} sync failed: HTTP {}", feed_id, resp.status()),
-                Err(e) => tracing::warn!("Feed {} sync error: {}", feed_id, e),
-            }
-        }
-    });
-
-    Json(serde_json::json!({
-        "ok": true,
-        "message": "Feed sync started in background. Check /api/feeds for status.",
-        "syncing": true
     })).into_response()
 }
 

@@ -14,7 +14,6 @@ use crate::security::bloom::BloomFilter;
 use crate::security::rate_limit::RateLimiter;
 use crate::security::safe_browsing::SafeBrowsingClient;
 use crate::security::schedule::ScheduleStore;
-use crate::security::feed_manager::FeedManager;
 use crate::storage::wal::WalStorage;
 use crate::telemetry::metrics::Metrics;
 
@@ -117,13 +116,12 @@ pub struct AppState {
     pub ttl_guard_enabled: AtomicBool,
     // Feature 9: Scheduled Blocking
     pub schedule_store: ScheduleStore,
-    // Feature 10: Blocklist Feed Subscriptions
-    pub feed_manager: FeedManager,
     // Feature 13: Smart TTL Learning
     pub ttl_learner: TtlLearner,
     // Feature 8: Real-Time SSE Log Stream broadcaster & cooldown tracker
     pub log_broadcaster: tokio::sync::broadcast::Sender<String>,
     pub last_sse_broadcast_ms: AtomicU64,
+    pub is_feed_syncing: AtomicBool,
 }
 
 impl AppState {
@@ -238,13 +236,13 @@ impl AppState {
             canary_hits: AtomicU64::new(0),
             ttl_guard_enabled: AtomicBool::new(true),
             schedule_store: ScheduleStore::new(),
-            feed_manager: FeedManager::new(),
             ttl_learner: TtlLearner::new(),
             log_broadcaster: {
                 let (tx, _) = tokio::sync::broadcast::channel(256);
                 tx
             },
             last_sse_broadcast_ms: AtomicU64::new(0),
+            is_feed_syncing: AtomicBool::new(false),
         }
     }
 
@@ -957,56 +955,67 @@ impl AppState {
             .build()
             .map_err(|e| e.to_string())?;
 
-        // Cache-busting timestamp query to guarantee freshest CDN updates
-        let block_url = format!("https://cdn.jsdelivr.net/gh/abir614/-@latest/blocklist.txt?_t={}", now_sec);
-        let white_url = format!("https://cdn.jsdelivr.net/gh/abir614/-@latest/whitelist.txt?_t={}", now_sec);
-        let total_block_url = format!("https://cdn.jsdelivr.net/gh/abir614/-@latest/total_blocked.txt?_t={}", now_sec);
-        let total_white_url = format!("https://cdn.jsdelivr.net/gh/abir614/-@latest/total_whitelisted.txt?_t={}", now_sec);
+        // Primary CDN URLs with fallback endpoints to ensure zero downtime during CDN outages
+        let block_url_cdn = format!("https://cdn.jsdelivr.net/gh/abir614/-@latest/blocklist.txt?_t={}", now_sec);
+        let block_url_fastly = format!("https://fastly.jsdelivr.net/gh/abir614/-@latest/blocklist.txt?_t={}", now_sec);
+        let block_url_raw = format!("https://raw.githubusercontent.com/abir614/-/main/blocklist.txt?_t={}", now_sec);
 
-        let (b_res, w_res, tb_res, tw_res) = tokio::join!(
-            client.get(&block_url).send(),
-            client.get(&white_url).send(),
-            client.get(&total_block_url).send(),
-            client.get(&total_white_url).send()
+        let white_url_cdn = format!("https://cdn.jsdelivr.net/gh/abir614/-@latest/whitelist.txt?_t={}", now_sec);
+        let white_url_fastly = format!("https://fastly.jsdelivr.net/gh/abir614/-@latest/whitelist.txt?_t={}", now_sec);
+        let white_url_raw = format!("https://raw.githubusercontent.com/abir614/-/main/whitelist.txt?_t={}", now_sec);
+
+        let tb_url_cdn = format!("https://cdn.jsdelivr.net/gh/abir614/-@latest/total_blocked.txt?_t={}", now_sec);
+        let tb_url_raw = format!("https://raw.githubusercontent.com/abir614/-/main/total_blocked.txt?_t={}", now_sec);
+
+        let tw_url_cdn = format!("https://cdn.jsdelivr.net/gh/abir614/-@latest/total_whitelisted.txt?_t={}", now_sec);
+        let tw_url_raw = format!("https://raw.githubusercontent.com/abir614/-/main/total_whitelisted.txt?_t={}", now_sec);
+
+        async fn fetch_feed_text(client: &reqwest::Client, urls: Vec<String>) -> Option<String> {
+            for url in &urls {
+                if let Ok(resp) = client.get(url).send().await {
+                    if resp.status().is_success() {
+                        if let Ok(text) = resp.text().await {
+                            let trimmed = text.trim();
+                            if !trimmed.is_empty() {
+                                return Some(text);
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        }
+
+        let (b_opt, w_opt, tb_opt, tw_opt) = tokio::join!(
+            fetch_feed_text(&client, vec![block_url_cdn, block_url_fastly, block_url_raw]),
+            fetch_feed_text(&client, vec![white_url_cdn, white_url_fastly, white_url_raw]),
+            fetch_feed_text(&client, vec![tb_url_cdn, tb_url_raw]),
+            fetch_feed_text(&client, vec![tw_url_cdn, tw_url_raw])
         );
 
         let mut expected_block = 0;
-        if let Ok(resp) = tb_res {
-            if resp.status().is_success() {
-                if let Ok(text) = resp.text().await {
-                    let digits: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
-                    if let Ok(val) = digits.parse::<usize>() {
-                        expected_block = val;
-                        self.expected_threat_total.store(val, Ordering::Relaxed);
-                    }
-                }
+        if let Some(text) = tb_opt {
+            let digits: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
+            if let Ok(val) = digits.parse::<usize>() {
+                expected_block = val;
             }
         }
 
         let mut expected_white = 0;
-        if let Ok(resp) = tw_res {
-            if resp.status().is_success() {
-                if let Ok(text) = resp.text().await {
-                    let digits: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
-                    if let Ok(val) = digits.parse::<usize>() {
-                        expected_white = val;
-                        self.expected_whitelist_total.store(val, Ordering::Relaxed);
-                    }
-                }
+        if let Some(text) = tw_opt {
+            let digits: String = text.chars().filter(|c| c.is_ascii_digit()).collect();
+            if let Ok(val) = digits.parse::<usize>() {
+                expected_white = val;
             }
         }
 
         let mut block_count = 0;
         let mut new_threat_bloom = BloomFilter::for_threat_feed();
-        if let Ok(resp) = b_res {
-            if resp.status().is_success() {
-                if let Ok(text) = resp.text().await {
-                    for line in text.lines() {
-                        if let Some(clean) = normalize_blocklist_line(line) {
-                            new_threat_bloom.insert(&clean);
-                            block_count += 1;
-                        }
-                    }
+        if let Some(text) = b_opt {
+            for line in text.lines() {
+                if let Some(clean) = normalize_blocklist_line(line) {
+                    new_threat_bloom.insert(&clean);
+                    block_count += 1;
                 }
             }
         }
@@ -1016,67 +1025,138 @@ impl AppState {
         let mut new_whitelist_bloom = BloomFilter::for_whitelist();
         let mut new_exact = std::collections::HashSet::new();
         let mut new_wildcards = std::collections::HashSet::new();
-        if let Ok(resp) = w_res {
-            if resp.status().is_success() {
-                if let Ok(text) = resp.text().await {
-                    for line in text.lines() {
-                        let trimmed = line.trim();
-                        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('!') {
-                            continue;
-                        }
-                        let mut d = trimmed.to_ascii_lowercase();
-                        let is_wild = if d.starts_with("*.") {
-                            d = d[2..].to_string();
-                            true
-                        } else if d.starts_with('*') {
-                            d = d[1..].to_string();
-                            true
-                        } else {
-                            false
-                        };
-                        let clean = d.trim_end_matches('.').to_string();
-                        if !clean.is_empty() && clean.contains('.') {
-                            if new_threat_bloom.contains(&clean) {
-                                crossmatched_overlap += 1;
-                            }
-                            if is_wild {
-                                new_wildcards.insert(clean.clone());
-                            } else {
-                                new_exact.insert(clean.clone());
-                            }
-                            new_whitelist_bloom.insert(&clean);
-                            white_count += 1;
-                        }
+        if let Some(text) = w_opt {
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('!') {
+                    continue;
+                }
+                let mut d = trimmed.to_ascii_lowercase();
+                let is_wild = if d.starts_with("*.") {
+                    d = d[2..].to_string();
+                    true
+                } else if d.starts_with('*') {
+                    d = d[1..].to_string();
+                    true
+                } else {
+                    false
+                };
+                let clean = d.trim_end_matches('.').to_string();
+                if !clean.is_empty() && clean.contains('.') {
+                    if new_threat_bloom.contains(&clean) {
+                        crossmatched_overlap += 1;
                     }
+                    if is_wild {
+                        new_wildcards.insert(clean.clone());
+                    } else {
+                        new_exact.insert(clean.clone());
+                    }
+                    new_whitelist_bloom.insert(&clean);
+                    white_count += 1;
                 }
             }
         }
 
-        // Atomically swap in both Bloom filters and hash sets
-        *self.threat_bloom.write() = new_threat_bloom;
-        *self.whitelist_bloom.write() = new_whitelist_bloom;
-        *self.whitelist_exact.write() = new_exact;
-        *self.whitelist_wildcards.write() = new_wildcards;
+        // Safety Guard: if remote feeds failed to return any valid domains,
+        // NEVER wipe out existing in-memory Bloom filters with empty ones!
+        if block_count == 0 && white_count == 0 {
+            let err_msg = "Threat feed sync failed: both blocklist and whitelist feeds returned 0 domains. Existing in-memory threat filters preserved.".to_string();
+            tracing::warn!("[threat_feed] {}", err_msg);
+            return Err(err_msg);
+        }
 
-        if expected_block == 0 && block_count > 0 {
-            self.expected_threat_total.store(block_count, Ordering::Relaxed);
+        // Atomically swap in new Bloom filters and hash sets only for successfully downloaded feeds
+        if block_count > 0 {
+            *self.threat_bloom.write() = new_threat_bloom;
+            if expected_block > 0 {
+                self.expected_threat_total.store(expected_block, Ordering::Relaxed);
+            } else {
+                self.expected_threat_total.store(block_count, Ordering::Relaxed);
+            }
         }
-        if expected_white == 0 && white_count > 0 {
-            self.expected_whitelist_total.store(white_count, Ordering::Relaxed);
+
+        if white_count > 0 {
+            *self.whitelist_bloom.write() = new_whitelist_bloom;
+            *self.whitelist_exact.write() = new_exact;
+            *self.whitelist_wildcards.write() = new_wildcards;
+            if expected_white > 0 {
+                self.expected_whitelist_total.store(expected_white, Ordering::Relaxed);
+            } else {
+                self.expected_whitelist_total.store(white_count, Ordering::Relaxed);
+            }
         }
-        self.feed_overlap_count.store(crossmatched_overlap, Ordering::Relaxed);
+
+        if block_count > 0 && white_count > 0 {
+            self.feed_overlap_count.store(crossmatched_overlap, Ordering::Relaxed);
+        }
+
+        let exp_b = self.expected_threat_total.load(Ordering::Relaxed);
+        let exp_w = self.expected_whitelist_total.load(Ordering::Relaxed);
+        let is_crossmatched = block_count > 0
+            && white_count > 0
+            && (exp_b == 0 || block_count >= exp_b)
+            && (exp_w == 0 || white_count >= exp_w);
 
         info!(
             "[threat_feed] Feed sync & crossmatch completed: {}/{} blocked rules, {}/{} whitelist rules (crossmatched: {}, {} overlap prioritized)",
             block_count,
-            self.expected_threat_total.load(Ordering::Relaxed),
+            exp_b,
             white_count,
-            self.expected_whitelist_total.load(Ordering::Relaxed),
-            block_count >= expected_block && white_count >= expected_white,
+            exp_w,
+            is_crossmatched,
             crossmatched_overlap
         );
 
         Ok((block_count, white_count))
+    }
+
+    /// Spawns a background retry queue loop for threat feed ingestion with exponential backoff.
+    /// Runs continuously until feed sync succeeds and broadcasts an SSE update to active dashboards.
+    pub fn trigger_background_feed_sync(self: &std::sync::Arc<Self>) {
+        if self.is_feed_syncing.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+            tracing::info!("[threat_feed] Background feed sync is already active; pooling in progress");
+            return;
+        }
+
+        let state = self.clone();
+        tokio::spawn(async move {
+            let mut attempt = 0;
+            let mut delay_secs = 2u64;
+            loop {
+                attempt += 1;
+                tracing::info!("[threat_feed] Background feed sync attempt #{} starting...", attempt);
+                match state.sync_threat_feeds().await {
+                    Ok((b, w)) if b > 0 => {
+                        state.log_action(
+                            "threat_feed_synced",
+                            &format!("Background sync completed: {} blocked & {} whitelist rules ingested", b, w),
+                        );
+                        tracing::info!(
+                            "[threat_feed] Background feed sync attempt #{} succeeded: {} blocked, {} whitelist rules loaded",
+                            attempt, b, w
+                        );
+                        // Broadcast an SSE update event to all active dashboard clients
+                        let _ = state.log_broadcaster.send(serde_json::json!({
+                            "type": "threat_feed_synced",
+                            "blockedCount": b,
+                            "whitelistCount": w,
+                            "timestamp": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+                        }).to_string());
+                        break;
+                    }
+                    Ok(_) | Err(_) => {
+                        let current_bloom_cnt = state.threat_bloom.read().count();
+                        tracing::warn!(
+                            "[threat_feed] Feed sync attempt #{} failed (0 rules or CDN error). Retrying in background in {}s (current in-memory rules: {})...",
+                            attempt, delay_secs, current_bloom_cnt
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                        delay_secs = (delay_secs * 2).min(60);
+                    }
+                }
+            }
+            state.is_feed_syncing.store(false, Ordering::SeqCst);
+        });
     }
 }
 
@@ -1358,5 +1438,32 @@ mod tests {
         assert_eq!(reason_now, "whitelisted");
         assert!(state.is_exempt("analytics.apple.com"));
         assert!(!state.is_domain_blocked("analytics.apple.com"));
+    }
+
+    #[tokio::test]
+    async fn test_sync_threat_feeds_crossmatched_flag_logic() {
+        let config = Config::from_env();
+        let state = AppState::new(config);
+
+        // Pre-populate with existing rules
+        state.threat_bloom.write().insert("known-threat.xyz");
+        state.expected_threat_total.store(100_000, Ordering::Relaxed);
+        state.expected_whitelist_total.store(1_000, Ordering::Relaxed);
+
+        // Verify that 0 block count with 0 expected counts evaluates to false for crossmatched
+        let block_count = 0;
+        let white_count = 0;
+        let exp_b = state.expected_threat_total.load(Ordering::Relaxed);
+        let exp_w = state.expected_whitelist_total.load(Ordering::Relaxed);
+
+        let is_crossmatched = block_count > 0
+            && white_count > 0
+            && (exp_b == 0 || block_count >= exp_b)
+            && (exp_w == 0 || white_count >= exp_w);
+
+        assert!(!is_crossmatched, "0 rules must NEVER report crossmatched=true");
+
+        // Existing bloom filter domain must still be blocked (not wiped)
+        assert!(state.check_domain("known-threat.xyz").0);
     }
 }

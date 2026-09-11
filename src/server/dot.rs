@@ -9,12 +9,12 @@ use tracing::{debug, info, warn};
 use crate::dns::parser::{build_blocked_response, build_servfail_response, parse_dns_query};
 use crate::state::AppState;
 
-// RFC 7858 Section 3.4: server SHOULD close after 25s idle.
-// We use 15s to ensure we always close BEFORE Fly.io's 30s TCP backhaul limit,
-// eliminating the 'unexpected end of file' race where Fly kills the backhaul first.
-const DOT_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
-// Allow 8s for slow upstream resolvers. The 'Broken pipe' error occurs when the
-// client times out (usually 5s) before we can write the response.
+// RFC 7858 Section 3.4: servers SHOULD allow idle connections to remain open.
+// Increased from 15s to 120s so Android Private DNS and iOS DoT clients don't get
+// their persistent connections severed between user queries, preventing Fly.io
+// proxy Broken Pipe (OS error 32) errors.
+const DOT_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+// Allow 8s for slow upstream resolvers.
 const DOT_READ_TIMEOUT: Duration = Duration::from_secs(8);
 const DOT_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -64,15 +64,15 @@ pub async fn start_dot_server(
 async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, state: Arc<AppState>) {
     let _ = socket.set_nodelay(true);
 
-    // TCP keepalive via socket2: probes after 10s idle, every 5s.
+    // TCP keepalive via socket2: probes after 30s idle, every 10s.
     // Keeps Fly.io's TCP backhaul alive on idle DoT connections,
-    // preventing the 'unexpected end of file' race with Fly's 30s idle timeout.
+    // preventing the 'unexpected end of file' race with Fly's idle timeout.
     {
         use socket2::{SockRef, TcpKeepalive};
         let sock_ref = SockRef::from(&socket);
         let ka = TcpKeepalive::new()
-            .with_time(std::time::Duration::from_secs(10))
-            .with_interval(std::time::Duration::from_secs(5));
+            .with_time(std::time::Duration::from_secs(30))
+            .with_interval(std::time::Duration::from_secs(10));
         let _ = sock_ref.set_tcp_keepalive(&ka);
     }
 
@@ -88,23 +88,35 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
     let mut buf = vec![0u8; 4096];
 
     loop {
-        // Read 2-byte length prefix (RFC 7858 Section 3.4 25-second idle timeout)
+        // Read 2-byte length prefix (RFC 7858 Section 3.4 idle timeout)
         let mut len_buf = [0u8; 2];
         let read_res = tokio::time::timeout(DOT_IDLE_TIMEOUT, socket.read_exact(&mut len_buf)).await;
         match read_res {
             Ok(Ok(2)) => {}
-            Ok(Ok(0)) | Ok(Err(_)) => {
-                // Client cleanly closed or dropped connection / Fly probe completed
-                let _ = socket.shutdown().await;
+            Ok(Ok(0)) => {
+                // Client cleanly closed connection (EOF / Fly probe complete)
+                break;
+            }
+            Ok(Err(e)) => {
+                // Client dropped connection, reset, or probe completed
+                match e.kind() {
+                    std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset => {
+                        debug!("[dot] Connection closed by peer: {}", e);
+                    }
+                    _ => {
+                        debug!("[dot] Read error: {}", e);
+                    }
+                }
                 break;
             }
             Ok(_) => {
-                let _ = socket.shutdown().await;
                 break;
             }
             Err(_) => {
-                // RFC 7858 Section 3.4 idle timeout expired (no queries for 25s).
-                // Server actively initiates clean TCP half-close before Fly's 60s proxy timeout.
+                // RFC 7858 Section 3.4 idle timeout expired (no queries for 120s).
+                // Server initiates clean TCP half-close.
                 let _ = socket.shutdown().await;
                 break;
             }

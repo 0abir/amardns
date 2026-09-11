@@ -176,17 +176,8 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // 4. Background Boot Ingestion: Load Threat Feeds (400k domains) and Rank Upstreams
     let boot_state = state.clone();
     tokio::spawn(async move {
-        info!("[boot] Syncing global threat feeds from CDN...");
-        match boot_state.sync_threat_feeds().await {
-            Ok((b, w)) => {
-                boot_state.log_action("threat_feed_synced", &format!("Ingested {} threat & {} whitelist domains", b, w));
-                info!("[boot] Successfully ingested {} blocked and {} whitelisted domains into Bloom filter", b, w);
-            }
-            Err(e) => {
-                boot_state.log_anomaly("threat_feed_sync_error", &e.to_string());
-                error!("[boot] Threat feed sync deferred: {}", e);
-            }
-        }
+        info!("[boot] Triggering background threat feed ingestion queue...");
+        boot_state.trigger_background_feed_sync();
 
         info!("[boot] Ranking upstream DNS resolvers...");
         match boot_state.upstreams.sync_and_rank().await {
@@ -250,7 +241,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         info!("[cron] Running threat feed and upstream ranker sync (wall-clock cron)...");
                         write_cron_stamp(&cron_stamp);
-                        let _ = cron_state.sync_threat_feeds().await;
+                        cron_state.trigger_background_feed_sync();
                         let _ = cron_state.upstreams.sync_and_rank().await;
                         tokio::time::sleep(std::time::Duration::from_secs(61)).await;
                     } else {
@@ -261,7 +252,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                         tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
                         info!("[cron] Running threat feed and upstream ranker sync (wall-clock cron)...");
                         write_cron_stamp(&cron_stamp);
-                        let _ = cron_state.sync_threat_feeds().await;
+                        cron_state.trigger_background_feed_sync();
                         let _ = cron_state.upstreams.sync_and_rank().await;
                         // Guard sleep: move past the firing minute.
                         tokio::time::sleep(std::time::Duration::from_secs(61)).await;
@@ -278,7 +269,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 loop {
                     interval.tick().await;
                     info!("[cron] Running daily threat feed and upstream ranker sync (fallback 24 h)...");
-                    let _ = cron_state.sync_threat_feeds().await;
+                    cron_state.trigger_background_feed_sync();
                     let _ = cron_state.upstreams.sync_and_rank().await;
                 }
             }
@@ -330,39 +321,6 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         loop {
             interval.tick().await;
             warm_state.upstreams.keepalive_ping().await;
-        }
-    });
-
-    // Feature 10: Daily blocklist feed subscription sync
-    let feed_state = state.clone();
-    tokio::spawn(async move {
-        // Initial sync 5 minutes after boot (lets system stabilize first)
-        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .user_agent("AmarDNS/1.0 blocklist-feed-sync")
-            .build()
-            .unwrap_or_default();
-        let mut daily = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
-        loop {
-            daily.tick().await;
-            let feeds = feed_state.feed_manager.enabled_feeds();
-            for (feed_id, url, format) in feeds {
-                tracing::info!("[feed] Syncing {} from {}", feed_id, url);
-                if let Ok(resp) = http.get(&url).send().await {
-                    if resp.status().is_success() {
-                        if let Ok(text) = resp.text().await {
-                            let mut bloom = feed_state.threat_bloom.write();
-                            let count = crate::security::feed_manager::FeedManager::for_each_domain(&text, &format, |d| {
-                                bloom.insert(d);
-                            });
-                            drop(bloom);
-                            feed_state.feed_manager.update_sync_stats(feed_id, count);
-                            tracing::info!("[feed] {} synced {} domains", feed_id, count);
-                        }
-                    }
-                }
-            }
         }
     });
 

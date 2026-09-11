@@ -1203,8 +1203,8 @@ function render(d){
     {id:'fp',label:'Rogue Clients',val:fmt((ai.fpSuspicious&&ai.fpSuspicious.length)||ai.fpEvents||0),sub:(ai.fpSuspicious&&ai.fpSuspicious.length)?ai.fpSuspicious.length+' scanners flagged':'0 detected · Clean',color:(ai.fpSuspicious&&ai.fpSuspicious.length)?'#ff2d6b':'#34d399'},
     {id:'gsb',label:'Safe Browsing',val:ai.gsbOk?'ACTIVE':'OFFLINE',sub:(ai.gsbKeyCount!=null?ai.gsbKeyCount:0)+' API keys · '+fmt(ai.gsbBlocks||ai.gsbBlocked||0)+' blocked',color:ai.gsbOk?'#34d399':'#ff2d6b'},
     {id:'aiver',label:'AI Version',val:(ai.brainVersion||'1.0.0'),sub:'v'+fmt(ai.learningCycles||0)+' cycles',color:'#9d4edd'},
-    {id:'abir-bf',label:'ABIR Feed',val:ai.abirOk?fmt(ai.abirSize)+' loaded':'OFFLINE',sub:(ai.abirTotalEntries||ai.abirSize)?(Number(String(ai.abirTotalEntries||ai.abirSize).replace(/_/g,'')).toLocaleString()+' total'):'—',color:ai.abirOk?'#00e5cc':'#ff2d6b'},
-    {id:'com-bf',label:'Common Feed',val:ai.commonOk?fmt(ai.commonSize)+' loaded':'OFFLINE',sub:(ai.commonTotalEntries||ai.commonSize)?(Number(String(ai.commonTotalEntries||ai.commonSize).replace(/_/g,'')).toLocaleString()+' total'):'—',color:ai.commonOk?'#b8ff57':'#ff2d6b'},
+    {id:'abir-bf',label:'ABIR Feed',val:ai.isFeedSyncing?'SYNCING...':(ai.abirOk?fmt(ai.abirSize)+' loaded':'OFFLINE'),sub:(ai.abirTotalEntries||ai.abirSize)?(Number(String(ai.abirTotalEntries||ai.abirSize).replace(/_/g,'')).toLocaleString()+' total'):'—',color:ai.isFeedSyncing?'#38bdf8':(ai.abirOk?'#00e5cc':'#ff2d6b')},
+    {id:'com-bf',label:'Common Feed',val:ai.isFeedSyncing?'SYNCING...':(ai.commonOk?fmt(ai.commonSize)+' loaded':'OFFLINE'),sub:(ai.commonTotalEntries||ai.commonSize)?(Number(String(ai.commonTotalEntries||ai.commonSize).replace(/_/g,'')).toLocaleString()+' total'):'—',color:ai.isFeedSyncing?'#38bdf8':(ai.commonOk?'#b8ff57':'#ff2d6b')},
   ];
   if(!grid.children||grid.children.length!==stats.length||!document.getElementById('sc-mem')||!document.getElementById('sc-fp')||!document.getElementById('sc-gsb')){
     grid.innerHTML=stats.map(function(s){
@@ -1282,7 +1282,7 @@ function render(d){
     ['Canary Detector',canaryHits>0?'LEAK DETECTED ('+fmt(canaryHits)+')':'ARMED (Clean)',canaryHits>0?'cv-b':'cv-g'],
     ['Upstream Hedged Race',fmt(raceWins)+' wins','cv-g'],
     ['Passive DNS Timeline',fmt((feat.passiveDns&&feat.passiveDns.trackedDomains)||ai.passiveDnsCount||0)+' domains · '+fmt((feat.passiveDns&&feat.passiveDns.driftEvents)||0)+' drifts','cv-t'],
-    ['Feed Subscriptions',fmt((feedSub=feat.feedSubscriptions)&&feedSub.totalFeeds||ai.feedCount||0)+' feeds · '+fmt((feedSub&&feedSub.totalSyncedDomains)||0)+' synced','cv-g'],
+    ['Master Threat Bloom',fmt(ai.abirSize||c.threatBloomDomains||0)+' threat rules active','cv-g'],
     ['Scheduled Blocking',fmt(feat.scheduledBlocking&&feat.scheduledBlocking.activeRules||0)+' rules ('+fmt(schedBlocks)+' blocked)','cv-w'],
     ['Cache Compression (zstd)',(feat.cacheCompression&&feat.cacheCompression.ratio)||'Active','cv-t'],
     ['Burst Rate Watcher',fmt((feat.rateLimiter&&feat.rateLimiter.softLimitHits)||ai.softLimitHits||0)+' bursts',((feat.rateLimiter&&feat.rateLimiter.softLimitHits>0)||ai.softLimitHits>0)?'cv-w':'cv-g'],
@@ -3146,7 +3146,15 @@ function initSSE(){
       if(!e||!e.data)return;
       try{
         var item=JSON.parse(e.data);
-        if(!item||item.type==='connected'||!item.domain)return;
+        if(!item)return;
+        if(item.type==='threat_feed_synced'){
+          go();
+          if(typeof toast==='function'){
+            toast('Threat feed synced: '+Number(item.blockedCount||0).toLocaleString()+' rules loaded','ok',4000);
+          }
+          return;
+        }
+        if(item.type==='connected'||!item.domain)return;
         if(!_logPaused&&Array.isArray(_logs)){
           if(!_logs.some(function(x){return x.id===item.id;})){
             _logs.unshift(item);
