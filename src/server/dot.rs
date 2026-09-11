@@ -292,6 +292,7 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
         // 3. Cache lookup with RFC 8767 Stale-While-Revalidate (SWR)
         match state.cache.get_with_swr(&q.name, q.qtype, parsed.tx_id).await {
             crate::dns::cache::CacheLookupResult::Fresh(cached_resp) => {
+                state.ttl_learner.record_hit(&q.name);
                 state.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
                 state.fingerprint.record_response(client_ip, 0);
                 state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), 0, 0, "HIT");
@@ -303,6 +304,7 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
                 continue;
             }
             crate::dns::cache::CacheLookupResult::Stale(cached_resp) => {
+                state.ttl_learner.record_hit(&q.name);
                 state.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
                 state.metrics.swr_serves.fetch_add(1, Ordering::Relaxed);
                 state.fingerprint.record_response(client_ip, 0);
@@ -316,7 +318,13 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
                 let wire_clone = query_wire.to_vec();
                 tokio::spawn(async move {
                     if let Some((upstream_resp, _)) = state_bg.upstreams.resolve(&wire_clone).await {
-                        state_bg.cache.insert(&q_name, q_type, upstream_resp, 300).await;
+                        let (smart_ttl, smart_grace) = if let Some(raw_ttl) = crate::dns::parser::extract_answer_ttl(&upstream_resp) {
+                            state_bg.ttl_learner.observe(&q_name, raw_ttl);
+                            state_bg.ttl_learner.smart_ttl_and_grace(&q_name, raw_ttl)
+                        } else {
+                            (300, 300)
+                        };
+                        state_bg.cache.insert_with_grace(&q_name, q_type, upstream_resp, smart_ttl, smart_grace).await;
                     }
                 });
 
@@ -419,15 +427,15 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
                 }
             }
 
-            // Feature 13: Smart TTL learning
-            let smart_ttl = if let Some(raw_ttl) = crate::dns::parser::extract_answer_ttl(&upstream_resp) {
+            // Feature 13: Smart TTL & SWR grace learning with dynamic frequency booster
+            let (smart_ttl, smart_grace) = if let Some(raw_ttl) = crate::dns::parser::extract_answer_ttl(&upstream_resp) {
                 state.ttl_learner.observe(&q.name, raw_ttl);
-                state.ttl_learner.smart_ttl(&q.name, raw_ttl)
+                state.ttl_learner.smart_ttl_and_grace(&q.name, raw_ttl)
             } else {
-                300
+                (300, 300)
             };
 
-            state.cache.insert(&q.name, q.qtype, upstream_resp.clone(), smart_ttl).await;
+            state.cache.insert_with_grace(&q.name, q.qtype, upstream_resp.clone(), smart_ttl, smart_grace).await;
             state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), rcode, lat, "RESOLVED");
             state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "RESOLVED", rcode, lat, "none", &upstream_name);
             state.metrics.record_latency(query_start.elapsed());

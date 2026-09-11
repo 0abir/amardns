@@ -324,27 +324,6 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 6e. Boot Pre-warming: Prime cache with top popular domains 3s after startup
-    let prewarm_state = state.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        let top_domains = [
-            "google.com", "cloudflare.com", "apple.com",
-            "microsoft.com", "github.com", "amazon.com", "wikipedia.org",
-            "openai.com", "netflix.com", "youtube.com"
-        ];
-        tracing::info!("[prewarm] Pre-warming cache with top domains...");
-        let mut primed = 0;
-        for domain in &top_domains {
-            let wire = crate::dns::parser::build_query_wire(domain, 1);
-            if let Some((resp, _)) = prewarm_state.upstreams.resolve_race(&wire).await {
-                let ttl = crate::dns::parser::extract_answer_ttl(&resp).unwrap_or(300);
-                prewarm_state.cache.insert(domain, 1, resp, ttl).await;
-                primed += 1;
-            }
-        }
-        tracing::info!("[prewarm] Cache pre-warming complete: {}/{} domains primed into zero-latency cache", primed, top_domains.len());
-    });
 
     // 6f. Dynamic Memory Governor (Linux Principle: use free RAM, free it under pressure)
     //
