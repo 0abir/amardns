@@ -57,8 +57,8 @@ impl Config {
             .collect();
 
         Self {
-            port: parse_port("PORT", 8443),
-            dot_port: parse_port("DOT_PORT", 8853),
+            port: parse_port("PORT", 443),
+            dot_port: parse_port("DOT_PORT", 853),
             host: env::var("HOST").unwrap_or_else(|_| "::".to_string()),
             db_path: env::var("DB_PATH").unwrap_or_else(|_| "/data/amardns.wal".to_string()),
             log_level: env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
@@ -93,7 +93,7 @@ impl Config {
             if trimmed.parse::<u16>().map_or(true, |p| p == 0) {
                 issues.push(format!(
                     "ERROR: PORT value '{}' is not in the valid range 1-65535; \
-                     using default 8443.",
+                     using default 443.",
                     raw
                 ));
             }
@@ -105,7 +105,7 @@ impl Config {
             if trimmed.parse::<u16>().map_or(true, |p| p == 0) {
                 issues.push(format!(
                     "ERROR: DOT_PORT value '{}' is not in the valid range 1-65535; \
-                     using default 8853.",
+                     using default 853.",
                     raw
                 ));
             }

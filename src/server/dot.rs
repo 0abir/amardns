@@ -24,7 +24,7 @@ const DOT_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// In production on Fly.io, TLS 1.3/1.2 is terminated at Fly's Anycast Edge Proxy on public port 853
 /// via `handlers = ["tls"]` in `fly.toml` using valid Let's Encrypt certificates.
 /// Clients (e.g. Android Private DNS) establish an encrypted TLS tunnel with Fly's Edge.
-/// Fly proxies the stream over its internal private WireGuard network to internal port 8853,
+/// Fly proxies the stream over its internal private WireGuard network to internal port 853,
 /// where this listener processes RFC 7858 length-prefixed DNS wire packets.
 pub async fn start_dot_server(
     state: Arc<AppState>,

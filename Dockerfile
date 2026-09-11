@@ -40,14 +40,14 @@ COPY --from=builder --chown=65532:65532 /app/target/release/amardns /amardns
 # Run as non-root for least privilege and CIS Docker compliance
 USER 65532:65532
 
-ENV PORT=8443 \
-    DOT_PORT=8853 \
+ENV PORT=443 \
+    DOT_PORT=853 \
     HOST=:: \
     DB_PATH=/data/amardns.wal \
     LOG_LEVEL=info \
     DNS_ACCESS_MODE=public
 
 VOLUME ["/data"]
-EXPOSE 8443 8853
+EXPOSE 443 853
 
 ENTRYPOINT ["/amardns"]

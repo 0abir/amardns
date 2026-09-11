@@ -20,7 +20,7 @@
 
 Engineered to operate with **zero garbage-collection pauses**, AmarDNS indexes over **900,000 malicious domains in just 4 MB of RAM** and delivers sub-millisecond in-memory cache resolutions with automatic upstream hedging.
 
-> **⚠️ TLS Termination Architecture**: AmarDNS processes DNS-over-HTTPS on plain HTTP internally and DNS-over-TLS on raw TCP internally. **TLS encryption is terminated at the edge proxy** (Fly.io Anycast Edge on ports 443/853 via `handlers = ["tls"]` in `fly.toml`). If you deploy outside Fly.io, you **MUST** place a TLS-terminating reverse proxy (e.g. Nginx, Caddy, Traefik) in front. **Never expose port 8443 or 8853 directly to the internet without TLS.**
+> **⚠️ TLS Termination Architecture**: AmarDNS processes DNS-over-HTTPS on plain HTTP internally and DNS-over-TLS on raw TCP internally. **TLS encryption is terminated at the edge proxy** (Fly.io Anycast Edge on ports 443/853 via `handlers = ["tls"]` in `fly.toml`). If you deploy outside Fly.io, you **MUST** place a TLS-terminating reverse proxy (e.g. Nginx, Caddy, Traefik) in front. **Never expose port 443 or 853 directly to the internet without TLS.**
 
 ---
 
@@ -114,9 +114,9 @@ cargo run --release
 ```
 
 Server will start on:
-- **DoH**: `http://127.0.0.1:8443/dns-query`
-- **DoT**: `127.0.0.1:8853`
-- **Dashboard**: `http://127.0.0.1:8443/dashboard`
+- **DoH**: `http://127.0.0.1:443/dns-query`
+- **DoT**: `127.0.0.1:853`
+- **Dashboard**: `http://127.0.0.1:443/dashboard`
 
 ---
 
@@ -131,8 +131,8 @@ docker build -t amardns:latest .
 # Run container with persistent WAL storage
 docker run -d \
   --name amardns \
-  -p 8443:8443 \
-  -p 853:8853 \
+  -p 443:443 \
+  -p 853:853 \
   -v amardns_data:/data \
   amardns:latest
 ```
@@ -162,8 +162,8 @@ All settings are configured via environment variables:
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `PORT` | `8443` | Local HTTP & DoH listening port. |
-| `DOT_PORT` | `8853` | Local DoT listening port. |
+| `PORT` | `443` | Local HTTP & DoH listening port. |
+| `DOT_PORT` | `853` | Local DoT listening port. |
 | `HOST` | `::` | Network binding address (`::` for dual-stack IPv4/IPv6). |
 | `DB_PATH` | `/data/amardns.wal` | Path to persistent Write-Ahead Log. |
 | `LOG_LEVEL` | `info` | Tracing log level (`error`, `warn`, `info`, `debug`). |
