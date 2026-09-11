@@ -14,13 +14,6 @@ pub struct UpstreamConfig {
     pub aura: String, // "high", "medium", "low"
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum CircuitState {
-    Closed,   // Healthy, receiving real queries
-    Open,     // Tripped, in backoff cooldown
-    HalfOpen, // Cooldown elapsed, ready for canary probe
-}
-
 #[derive(Debug)]
 pub struct UpstreamNode {
     pub provider: String,
@@ -28,8 +21,6 @@ pub struct UpstreamNode {
     pub aura: String,
     pub latency_ms: AtomicU32,
     pub errors: AtomicU64,
-    pub consecutive_errors: AtomicU64,
-    pub circuit_open_until: AtomicU64,
     pub pulls: AtomicU64,
     pub successes: AtomicU64,
     pub consecutive_successes: AtomicU64,
@@ -44,8 +35,6 @@ impl UpstreamNode {
             aura: cfg.aura,
             latency_ms: AtomicU32::new(0),
             errors: AtomicU64::new(0),
-            consecutive_errors: AtomicU64::new(0),
-            circuit_open_until: AtomicU64::new(0),
             pulls: AtomicU64::new(0),
             successes: AtomicU64::new(0),
             consecutive_successes: AtomicU64::new(0),
@@ -53,27 +42,8 @@ impl UpstreamNode {
         }
     }
 
-    pub fn circuit_state(&self) -> CircuitState {
-        let errs = self.consecutive_errors.load(Ordering::Relaxed);
-        if errs < 3 {
-            return CircuitState::Closed;
-        }
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let until = self.circuit_open_until.load(Ordering::Relaxed);
-        if now < until {
-            CircuitState::Open
-        } else {
-            CircuitState::HalfOpen
-        }
-    }
-
     pub fn record_success(&self, latency: u32) {
         self.successes.fetch_add(1, Ordering::Relaxed);
-        self.consecutive_errors.store(0, Ordering::Relaxed);
-        self.circuit_open_until.store(0, Ordering::Relaxed);
         let cons = self.consecutive_successes.fetch_add(1, Ordering::Relaxed) + 1;
         // Circuit breaker healing: every 2 consecutive successes, heal 1 error!
         if cons.is_multiple_of(2) {
@@ -86,7 +56,7 @@ impl UpstreamNode {
         let new_lat = if old == 0 || old == 9999 {
             latency.max(1)
         } else {
-            ((old as f64 * 0.8) + (latency.max(1) as f64 * 0.2)).round() as u32
+            ((old as f64 * 0.7) + (latency.max(1) as f64 * 0.3)).round() as u32
         };
         self.latency_ms.store(new_lat.max(1), Ordering::Relaxed);
 
@@ -99,19 +69,7 @@ impl UpstreamNode {
 
     pub fn record_error(&self) {
         self.errors.fetch_add(1, Ordering::Relaxed);
-        let cons_err = self.consecutive_errors.fetch_add(1, Ordering::Relaxed) + 1;
         self.consecutive_successes.store(0, Ordering::Relaxed);
-
-        if cons_err >= 3 {
-            // Exponential backoff: 120s, 240s, 480s, capped at 1800s (30 mins)
-            let exp = (cons_err - 3).min(4) as u32;
-            let cooldown = (120u64 * (1 << exp)).min(1800);
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            self.circuit_open_until.store(now + cooldown, Ordering::Relaxed);
-        }
     }
 
     pub fn get_percentiles(&self) -> (u32, u32, u32) {
@@ -237,17 +195,17 @@ impl UpstreamPool {
         }
     }
 
-    /// Returns upstream nodes ordered by performance: healthy circuits first, lowest effective latency, priority
+    /// Returns upstream nodes ordered by performance: lowest effective latency first, healthy first
     pub fn ranked_nodes(&self) -> Vec<Arc<UpstreamNode>> {
         let guard = self.upstreams.read();
         let mut nodes = guard.clone();
         nodes.sort_by(|a, b| {
-            let state_a = a.circuit_state();
-            let state_b = b.circuit_state();
-            if state_a != state_b {
-                let rank_a = match state_a { CircuitState::Closed => 2, CircuitState::HalfOpen => 1, CircuitState::Open => 0 };
-                let rank_b = match state_b { CircuitState::Closed => 2, CircuitState::HalfOpen => 1, CircuitState::Open => 0 };
-                return rank_b.cmp(&rank_a);
+            let err_a = a.errors.load(Ordering::Relaxed);
+            let err_b = b.errors.load(Ordering::Relaxed);
+            let ok_a = err_a < 10;
+            let ok_b = err_b < 10;
+            if ok_a != ok_b {
+                return ok_b.cmp(&ok_a);
             }
             let lat_a = a.effective_latency();
             let lat_b = b.effective_latency();
@@ -258,10 +216,61 @@ impl UpstreamPool {
         nodes
     }
 
-    /// Selects the best upstream based on lowest latency and healthy circuit
+    /// Selects the best upstream based on lowest latency and health
     #[allow(dead_code)]
     pub fn select_best(&self) -> Option<Arc<UpstreamNode>> {
         self.ranked_nodes().into_iter().next()
+    }
+
+    /// Sends proactive keep-alive pings over HTTP/2 to top ranked nodes.
+    /// Keeps TCP/TLS connections permanently warm in reqwest's pool,
+    /// measures real-time upstream latency, and eliminates cold-start TLS latency.
+    pub async fn keepalive_ping(&self) {
+        let nodes = self.ranked_nodes();
+        if nodes.is_empty() {
+            return;
+        }
+
+        // Minimal RFC 1035 query packet for "." IN NS (17 bytes)
+        let ping_wire = vec![
+            0x12, 0x34, // ID
+            0x01, 0x00, // Standard query, RD=1
+            0x00, 0x01, // QDCOUNT = 1
+            0x00, 0x00, // ANCOUNT = 0
+            0x00, 0x00, // NSCOUNT = 0
+            0x00, 0x00, // ARCOUNT = 0
+            0x00,       // Root label '.'
+            0x00, 0x02, // QTYPE = NS (2)
+            0x00, 0x01, // QCLASS = IN (1)
+        ];
+
+        let mut handles = Vec::new();
+        for node in nodes.into_iter().take(2) {
+            let client = self.client.clone();
+            let wire = ping_wire.clone();
+            handles.push(tokio::spawn(async move {
+                let start = Instant::now();
+                let res = client
+                    .post(&node.url)
+                    .header("content-type", "application/dns-message")
+                    .header("accept", "application/dns-message")
+                    .timeout(Duration::from_millis(1500))
+                    .body(wire)
+                    .send()
+                    .await;
+
+                if let Ok(resp) = res {
+                    if resp.status().is_success() {
+                        let lat = start.elapsed().as_millis().max(1) as u32;
+                        node.record_success(lat);
+                    }
+                }
+            }));
+        }
+
+        for h in handles {
+            let _ = h.await;
+        }
     }
 
     /// Resolves DNS wire query using ultra-fast hedged queries across the top 2 resolvers
@@ -515,8 +524,6 @@ impl UpstreamPool {
                     aura: cfg.aura,
                     latency_ms: AtomicU32::new(latency),
                     errors: AtomicU64::new(if ok { 0 } else { 1 }),
-                    consecutive_errors: AtomicU64::new(if ok { 0 } else { 1 }),
-                    circuit_open_until: AtomicU64::new(0),
                     pulls: AtomicU64::new(1),
                     successes: AtomicU64::new(if ok { 1 } else { 0 }),
                     consecutive_successes: AtomicU64::new(if ok { 1 } else { 0 }),
@@ -565,7 +572,7 @@ impl UpstreamPool {
         Ok(final_count)
     }
 
-    /// Lightweight lazy canary probe for degraded / half-open upstreams (Circuit Breaker recovery)
+    /// Periodically probes all active upstreams concurrently with a lightweight query to ensure real-time metrics
     pub async fn probe_active_upstreams(&self) {
         const PROBE_PACKET: &[u8] = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\ncloudflare\x03com\x00\x00\x01\x00\x01";
         const PROBE_B64: &str = "EjQBAAABAAAAAAAACmNsb3VkZmxhcmUDY29tAAABAAE";
@@ -575,18 +582,8 @@ impl UpstreamPool {
             guard.clone()
         };
 
-        // Filter: only probe nodes that have errors or are in HalfOpen/Open state, or if uninitialized
-        let candidate_nodes: Vec<_> = nodes.into_iter().filter(|n| {
-            n.circuit_state() != CircuitState::Closed || n.errors.load(Ordering::Relaxed) > 0 || n.latency_ms.load(Ordering::Relaxed) == 0
-        }).collect();
-
-        if candidate_nodes.is_empty() {
-            // All nodes are healthy and actively receiving live traffic: zero background network overhead!
-            return;
-        }
-
         let mut tasks = Vec::new();
-        for node in candidate_nodes {
+        for node in nodes {
             let client = self.client.clone();
             tasks.push(tokio::spawn(async move {
                 let start = Instant::now();
@@ -597,19 +594,15 @@ impl UpstreamPool {
                     .post(&node.url)
                     .header("content-type", "application/dns-message")
                     .header("accept", "application/dns-message")
-                    .timeout(Duration::from_millis(2000))
+                    .timeout(Duration::from_millis(2500))
                     .body(PROBE_PACKET.to_vec())
                     .send()
                     .await;
 
                 if let Ok(r) = res {
                     if r.status().is_success() {
-                        if let Ok(bytes) = r.bytes().await {
-                            if bytes.len() >= 12 {
-                                ok = true;
-                                latency = start.elapsed().as_millis().max(1) as u32;
-                            }
-                        }
+                        ok = true;
+                        latency = start.elapsed().as_millis().max(1) as u32;
                     }
                 }
 
@@ -622,17 +615,13 @@ impl UpstreamPool {
                     if let Ok(r) = client
                         .get(&get_url)
                         .header("accept", "application/dns-message")
-                        .timeout(Duration::from_millis(2000))
+                        .timeout(Duration::from_millis(2500))
                         .send()
                         .await
                     {
                         if r.status().is_success() {
-                            if let Ok(bytes) = r.bytes().await {
-                                if bytes.len() >= 12 {
-                                    ok = true;
-                                    latency = start.elapsed().as_millis().max(1) as u32;
-                                }
-                            }
+                            ok = true;
+                            latency = start.elapsed().as_millis().max(1) as u32;
                         }
                     }
                 }
@@ -653,12 +642,12 @@ impl UpstreamPool {
         // Re-sort pool so fastest resolvers are always ranked #1
         let mut guard = self.upstreams.write();
         guard.sort_by(|a, b| {
-            let state_a = a.circuit_state();
-            let state_b = b.circuit_state();
-            if state_a != state_b {
-                let rank_a = match state_a { CircuitState::Closed => 2, CircuitState::HalfOpen => 1, CircuitState::Open => 0 };
-                let rank_b = match state_b { CircuitState::Closed => 2, CircuitState::HalfOpen => 1, CircuitState::Open => 0 };
-                return rank_b.cmp(&rank_a);
+            let err_a = a.errors.load(Ordering::Relaxed);
+            let err_b = b.errors.load(Ordering::Relaxed);
+            let ok_a = err_a < 10;
+            let ok_b = err_b < 10;
+            if ok_a != ok_b {
+                return ok_b.cmp(&ok_a);
             }
             let lat_a = a.effective_latency();
             let lat_b = b.effective_latency();
@@ -882,8 +871,6 @@ mod tests {
                 aura: cfg.aura,
                 latency_ms: AtomicU32::new(lat),
                 errors: AtomicU64::new(if ok { 0 } else { 1 }),
-                consecutive_errors: AtomicU64::new(if ok { 0 } else { 1 }),
-                circuit_open_until: AtomicU64::new(0),
                 pulls: AtomicU64::new(1),
                 successes: AtomicU64::new(if ok { 1 } else { 0 }),
                 consecutive_successes: AtomicU64::new(if ok { 1 } else { 0 }),
@@ -919,33 +906,6 @@ mod tests {
         assert_eq!(top9[2].1.provider, "FastMedium");
         // OfflineHigh must NOT be in top9 because it's unreachable (ok=false)
         assert!(!top9.iter().any(|(_, n)| n.provider == "OfflineHigh"));
-    }
-
-    #[test]
-    fn test_upstream_circuit_breaker_state_machine() {
-        let node = UpstreamNode::new(UpstreamConfig {
-            provider: "FlakyProvider".to_string(),
-            url: "https://flaky.provider/dns-query".to_string(),
-            aura: "high".to_string(),
-        });
-
-        assert_eq!(node.circuit_state(), CircuitState::Closed);
-
-        // 1 error -> still closed
-        node.record_error();
-        assert_eq!(node.circuit_state(), CircuitState::Closed);
-
-        // 2 errors -> still closed
-        node.record_error();
-        assert_eq!(node.circuit_state(), CircuitState::Closed);
-
-        // 3 consecutive errors -> trips circuit to Open!
-        node.record_error();
-        assert_eq!(node.circuit_state(), CircuitState::Open);
-
-        // Single success resets consecutive errors and closes circuit
-        node.record_success(15);
-        assert_eq!(node.circuit_state(), CircuitState::Closed);
     }
 }
 
