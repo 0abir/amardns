@@ -276,10 +276,9 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 6. Background Active Upstream Probe (Every 30 seconds for live latency & health)
+    // 6. Background Active Upstream Canary Probe (Every 3 minutes for degraded recovery)
     let probe_state = state.clone();
     tokio::spawn(async move {
-        probe_state.upstreams.probe_active_upstreams().await;
         probe_state.metrics.upstream_last_sync.store(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -287,7 +286,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 .as_secs(),
             std::sync::atomic::Ordering::Relaxed,
         );
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(180));
         loop {
             interval.tick().await;
             probe_state.upstreams.probe_active_upstreams().await;
@@ -310,17 +309,6 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             interval.tick().await;
             let wal = opt_state.wal.clone_ref();
             tokio::task::spawn_blocking(move || wal.maybe_compact()).await.ok();
-        }
-    });
-
-    // 6c. Proactive Upstream Warm-Pipes (Every 60 seconds keepalive pings over HTTP/2)
-    // Reduced from 20s to 60s to lower outbound load on shared-cpu-1x.
-    let warm_state = state.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-        loop {
-            interval.tick().await;
-            warm_state.upstreams.keepalive_ping().await;
         }
     });
 
