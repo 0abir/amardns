@@ -47,7 +47,9 @@ fn parse_port(var: &str, default: u16) -> u16 {
 
 impl Config {
     pub fn from_env() -> Self {
-        let sb_env = env::var("SAFE_BROWSING_KEYS").unwrap_or_default();
+        let sb_env = env::var("SAFE_BROWSING_KEYS")
+            .or_else(|_| env::var("SAFE_BROWSING_KEY"))
+            .unwrap_or_default();
         let safe_browsing_keys: Vec<String> = sb_env
             .split(',')
             .map(|k| k.trim().to_string())
