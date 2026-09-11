@@ -105,6 +105,14 @@ impl UpstreamNode {
         let err = self.errors.load(Ordering::Relaxed).min(20) as u32 * 50;
         self.latency_ms.load(Ordering::Relaxed) + err
     }
+
+    pub fn rank_key(&self) -> (bool, u32, std::cmp::Reverse<u8>, u32) {
+        let ok = self.errors.load(Ordering::Relaxed) < 5;
+        let eff_lat = self.effective_latency();
+        let bucket = eff_lat / 5;
+        let aura = self.aura_rank();
+        (!ok, bucket, std::cmp::Reverse(aura), eff_lat)
+    }
 }
 
 #[derive(Deserialize)]
@@ -195,24 +203,11 @@ impl UpstreamPool {
         }
     }
 
-    /// Returns upstream nodes ordered by performance: lowest effective latency first, healthy first
+    /// Returns upstream nodes ordered by performance: lowest latency first (with priority tie-breaking), healthy first
     pub fn ranked_nodes(&self) -> Vec<Arc<UpstreamNode>> {
         let guard = self.upstreams.read();
         let mut nodes = guard.clone();
-        nodes.sort_by(|a, b| {
-            let err_a = a.errors.load(Ordering::Relaxed);
-            let err_b = b.errors.load(Ordering::Relaxed);
-            let ok_a = err_a < 10;
-            let ok_b = err_b < 10;
-            if ok_a != ok_b {
-                return ok_b.cmp(&ok_a);
-            }
-            let lat_a = a.effective_latency();
-            let lat_b = b.effective_latency();
-            lat_a.cmp(&lat_b).then_with(|| {
-                b.aura_rank().cmp(&a.aura_rank())
-            })
-        });
+        nodes.sort_by_key(|a| a.rank_key());
         nodes
     }
 
@@ -245,7 +240,7 @@ impl UpstreamPool {
         ];
 
         let mut handles = Vec::new();
-        for node in nodes.into_iter().take(2) {
+        for node in nodes.into_iter().take(4) {
             let client = self.client.clone();
             let wire = ping_wire.clone();
             handles.push(tokio::spawn(async move {
@@ -542,20 +537,12 @@ impl UpstreamPool {
 
         // Rank upstreams:
         // 1. ok (healthy / reachable) first
-        // 2. Priority: aura "high" (3) > "medium" (2) > "low" (1)
-        // 3. Lowest latency first
-        probed.sort_by(|(ok_a, node_a), (ok_b, node_b)| {
-            if ok_a != ok_b {
-                return ok_b.cmp(ok_a);
-            }
-            let aura_a = node_a.aura_rank();
-            let aura_b = node_b.aura_rank();
-            if aura_a != aura_b {
-                return aura_b.cmp(&aura_a);
-            }
-            let lat_a = node_a.latency_ms.load(Ordering::Relaxed);
-            let lat_b = node_b.latency_ms.load(Ordering::Relaxed);
-            lat_a.cmp(&lat_b)
+        // 2. Lowest latency first (with priority aura breaking ties within 5ms bracket)
+        probed.sort_by_key(|(ok, node)| {
+            let lat = node.latency_ms.load(Ordering::Relaxed);
+            let bucket = lat / 5;
+            let aura = node.aura_rank();
+            (!*ok, bucket, std::cmp::Reverse(aura), lat)
         });
 
         // Exactly 9 upstreams loaded at a time according to their priority & low latency
@@ -641,20 +628,7 @@ impl UpstreamPool {
 
         // Re-sort pool so fastest resolvers are always ranked #1
         let mut guard = self.upstreams.write();
-        guard.sort_by(|a, b| {
-            let err_a = a.errors.load(Ordering::Relaxed);
-            let err_b = b.errors.load(Ordering::Relaxed);
-            let ok_a = err_a < 10;
-            let ok_b = err_b < 10;
-            if ok_a != ok_b {
-                return ok_b.cmp(&ok_a);
-            }
-            let lat_a = a.effective_latency();
-            let lat_b = b.effective_latency();
-            lat_a.cmp(&lat_b).then_with(|| {
-                b.aura_rank().cmp(&a.aura_rank())
-            })
-        });
+        guard.sort_by_key(|a| a.rank_key());
     }
 
     pub fn reset_cb(&self) {
@@ -879,31 +853,27 @@ mod tests {
             (ok, node)
         }).collect();
 
-        // Sort by health (ok), priority (aura), low latency
-        probed.sort_by(|(ok_a, node_a), (ok_b, node_b)| {
-            if ok_a != ok_b {
-                return ok_b.cmp(ok_a);
-            }
-            let aura_a = node_a.aura_rank();
-            let aura_b = node_b.aura_rank();
-            if aura_a != aura_b {
-                return aura_b.cmp(&aura_a);
-            }
-            let lat_a = node_a.latency_ms.load(Ordering::Relaxed);
-            let lat_b = node_b.latency_ms.load(Ordering::Relaxed);
-            lat_a.cmp(&lat_b)
+        // Sort by health (ok), lowest latency first (with aura breaking ties within 5ms bracket)
+        probed.sort_by_key(|(ok, node)| {
+            let lat = node.latency_ms.load(Ordering::Relaxed);
+            let bucket = lat / 5;
+            let aura = node.aura_rank();
+            (!*ok, bucket, std::cmp::Reverse(aura), lat)
         });
 
         // Take exactly 9
         let top9: Vec<_> = probed.into_iter().take(9).collect();
         assert_eq!(top9.len(), 9);
 
-        // #1 must be FastHigh (high aura, 10ms)
-        assert_eq!(top9[0].1.provider, "FastHigh");
-        // #2 must be SlowHigh (high aura, 50ms)
-        assert_eq!(top9[1].1.provider, "SlowHigh");
-        // #3 must be FastMedium (medium aura, 5ms)
-        assert_eq!(top9[2].1.provider, "FastMedium");
+        // #1 must be FastLow (2ms) (bucket 0)
+        assert_eq!(top9[0].1.provider, "FastLow");
+        assert_eq!(top9[0].1.latency_ms.load(Ordering::Relaxed), 2);
+        // #2 must be FastMedium (5ms) (bucket 1)
+        assert_eq!(top9[1].1.provider, "FastMedium");
+        assert_eq!(top9[1].1.latency_ms.load(Ordering::Relaxed), 5);
+        // #3 must be FastHigh (10ms) (bucket 2)
+        assert_eq!(top9[2].1.provider, "FastHigh");
+        assert_eq!(top9[2].1.latency_ms.load(Ordering::Relaxed), 10);
         // OfflineHigh must NOT be in top9 because it's unreachable (ok=false)
         assert!(!top9.iter().any(|(_, n)| n.provider == "OfflineHigh"));
     }
