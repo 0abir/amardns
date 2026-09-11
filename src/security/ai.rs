@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -46,14 +47,20 @@ pub struct AIBrain {
     pub prefetch_hits: AtomicU64,
     pub training_cycles: AtomicU64,
     pub decisions_made: AtomicU64,
-    pub recent_decisions: RwLock<Vec<AIDecisionRecord>>,
+    pub recent_decisions: RwLock<VecDeque<AIDecisionRecord>>,
     pub zero_day_blocks: AtomicU64,
     pub typo_blocks: AtomicU64,
     pub fp_suppressions: AtomicU64,
+    pub last_sync_time: AtomicU64,
 }
 
 impl AIBrain {
     pub fn new() -> Self {
+        let now_sec = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
         Self {
             domain_iq: RwLock::new(HashMap::new()),
             markov_model: RwLock::new(HashMap::new()),
@@ -64,10 +71,11 @@ impl AIBrain {
             prefetch_hits: AtomicU64::new(0),
             training_cycles: AtomicU64::new(0),
             decisions_made: AtomicU64::new(0),
-            recent_decisions: RwLock::new(Vec::new()),
+            recent_decisions: RwLock::new(VecDeque::new()),
             zero_day_blocks: AtomicU64::new(0),
             typo_blocks: AtomicU64::new(0),
             fp_suppressions: AtomicU64::new(0),
+            last_sync_time: AtomicU64::new(now_sec),
         }
     }
 
@@ -127,12 +135,13 @@ impl AIBrain {
             .as_millis() as u64;
 
         // 1. Update Markov character-transition model (bigrams)
+        // Cap at 3000 bigrams — fast O(1) FIFO eviction via HashMap::drain
         let bytes = clean.as_bytes();
         {
             let mut markov = self.markov_model.write();
             for w in bytes.windows(2) {
                 if let Ok(s) = std::str::from_utf8(w) {
-                    if markov.len() < 5000 || markov.contains_key(s) {
+                    if markov.len() < 3_000 || markov.contains_key(s) {
                         *markov.entry(s.to_string()).or_insert(0) += 1;
                     }
                 }
@@ -157,12 +166,13 @@ impl AIBrain {
         }
 
         // 4. Update Domain IQ repository
+        // Cap at 3000 domains. O(1) eviction: grab any key (HashMap iteration order is pseudo-random
+        // due to RandomState hasher), so we naturally evict a random entry without O(n) min scan.
         {
             let mut iq = self.domain_iq.write();
-            if iq.len() >= 5000 && !iq.contains_key(&clean) {
-                // Prune lowest query domain when capacity reached
-                if let Some(min_k) = iq.iter().min_by_key(|(_, v)| v.query_count).map(|(k, _)| k.clone()) {
-                    iq.remove(&min_k);
+            if iq.len() >= 3_000 && !iq.contains_key(&clean) {
+                if let Some(old_key) = iq.keys().next().cloned() {
+                    iq.remove(&old_key);
                 }
             }
             let entry = iq.entry(clean.clone()).or_insert_with(|| DomainKnowledge {
@@ -184,6 +194,7 @@ impl AIBrain {
         }
 
         self.training_cycles.fetch_add(1, Ordering::Relaxed);
+        self.last_sync_time.store(now, Ordering::Relaxed);
     }
 
     /// Evaluates a domain without incrementing the live user queries decisions counter (used for telemetry benchmarks and dry-runs).
@@ -232,8 +243,8 @@ impl AIBrain {
             .as_millis() as u64;
 
         let mut guard = self.recent_decisions.write();
-        let id = guard.last().map(|d| d.id + 1).unwrap_or(1);
-        guard.push(AIDecisionRecord {
+        let id = guard.back().map(|d| d.id + 1).unwrap_or(1);
+        guard.push_back(AIDecisionRecord {
             id,
             timestamp: now,
             domain: domain.to_string(),
@@ -244,8 +255,8 @@ impl AIBrain {
             reason: reason.to_string(),
             utility_proof: utility_proof.to_string(),
         });
-        if guard.len() > 150 {
-            guard.drain(0..50);
+        while guard.len() > 150 {
+            guard.pop_front();
         }
     }
 
@@ -516,6 +527,46 @@ impl AIBrain {
         self.zero_day_blocks.store(0, Ordering::Relaxed);
         self.typo_blocks.store(0, Ordering::Relaxed);
         self.fp_suppressions.store(0, Ordering::Relaxed);
+    }
+
+    /// Serialize trained weights and markov model to a JSON string for persistence.
+    #[allow(dead_code)]
+    pub fn export_weights(&self) -> String {
+        let weights = self.neural_weights.read();
+        let markov = self.markov_model.read();
+        serde_json::json!({
+            "neural_weights": weights.as_ref(),
+            "training_cycles": self.training_cycles.load(std::sync::atomic::Ordering::Relaxed),
+            "markov_sample_count": markov.len()
+        }).to_string()
+    }
+
+    /// Restore trained weights from a previously exported JSON string.
+    /// Returns true on success, false if the JSON is invalid or weights array length mismatches.
+    #[allow(dead_code)]
+    pub fn import_weights(&self, json: &str) -> bool {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(json) {
+            if let Some(arr) = v.get("neural_weights").and_then(|w| w.as_array()) {
+                if arr.len() == 8 {
+                    let parsed: Option<[f32; 8]> = {
+                        let mut tmp = [0f32; 8];
+                        let mut ok = true;
+                        for (i, v) in arr.iter().enumerate() {
+                            match v.as_f64() {
+                                Some(f) => tmp[i] = f as f32,
+                                None => { ok = false; break; }
+                            }
+                        }
+                        if ok { Some(tmp) } else { None }
+                    };
+                    if let Some(w) = parsed {
+                        *self.neural_weights.write() = w;
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 }
 

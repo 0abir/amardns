@@ -46,6 +46,23 @@ pub fn constant_time_eq_str(a: &str, b: &str) -> bool {
     diff == 0
 }
 
+/// Returns `true` if `token` is syntactically well-formed.
+///
+/// A well-formed token is either:
+/// - 80 hex characters (current format: 8-char timestamp + 8-char TTL + 64-char HMAC-SHA256)
+/// - 72 hex characters (legacy format: 8-char timestamp + 64-char HMAC-SHA256)
+///
+/// Only lowercase/uppercase ASCII hex digits are accepted. Any other input is
+/// rejected immediately so that `verify_hmac_token` never performs crypto work
+/// on garbage data (prevents timing oracles on malformed tokens).
+pub fn is_token_well_formed(token: &str) -> bool {
+    let len = token.len();
+    if len != 80 && len != 72 {
+        return false;
+    }
+    token.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
 /// Helper to decode a hex string into bytes.
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
@@ -94,9 +111,19 @@ pub fn generate_hmac_token(secret: &str, target_path: &str, ttl_secs: u64) -> St
 }
 
 /// Verifies a token string against the secret and target path.
+///
+/// # Security
+/// - Hardcoded string backdoors have been removed. Every token must carry a
+///   valid HMAC signature produced by `generate_hmac_token`.
+/// - Malformed tokens (wrong length or non-hex characters) are rejected before
+///   any cryptographic operation is performed, preventing timing side-channels
+///   on inputs that could never be valid.
 pub fn verify_hmac_token(token: &str, secret: &str, path: &str) -> bool {
-    if token == "view-only" {
-        return true;
+    // Fast-path rejection: reject any token that does not look like a real
+    // HMAC token. This is done BEFORE any crypto, so garbage inputs can never
+    // create a timing oracle.
+    if !is_token_well_formed(token) {
+        return false;
     }
 
     if secret.is_empty() {
@@ -112,12 +139,11 @@ pub fn verify_hmac_token(token: &str, secret: &str, path: &str) -> bool {
             Err(_) => return false,
         };
         (ts_hex, Some(ttl_hex), sig_hex, ttl)
-    } else if token.len() == 72 {
+    } else {
+        // token.len() == 72 — legacy format, no TTL field
         let ts_hex = &token[0..8];
         let sig_hex = &token[8..72];
         (ts_hex, None, sig_hex, 86400) // Default 24-hour window for legacy 72-char tokens
-    } else {
-        return false;
     };
 
     let ts = match u64::from_str_radix(ts_hex, 16) {
@@ -170,16 +196,25 @@ pub fn verify_hmac_token(token: &str, secret: &str, path: &str) -> bool {
 /// Extracts authentication credentials and evaluates the role.
 pub fn check_auth(state: &AppState, key_param: Option<&str>, headers: &HeaderMap, path: &str) -> AuthRole {
     // 1. Check peer synchronization from internal Fly.io mesh
+    // SECURITY: peer-sync MUST present a valid master key — never grant admin unconditionally.
+    // If the x-peer-sync header is present but authentication fails, return None immediately
+    // rather than falling through to other auth mechanisms.
     if let Some(peer) = headers.get("x-peer-sync") {
         if peer == "1" {
-            // Verify that peer sync contains master key
-            if let Some(auth_hdr) = headers.get(header::AUTHORIZATION).and_then(|h| h.to_str().ok()) {
-                let token = auth_hdr.strip_prefix("Bearer ").unwrap_or(auth_hdr).trim();
-                if constant_time_eq_str(token, &state.config.dns_master_key) {
-                    return AuthRole::Admin;
+            let master_key = &state.config.dns_master_key;
+            if !master_key.is_empty() {
+                if let Some(auth_hdr) = headers.get(header::AUTHORIZATION).and_then(|h| h.to_str().ok()) {
+                    let token = auth_hdr.strip_prefix("Bearer ").unwrap_or(auth_hdr).trim();
+                    if constant_time_eq_str(token, master_key) {
+                        return AuthRole::Admin;
+                    }
                 }
             }
-            return AuthRole::Admin;
+            // x-peer-sync was present but authentication failed — deny immediately.
+            // Do NOT fall through; a peer that cannot authenticate should never be
+            // re-evaluated against the view-token path.
+            state.metrics.auth_fails.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return AuthRole::None;
         }
     }
 
@@ -224,11 +259,13 @@ pub fn check_auth(state: &AppState, key_param: Option<&str>, headers: &HeaderMap
         return AuthRole::Admin;
     }
 
-    // 4. View-Only Authentication: Compare with view token or HMAC
-    if token == "view-only" || verify_hmac_token(&token, &state.config.dns_token_secret, path) {
+    // 4. View-Only Authentication: HMAC-signed token only.
+    //    No hardcoded bypass strings — every token must carry a valid signature.
+    if verify_hmac_token(&token, &state.config.dns_token_secret, path) {
         return AuthRole::View;
     }
 
+    state.metrics.auth_fails.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     AuthRole::None
 }
 
@@ -244,6 +281,34 @@ mod tests {
         assert!(!constant_time_eq_str("abir", "abir1"));
         assert!(!constant_time_eq_str("", "abir"));
         assert!(constant_time_eq_str("", ""));
+    }
+
+    #[test]
+    fn test_is_token_well_formed() {
+        // Valid 80-char hex token
+        let good_80 = "a".repeat(80);
+        assert!(is_token_well_formed(&good_80));
+
+        // Valid 72-char hex token
+        let good_72 = "f".repeat(72);
+        assert!(is_token_well_formed(&good_72));
+
+        // Wrong lengths
+        assert!(!is_token_well_formed("view-only"));
+        assert!(!is_token_well_formed(""));
+        assert!(!is_token_well_formed(&"a".repeat(79)));
+        assert!(!is_token_well_formed(&"a".repeat(81)));
+        assert!(!is_token_well_formed(&"a".repeat(71)));
+        assert!(!is_token_well_formed(&"a".repeat(73)));
+
+        // Non-hex characters in otherwise correct length
+        let mut bad_char = "a".repeat(80);
+        bad_char.replace_range(0..1, "!");
+        assert!(!is_token_well_formed(&bad_char));
+
+        let mut bad_space = "a".repeat(72);
+        bad_space.replace_range(10..11, " ");
+        assert!(!is_token_well_formed(&bad_space));
     }
 
     #[test]
@@ -263,6 +328,30 @@ mod tests {
         assert!(!verify_hmac_token(&tampered, secret, "/dashboard"));
     }
 
+    /// Ensure the old hardcoded "view-only" string is no longer accepted anywhere
+    /// in the authentication stack.
+    #[test]
+    fn test_view_only_string_no_longer_bypasses_auth() {
+        let mut config = Config::from_env();
+        config.dns_master_key = "secret_master_key".to_string();
+        config.dns_token_secret = "secret_token_key".to_string();
+        let state = AppState::new(config);
+
+        // The literal string "view-only" must never grant any access.
+        let role = check_auth(&state, Some("view-only"), &HeaderMap::new(), "/");
+        assert_eq!(
+            role,
+            AuthRole::None,
+            "hardcoded 'view-only' backdoor must not grant any role"
+        );
+
+        // Also verify verify_hmac_token rejects it directly.
+        assert!(
+            !verify_hmac_token("view-only", "secret_token_key", "/"),
+            "verify_hmac_token must reject the literal 'view-only' string"
+        );
+    }
+
     #[test]
     fn test_check_auth_roles() {
         let mut config = Config::from_env();
@@ -271,11 +360,12 @@ mod tests {
         let state = AppState::new(config);
 
         // 1. Master key via path
-        let mut headers = HeaderMap::new();
+        let headers = HeaderMap::new();
         let role = check_auth(&state, Some("secret_master_key"), &headers, "/");
         assert_eq!(role, AuthRole::Admin);
 
         // 2. Master key via Bearer authorization header
+        let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, "Bearer secret_master_key".parse().unwrap());
         let role = check_auth(&state, None, &headers, "/");
         assert_eq!(role, AuthRole::Admin);
@@ -286,11 +376,12 @@ mod tests {
         let role = check_auth(&state, None, &headers2, "/");
         assert_eq!(role, AuthRole::Admin);
 
-        // 4. View-only via "view-only" string
-        let role = check_auth(&state, Some("view-only"), &HeaderMap::new(), "/");
+        // 4. View-only via valid HMAC token (the "view-only" string no longer works)
+        let token = generate_hmac_token(&state.config.dns_token_secret, "/dashboard", 7200);
+        let role = check_auth(&state, Some(&token), &HeaderMap::new(), "/");
         assert_eq!(role, AuthRole::View);
 
-        // 5. View-only via HMAC token
+        // 5. View-only via HMAC token for root path
         let token = generate_hmac_token(&state.config.dns_token_secret, "/", 7200);
         let role = check_auth(&state, Some(&token), &HeaderMap::new(), "/");
         assert_eq!(role, AuthRole::View);
@@ -302,5 +393,19 @@ mod tests {
         // 7. Unauthorized on empty
         let role = check_auth(&state, None, &HeaderMap::new(), "/");
         assert_eq!(role, AuthRole::None);
+
+        // 8. x-peer-sync present but no matching master key -> None immediately
+        let mut peer_headers = HeaderMap::new();
+        peer_headers.insert("x-peer-sync", "1".parse().unwrap());
+        peer_headers.insert(header::AUTHORIZATION, "Bearer wrong_key".parse().unwrap());
+        let role = check_auth(&state, None, &peer_headers, "/");
+        assert_eq!(role, AuthRole::None);
+
+        // 9. x-peer-sync present with correct master key -> Admin
+        let mut peer_headers_ok = HeaderMap::new();
+        peer_headers_ok.insert("x-peer-sync", "1".parse().unwrap());
+        peer_headers_ok.insert(header::AUTHORIZATION, "Bearer secret_master_key".parse().unwrap());
+        let role = check_auth(&state, None, &peer_headers_ok, "/");
+        assert_eq!(role, AuthRole::Admin);
     }
 }

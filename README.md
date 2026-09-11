@@ -20,6 +20,8 @@
 
 Engineered to operate with **zero garbage-collection pauses**, AmarDNS indexes over **900,000 malicious domains in just 4 MB of RAM** and delivers sub-millisecond in-memory cache resolutions with automatic upstream hedging.
 
+> **⚠️ TLS Termination Architecture**: AmarDNS processes DNS-over-HTTPS on plain HTTP internally and DNS-over-TLS on raw TCP internally. **TLS encryption is terminated at the edge proxy** (Fly.io Anycast Edge on ports 443/853 via `handlers = ["tls"]` in `fly.toml`). If you deploy outside Fly.io, you **MUST** place a TLS-terminating reverse proxy (e.g. Nginx, Caddy, Traefik) in front. **Never expose port 8080 or 8053 directly to the internet without TLS.**
+
 ---
 
 ## 🚀 Key Architectural Features

@@ -221,13 +221,188 @@ pub fn create_doh_router(state: Arc<AppState>) -> Router {
         // DoH JSON API (RFC 8427) — browser-testable
         .route("/resolve", get(doh_json_handler))
 
+        // Prometheus-compatible metrics scrape endpoint
+        // Requires master key via ?key=<key> or X-Api-Key header (same as other /api endpoints)
+        .route("/metrics", get(prometheus_metrics_handler))
+        .route("/metrics/", get(prometheus_metrics_handler))
+
         .with_state(state)
 }
 
 // ── Root & Status Handlers ──────────────────────────────────────────────────
 
-async fn health_handler() -> &'static str {
-    "OK"
+async fn health_handler(
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    let upstreams = state.upstreams.snapshot();
+    let healthy_upstreams = upstreams
+        .iter()
+        .filter(|u| u.get("healthy").and_then(|h| h.as_bool()).unwrap_or(true))
+        .count();
+    let total_upstreams = upstreams.len();
+
+    // Bloom filter is considered initialized when at least 1 domain is indexed
+    let bloom_ready = state.threat_bloom.read().count() > 0;
+
+    // WAL health: file is writable iff its stats return > 0 byte count or path is accessible
+    let (wal_bytes, _) = state.wal.get_stats();
+    let wal_ok = wal_bytes > 0
+        || std::path::Path::new(state.config.db_path.as_str())
+            .parent()
+            .map(|p| p.exists())
+            .unwrap_or(false);
+
+    let is_healthy = healthy_upstreams > 0 && wal_ok;
+
+    let body = serde_json::json!({
+        "status": if is_healthy { "ok" } else { "degraded" },
+        "upstreams": {
+            "healthy": healthy_upstreams,
+            "total": total_upstreams
+        },
+        "bloomReady": bloom_ready,
+        "walOk": wal_ok,
+    });
+
+    let status = if is_healthy { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    (status, [(header::CONTENT_TYPE, "application/json")], body.to_string()).into_response()
+}
+
+async fn prometheus_metrics_handler(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<DnsQueryParam>,
+    headers: HeaderMap,
+) -> Response {
+    let key_param = params.dns.as_deref().or(params.name.as_deref());
+    let auth = check_auth(&state, key_param, &headers, "/metrics");
+    if !auth.is_admin() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "# Unauthorized: master key required\n",
+        ).into_response();
+    }
+
+    use std::sync::atomic::Ordering;
+    let m = &state.metrics;
+    let reqs     = m.requests.load(Ordering::Relaxed);
+    let hits     = m.cache_hits.load(Ordering::Relaxed);
+    let misses   = m.cache_misses.load(Ordering::Relaxed);
+    let threats  = m.threat_blocks.load(Ordering::Relaxed);
+    let dga      = m.dga_blocks.load(Ordering::Relaxed);
+    let alike    = m.alike_blocks.load(Ordering::Relaxed);
+    let gsb      = m.gsb_blocks.load(Ordering::Relaxed);
+    let rebind   = m.rebind_blocks.load(Ordering::Relaxed);
+    let rep      = m.rep_blocks.load(Ordering::Relaxed);
+    let auto_blk = m.auto_blocks.load(Ordering::Relaxed);
+    let burst    = m.burst_events.load(Ordering::Relaxed);
+    let nx       = m.nx_alarms.load(Ordering::Relaxed);
+    let drifts   = m.answer_drifts.load(Ordering::Relaxed);
+    let dcc      = m.dcc_hits.load(Ordering::Relaxed);
+    let swarm    = m.swarm_alarms.load(Ordering::Relaxed);
+    let dot_q    = m.dot_queries.load(Ordering::Relaxed);
+    let doh_q    = m.doh_queries.load(Ordering::Relaxed);
+    let lat_us   = m.total_lat_micros.load(Ordering::Relaxed);
+    let lat_s1   = m.lat_sub_1ms.load(Ordering::Relaxed);
+    let lat_1_5  = m.lat_1_to_5ms.load(Ordering::Relaxed);
+    let lat_5_15 = m.lat_5_to_15ms.load(Ordering::Relaxed);
+    let lat_1550 = m.lat_15_to_50ms.load(Ordering::Relaxed);
+    let lat_a50  = m.lat_above_50ms.load(Ordering::Relaxed);
+    let fneg     = m.fast_neg_hits.load(Ordering::Relaxed);
+    let swr      = m.swr_serves.load(Ordering::Relaxed);
+    let pfetch_t = m.prefetch_triggers.load(Ordering::Relaxed);
+    let pfetch_h = m.prefetch_hits.load(Ordering::Relaxed);
+    let ttlg     = m.ttl_guard_blocks.load(Ordering::Relaxed);
+    let cname_f  = m.cname_flattened.load(Ordering::Relaxed);
+    let race_w   = m.race_wins.load(Ordering::Relaxed);
+    let sched_b  = m.schedule_blocks.load(Ordering::Relaxed);
+    let rps      = m.get_rps();
+    let rps_peak = m.get_rps_peak();
+    let uptime   = m.uptime_secs();
+    let dropped  = state.wal.dropped_entries.load(Ordering::Relaxed);
+
+    let (cache_len, cache_bytes, _, _) = state.cache.get_stats();
+    let bloom_cnt = state.threat_bloom.read().count();
+    let wl_bloom  = state.whitelist_bloom.read().count();
+    let brain_cyc = state.brain.training_cycles.load(Ordering::Relaxed);
+    let canary_h  = state.canary_hits.load(Ordering::Relaxed);
+
+    let upstreams = state.upstreams.snapshot();
+    let healthy_up = upstreams.iter()
+        .filter(|u| u.get("healthy").and_then(|h| h.as_bool()).unwrap_or(true))
+        .count();
+
+    // Emit Prometheus text exposition format (no external crate needed)
+    let mut out = String::with_capacity(4096);
+    macro_rules! gauge {
+        ($name:expr, $help:expr, $val:expr) => {
+            out.push_str(&format!(
+                "# HELP {0} {1}\n# TYPE {0} gauge\n{0} {2}\n",
+                $name, $help, $val
+            ));
+        };
+    }
+    macro_rules! counter {
+        ($name:expr, $help:expr, $val:expr) => {
+            out.push_str(&format!(
+                "# HELP {0} {1}\n# TYPE {0} counter\n{0}_total {2}\n",
+                $name, $help, $val
+            ));
+        };
+    }
+
+    counter!("amardns_dns_requests",           "Total DNS queries received",             reqs);
+    counter!("amardns_cache_hits",             "DNS cache hits",                         hits);
+    counter!("amardns_cache_misses",           "DNS cache misses",                       misses);
+    counter!("amardns_threat_blocks",          "Domains blocked by threat feed",         threats);
+    counter!("amardns_dga_blocks",             "Domains blocked by DGA heuristic",       dga);
+    counter!("amardns_lookalike_blocks",       "Domains blocked by lookalike detection", alike);
+    counter!("amardns_gsb_blocks",            "Domains blocked by Google Safe Browsing",gsb);
+    counter!("amardns_rebind_blocks",          "DNS rebinding attack blocks",            rebind);
+    counter!("amardns_reputation_blocks",      "Reputation-based blocks",                rep);
+    counter!("amardns_auto_blocks",            "Automated behaviour-based blocks",       auto_blk);
+    counter!("amardns_burst_events",           "Rate-limit burst events",                burst);
+    counter!("amardns_nx_alarms",              "NXDOMAIN burst alarms",                  nx);
+    counter!("amardns_answer_drifts",          "Passive DNS answer drift detections",    drifts);
+    counter!("amardns_dcc_hits",               "Domain correlation chain hits",          dcc);
+    counter!("amardns_swarm_alarms",           "Swarm query pattern alarms",             swarm);
+    counter!("amardns_dot_queries",            "DNS-over-TLS queries received",          dot_q);
+    counter!("amardns_doh_queries",            "DNS-over-HTTPS queries received",        doh_q);
+    counter!("amardns_fast_neg_hits",          "Fast-negative filter cache hits",        fneg);
+    counter!("amardns_swr_serves",             "Stale-while-revalidate cache serves",    swr);
+    counter!("amardns_prefetch_triggers",      "Prefetch triggers fired",                pfetch_t);
+    counter!("amardns_prefetch_hits",          "Prefetch hits (resolved before query)",  pfetch_h);
+    counter!("amardns_ttl_guard_blocks",       "TTL manipulation guard blocks",          ttlg);
+    counter!("amardns_cname_flattened",        "CNAME chains flattened",                 cname_f);
+    counter!("amardns_race_wins",              "Hedged upstream race wins",              race_w);
+    counter!("amardns_schedule_blocks",        "Scheduled-rule blocks",                  sched_b);
+    counter!("amardns_canary_hits",            "Canary domain detection hits",           canary_h);
+    counter!("amardns_wal_dropped_entries",    "WAL entries dropped under backpressure", dropped);
+    counter!("amardns_ai_training_cycles",     "AI brain online training cycles",        brain_cyc);
+    counter!("amardns_latency_micros",         "Total latency accumulated (µs)",         lat_us);
+
+    gauge!("amardns_rps",                      "Current requests per second",            rps);
+    gauge!("amardns_rps_peak",                 "Peak requests per second (lifetime)",    rps_peak);
+    gauge!("amardns_uptime_seconds",           "Server uptime in seconds",               uptime);
+    gauge!("amardns_cache_size",               "Current DNS cache entry count",          cache_len);
+    gauge!("amardns_cache_bytes",              "Current DNS cache memory usage (bytes)", cache_bytes);
+    gauge!("amardns_threat_bloom_domains",     "Threat bloom filter domain count",       bloom_cnt);
+    gauge!("amardns_whitelist_bloom_domains",  "Whitelist bloom filter domain count",    wl_bloom);
+    gauge!("amardns_healthy_upstreams",        "Number of healthy upstream resolvers",   healthy_up);
+
+    // Latency histogram buckets (cumulative)
+    out.push_str("# HELP amardns_latency_bucket DNS resolution latency histogram\n");
+    out.push_str("# TYPE amardns_latency_bucket counter\n");
+    out.push_str(&format!("amardns_latency_bucket{{le=\"1\"}} {}\n",   lat_s1));
+    out.push_str(&format!("amardns_latency_bucket{{le=\"5\"}} {}\n",   lat_s1 + lat_1_5));
+    out.push_str(&format!("amardns_latency_bucket{{le=\"15\"}} {}\n",  lat_s1 + lat_1_5 + lat_5_15));
+    out.push_str(&format!("amardns_latency_bucket{{le=\"50\"}} {}\n",  lat_s1 + lat_1_5 + lat_5_15 + lat_1550));
+    out.push_str(&format!("amardns_latency_bucket{{le=\"+Inf\"}} {}\n",lat_s1 + lat_1_5 + lat_5_15 + lat_1550 + lat_a50));
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        out,
+    ).into_response()
 }
 
 async fn favicon_handler() -> Response {
@@ -261,8 +436,13 @@ async fn dashboard_handler(
     if auth.is_view_or_admin() {
         let fly_machine_id = std::env::var("FLY_MACHINE_ID").unwrap_or_default();
         let fly_region = std::env::var("FLY_REGION").unwrap_or_else(|_| "sin".to_string());
-        let key = if auth.is_admin() { &state.config.dns_master_key } else { "view-only" };
-        Html(render_dashboard(key, &fly_machine_id, &fly_region)).into_response()
+        let view_token = if auth.is_admin() {
+            state.config.dns_master_key.clone()
+        } else {
+            // Generate a fresh 1-hour HMAC view token embedded in the dashboard page
+            crate::security::auth::generate_hmac_token(&state.config.dns_token_secret, "/dashboard", 3600)
+        };
+        Html(render_dashboard(&view_token, &fly_machine_id, &fly_region)).into_response()
     } else {
         Html(GATEWAY_HTML).into_response()
     }
@@ -376,18 +556,7 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
     let (wal_bytes, wal_mb) = state.wal.get_stats();
     let total_records = state.wal.total_records().max((blk_cnt + wl_cnt + cm_cnt) as u64);
 
-    let rss_mb = match std::fs::read_to_string("/proc/self/statm") {
-        Ok(s) => {
-            let parts: Vec<&str> = s.split_whitespace().collect();
-            if parts.len() > 1 {
-                let resident_pages: f64 = parts[1].parse().unwrap_or(0.0);
-                ((resident_pages * 4096.0 / 1_048_576.0) * 10.0).round() / 10.0
-            } else {
-                0.0
-            }
-        }
-        Err(_) => 0.0,
-    };
+    let rss_mb = crate::telemetry::metrics::get_process_rss_mb();
 
     let valid_lats: Vec<u32> = upstreams.iter()
         .filter_map(|u| u.get("latencyMs").and_then(|v| v.as_u64()).map(|v| v as u32))
@@ -415,6 +584,15 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
     let minor = (brain_cycles / 100) % 10;
     let patch = (brain_cycles / 10) % 10;
     let brain_version = format!("{}.{}.{}", major, minor, patch);
+    let brain_mem_bytes = state.brain.memory_bytes();
+    let brain_last_sync = state.brain.last_sync_time.load(Ordering::Relaxed);
+    let now_unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let brain_sync_age = if brain_last_sync > 0 {
+        Some(now_unix.saturating_sub(brain_last_sync))
+    } else {
+        None
+    };
+
     let (neg_cache_size, neg_cache_hits) = state.cache.get_neg_stats();
     let swr_serves = state.metrics.swr_serves.load(Ordering::Relaxed);
     let fast_neg_hits = state.metrics.fast_neg_hits.load(Ordering::Relaxed);
@@ -486,6 +664,13 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
         tb.cmp(&ta)
     });
     hot_domains.truncate(20);
+
+    // Pre-compute values that can't be expressed inside serde_json::json! macro
+    let upstream_last_sync_val: serde_json::Value = {
+        let ts = state.metrics.upstream_last_sync.load(Ordering::Relaxed);
+        if ts > 0 { serde_json::Value::Number(serde_json::Number::from(ts)) }
+        else { serde_json::Value::Null }
+    };
 
     let status = serde_json::json!({
         "isolateId": if fly_machine_id.is_empty() { "local".to_string() } else { fly_machine_id.clone() },
@@ -563,9 +748,10 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "learningCycles": brain_cycles,
             "domainIQSize": domain_iq_size,
             "markovSize": markov_size,
-            "brainSyncBytes": 0u64,
-            "brainSyncAge": 0,
             "brainUptimeSec": uptime_secs,
+            "brainSyncBytes": brain_mem_bytes,
+            "brainMemoryKB": (brain_mem_bytes as f64 / 1024.0).round(),
+            "brainSyncAge": brain_sync_age,
             "autoBlockActive": auto_blocks,
             "threatsBlocked": threats_blocked,
             "alikeBlocks": alike_blocked,
@@ -580,6 +766,7 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "scheduleBlocks": state.metrics.schedule_blocks.load(Ordering::Relaxed),
             "canaryHits": state.canary_hits.load(Ordering::Relaxed),
             "softLimitHits": state.rate_limiter.get_soft_limit_hits(),
+            "blockedCount": state.rate_limiter.get_blocked_count(),
             "passiveDnsCount": state.passive_dns.domain_count(),
             "feedCount": state.feed_manager.list_feeds().len(),
             "abirBlocks": threats_blocked,
@@ -615,7 +802,10 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "gsbOk": state.safe_browsing.is_active(),
             "gsbKeyCount": state.safe_browsing.key_count(),
             "fpSuspicious": state.fingerprint.get_suspicious(),
-            "ttlEvents": { "inflations": 0, "deflations": 0 },
+            "ttlEvents": {
+                "inflations": state.metrics.ttl_guard_blocks.load(Ordering::Relaxed),
+                "deflations": 0u64
+            },
             "fpEvents": state.fingerprint.total_events(),
             "configDecisions": state.config_decisions.read().clone(),
             "decisionsMade": state.brain.decisions_made.load(Ordering::Relaxed),
@@ -638,16 +828,19 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "raceSlots": 2,
             "cbWindow": 50,
             "cbThreshold": 0.45,
-            "storageEngine": "PulseDB (SuffixTrie WAL) + AeroCache (S3-FIFO)",
+            "storageEngine": "PulseDB (WAL) + AeroCache (W-TinyLFU)",
             "dnsMode": if is_priv { "private" } else { "public" },
             "blockingEnabled": state.blocking_enabled.load(Ordering::Relaxed),
             "hmacAuth": !state.config.dns_token_secret.is_empty(),
             "upstreamAuraPrioritization": true,
             "upstreamCandidates": upstreams.len(),
-            "upstreamLastSync": serde_json::Value::Null
+            "upstreamLastSync": upstream_last_sync_val
         },
         "intelligence": {
-            "cfgOverride": serde_json::json!({}),
+            "cfgOverride": serde_json::json!({
+                "blockingEnabled": state.blocking_enabled.load(Ordering::Relaxed),
+                "ttlGuardEnabled": state.ttl_guard_enabled.load(Ordering::Relaxed)
+            }),
             "configMode": "ai",
             "incidentActive": stress > 0.8,
             "incident": if stress > 0.8 {
@@ -688,17 +881,17 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "unhealthyUpstreams": open_cb_count,
             "recentActions": state.recent_actions.read().clone(),
             "recentAnomalies": state.recent_anomalies.read().clone(),
-            "selfHealActions": state.recent_actions.read().clone(),
             "panicCount": 0,
-            "authFails": 0,
-            "emergencyMode": false,
+            "authFails": state.metrics.auth_fails.load(Ordering::Relaxed),
+            "emergencyMode": rss_mb >= 175.0,
             "dailyLimits": "None (Uncapped Dedicated)",
-            "throttled": false,
+            "throttled": state.rate_limiter.get_blocked_count() > 0,
             "gcCycles": 0,
-            "memPressure": false
+            "memPressure": rss_mb >= 140.0
         },
         "storage": {
-            "engine": "PulseDB + AeroCache",
+            "engine": "PulseDB (WAL) + AeroCache (W-TinyLFU)",
+            "cacheEngine": "AeroCache (W-TinyLFU)",
             "db": {
                 "totalRecords": total_records,
                 "blocklistDomains": blk_cnt,
@@ -762,7 +955,7 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
                 "totalSyncedDomains": state.feed_manager.total_synced_domains.load(Ordering::Relaxed)
             },
             "cacheCompression": {
-                "engine": "zstd level-1",
+                "engine": "Direct Wire Format (Zero-Copy Raw Wire)",
                 "ratio": format!("{:.1}%", state.cache.compression_ratio())
             },
             "canary": {
@@ -774,7 +967,8 @@ fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
                 "trackedDomains": state.ttl_learner.domain_count()
             },
             "rateLimiter": {
-                "softLimitHits": state.rate_limiter.get_soft_limit_hits()
+                "softLimitHits": state.rate_limiter.get_soft_limit_hits(),
+                "blockedCount": state.rate_limiter.get_blocked_count()
             }
         },
         "upstreams": upstreams,
@@ -2046,7 +2240,7 @@ async fn dga_test(
             "brandSquattingRisk": (features[6] * 100.0).round() / 100.0,
             "domainIqHistory": (features[7] * 100.0).round() / 100.0,
         },
-        "score": if is_blocked { ((neural_score * 100.0).round() as u32).max(88) } else { ((neural_score * 100.0).round() as u32).min(25) }
+        "score": (neural_score * 100.0).clamp(0.0, 100.0).round() as u32
     }))
 }
 
@@ -2422,6 +2616,47 @@ async fn ai_prune_key(
 
 // ── DNS Query Handlers (DoH) ────────────────────────────────────────────────
 
+pub fn extract_client_ip(headers: &HeaderMap, peer_addr: SocketAddr) -> IpAddr {
+    if let Some(fly_ip) = headers.get("fly-client-ip")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.trim().parse::<IpAddr>().ok())
+    {
+        return fly_ip;
+    }
+
+    if let Some(cf_ip) = headers.get("cf-connecting-ip")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.trim().parse::<IpAddr>().ok())
+    {
+        return cf_ip;
+    }
+
+    if let Some(real_ip) = headers.get("x-real-ip")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.trim().parse::<IpAddr>().ok())
+    {
+        return real_ip;
+    }
+
+    let peer_ip = peer_addr.ip();
+    let is_peer_private = match peer_ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00,
+    };
+
+    if is_peer_private {
+        if let Some(xff) = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()) {
+            for part in xff.rsplit(',') {
+                if let Ok(ip) = part.trim().parse::<IpAddr>() {
+                    return ip;
+                }
+            }
+        }
+    }
+
+    peer_ip
+}
+
 async fn doh_post_handler(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -2429,14 +2664,16 @@ async fn doh_post_handler(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let client_ip = headers.get("fly-client-ip")
-        .or_else(|| headers.get("x-forwarded-for"))
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .and_then(|s| s.trim().parse::<IpAddr>().ok())
-        .unwrap_or_else(|| addr.ip());
+    let client_ip = extract_client_ip(&headers, addr);
 
-    if !state.rate_limiter.check(client_ip) {
+    let dev_ref = params.device.as_deref()
+        .or(params.client.as_deref())
+        .or_else(|| headers.get("x-device-id").and_then(|h| h.to_str().ok()));
+
+    // Rate limit with composite identity (IP + device ID).
+    // Each device behind a router/NAT gets its own independent token bucket,
+    // while the per-IP ceiling prevents fake device-ID flooding attacks.
+    if !state.check_rate_limit(client_ip, dev_ref) {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded").into_response();
     }
 
@@ -2448,10 +2685,6 @@ async fn doh_post_handler(
             return (StatusCode::FORBIDDEN, "Private DNS mode: Authentication or device ID required").into_response();
         }
     }
-
-    let dev_ref = params.device.as_deref()
-        .or(params.client.as_deref())
-        .or_else(|| headers.get("x-device-id").and_then(|h| h.to_str().ok()));
 
     process_dns_query(state, &body, client_ip, dev_ref, "DoH (POST)").await
 }
@@ -2462,14 +2695,15 @@ async fn doh_get_handler(
     headers: HeaderMap,
     Query(params): Query<DnsQueryParam>,
 ) -> Response {
-    let client_ip = headers.get("fly-client-ip")
-        .or_else(|| headers.get("x-forwarded-for"))
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .and_then(|s| s.trim().parse::<IpAddr>().ok())
-        .unwrap_or_else(|| addr.ip());
+    let client_ip = extract_client_ip(&headers, addr);
 
-    if !state.rate_limiter.check(client_ip) {
+    let dev_ref = params.device.as_deref()
+        .or(params.client.as_deref())
+        .or_else(|| headers.get("x-device-id").and_then(|h| h.to_str().ok()));
+
+    // Rate limit with composite identity (IP + device ID).
+    // Each device behind a router/NAT gets its own independent token bucket.
+    if !state.check_rate_limit(client_ip, dev_ref) {
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded").into_response();
     }
 
@@ -2481,10 +2715,6 @@ async fn doh_get_handler(
             return (StatusCode::FORBIDDEN, "Private DNS mode: Authentication or device ID required").into_response();
         }
     }
-
-    let dev_ref = params.device.as_deref()
-        .or(params.client.as_deref())
-        .or_else(|| headers.get("x-device-id").and_then(|h| h.to_str().ok()));
 
     let wire_bytes = if let Some(base64_dns) = params.dns {
         let clean = base64_dns.replace('-', "+").replace('_', "/");
@@ -2585,6 +2815,16 @@ async fn process_dns_query(state: Arc<AppState>, query_wire: &[u8], client_ip: I
         state.record_detected_block(&q.name, reason);
         state.fingerprint.record_response(client_ip, 3);
         state.fingerprint.flag_client(client_ip, reason, &q.name);
+        // rep_blocks: count when a block event flags the client's reputation profile
+        state.metrics.rep_blocks.fetch_add(1, Ordering::Relaxed);
+        // auto_blocks: count AI/neural/heuristic auto-detected blocks
+        if matches!(reason, "neural_brain_block" | "dga_threat" | "lookalike_threat" | "ai_block") {
+            state.metrics.auto_blocks.fetch_add(1, Ordering::Relaxed);
+        }
+        // alike_blocks: specifically brand-lookalike threats
+        if reason == "lookalike_threat" {
+            state.metrics.alike_blocks.fetch_add(1, Ordering::Relaxed);
+        }
         state.wal.append_threat_event(&q.name, reason, log_id);
         state.wal.append_query(&q.name, q.qtype, log_id, 3, 0, "BLOCKED");
         state.log_query(&q.name, q.qtype, log_id, proto, "BLOCKED", 3, 0, reason, "Filter");
@@ -2600,7 +2840,36 @@ async fn process_dns_query(state: Arc<AppState>, query_wire: &[u8], client_ip: I
             .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
     }
 
-    // 1. AeroCache Negative Cache Lookup (Strictly bypassed if domain or parent is whitelisted/exempt)
+    // Swarm detection: runs in a detached background task so the Mutex write lock
+    // NEVER stalls the DNS hot path. Swarm alarms are telemetry, not blocking decisions.
+    {
+        let state2 = state.clone();
+        let domain_clone = q.name.clone();
+        let ip_str = client_ip.to_string();
+        tokio::spawn(async move {
+            if state2.metrics.detect_swarm(&domain_clone, &ip_str) {
+                state2.metrics.swarm_alarms.fetch_add(1, Ordering::Relaxed);
+                state2.log_anomaly("swarm_flood", &format!(
+                    "Swarm burst: {} queried by many clients simultaneously", domain_clone
+                ));
+            }
+        });
+    }
+
+    // DCC / Category hits: detect C2, miner, and tracker category domains (lock-free, pure computation)
+    {
+        let name_bytes = q.name.as_bytes();
+        let is_c2 = q.name.contains(".onion") || q.name.contains("c2.") || q.name.contains("cnc.")
+            || q.name.contains("bot.") || q.name.contains("beacon.") || q.name.contains(".tk")
+            || q.name.contains("miner") || q.name.contains("xmr.") || q.name.contains("crypto-pool")
+            || (q.name.ends_with(".ru.") || q.name.ends_with(".ru"))
+                && name_bytes.len() > 20
+                && crate::security::heuristics::is_dga_threat(&q.name);
+        if is_c2 {
+            state.metrics.dcc_hits.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     if !state.is_exempt(&q.name) && state.cache.get_negative(&q.name).await {
         state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
         let (feats, ent) = state.brain.extract_features(&q.name);
@@ -2720,11 +2989,21 @@ async fn process_dns_query(state: Arc<AppState>, query_wire: &[u8], client_ip: I
             let ips = crate::dns::parser::extract_a_records(&upstream_resp);
             if !ips.is_empty() {
                 if let Some(drift) = state.passive_dns.record(&q.name, &ips) {
+                    // Increment the answer_drifts counter — this is what the dashboard shows
+                    state.metrics.answer_drifts.fetch_add(1, Ordering::Relaxed);
                     state.log_anomaly("passive_dns_drift", &format!(
                         "IP change detected for {}: {:?} -> {:?}", q.name, drift, ips
                     ));
                 }
             }
+        }
+
+        // NX alarm detection: detect client IP generating many NX responses (C2 DGA storm)
+        if rcode == 3 && state.metrics.detect_nx_burst(&client_ip.to_string()) {
+            state.metrics.nx_alarms.fetch_add(1, Ordering::Relaxed);
+            state.log_anomaly("nx_alarm", &format!(
+                "NX domain burst detected from client {} — possible DGA/C2 scanner", client_ip
+            ));
         }
 
         // Feature 6: TTL Manipulation Guard — detect fast-flux botnets (extremely low TTL + DGA pattern)
@@ -3366,6 +3645,7 @@ fn parse_qtype_param(t: Option<&str>) -> u16 {
 async fn doh_json_handler(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Query(params): Query<DohJsonParams>,
 ) -> Response {
     let domain = match params.name {
@@ -3387,7 +3667,7 @@ async fn doh_json_handler(
 
     let qtype = parse_qtype_param(params.r#type.as_deref());
     let clean_domain = domain.trim_end_matches('.').to_string();
-    let client_ip = addr.ip();
+    let client_ip = extract_client_ip(&headers, addr);
     let query_start = std::time::Instant::now();
     let _log_id = state.metrics.requests.fetch_add(1, Ordering::Relaxed);
     state.metrics.doh_queries.fetch_add(1, Ordering::Relaxed);
@@ -3497,3 +3777,49 @@ async fn doh_json_handler(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+    use std::net::{Ipv4Addr, SocketAddrV4};
+
+    #[test]
+    fn test_extract_client_ip_direct_peer() {
+        let headers = HeaderMap::new();
+        let peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 5), 5353));
+        assert_eq!(extract_client_ip(&headers, peer), IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5)));
+    }
+
+    #[test]
+    fn test_extract_client_ip_fly_and_cf() {
+        let mut headers = HeaderMap::new();
+        let peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 8080));
+
+        headers.insert("fly-client-ip", HeaderValue::from_static("198.51.100.1"));
+        assert_eq!(extract_client_ip(&headers, peer), IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1)));
+
+        headers.remove("fly-client-ip");
+        headers.insert("cf-connecting-ip", HeaderValue::from_static("198.51.100.2"));
+        assert_eq!(extract_client_ip(&headers, peer), IpAddr::V4(Ipv4Addr::new(198, 51, 100, 2)));
+
+        headers.remove("cf-connecting-ip");
+        headers.insert("x-real-ip", HeaderValue::from_static("198.51.100.3"));
+        assert_eq!(extract_client_ip(&headers, peer), IpAddr::V4(Ipv4Addr::new(198, 51, 100, 3)));
+    }
+
+    #[test]
+    fn test_extract_client_ip_xff_private_vs_public_peer() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("1.2.3.4, 198.51.100.4"));
+
+        // When direct peer is a private reverse proxy (e.g. 10.0.0.2), trust XFF
+        let private_peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 2), 8080));
+        assert_eq!(extract_client_ip(&headers, private_peer), IpAddr::V4(Ipv4Addr::new(198, 51, 100, 4)));
+
+        // When direct peer is a public IP (e.g. 203.0.113.9), do NOT trust unauthenticated XFF (anti-spoofing)
+        let public_peer = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 9), 5353));
+        assert_eq!(extract_client_ip(&headers, public_peer), IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9)));
+    }
+}
+

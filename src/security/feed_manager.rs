@@ -91,9 +91,12 @@ impl FeedManager {
         }
     }
 
-    /// Parses domains from raw feed content based on format.
-    pub fn parse_domains(content: &str, format: &FeedFormat) -> Vec<String> {
-        let mut domains = Vec::new();
+    /// Streams domains from raw feed content into a callback with zero intermediate Vec allocation.
+    pub fn for_each_domain<F>(content: &str, format: &FeedFormat, mut callback: F) -> u64
+    where
+        F: FnMut(&str),
+    {
+        let mut count = 0u64;
         for line in content.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
@@ -106,7 +109,8 @@ impl FeedManager {
                     if parts.len() >= 2 {
                         let domain = parts[1].trim().to_ascii_lowercase();
                         if is_valid_domain(&domain) && domain != "localhost" {
-                            domains.push(domain);
+                            callback(&domain);
+                            count += 1;
                         }
                     }
                 }
@@ -115,7 +119,8 @@ impl FeedManager {
                     let domain = domain.trim_start_matches("127.0.0.1").trim();
                     let domain = domain.trim_end_matches('.');
                     if is_valid_domain(domain) {
-                        domains.push(domain.to_string());
+                        callback(domain);
+                        count += 1;
                     }
                 }
                 FeedFormat::AdblockPlus => {
@@ -124,14 +129,23 @@ impl FeedManager {
                         let domain = inner.split('^').next().unwrap_or("").trim();
                         let domain = domain.to_ascii_lowercase();
                         if is_valid_domain(&domain) {
-                            domains.push(domain);
+                            callback(&domain);
+                            count += 1;
                         }
                     }
                 }
             }
         }
+        count
+    }
+
+    /// Parses domains from raw feed content based on format.
+    pub fn parse_domains(content: &str, format: &FeedFormat) -> Vec<String> {
+        let mut domains = Vec::new();
+        Self::for_each_domain(content, format, |d| domains.push(d.to_string()));
         domains
     }
+
 
     pub fn list_feeds(&self) -> Vec<FeedSubscription> {
         self.feeds.read().clone()

@@ -5,7 +5,7 @@ const MAX_SAMPLES: usize = 20;
 const EMA_ALPHA: f64 = 0.3; // weight for new observations
 const MIN_SMART_TTL: u32 = 10;
 const MAX_SMART_TTL: u32 = 3600;
-const MAX_LEARNED_DOMAINS: usize = 10_000; // Cap to prevent memory leaks in TTL learner
+const MAX_LEARNED_DOMAINS: usize = 5_000; // 5k domains × ~200 bytes = ~1 MB max
 
 struct TtlStats {
     samples: VecDeque<u32>,

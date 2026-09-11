@@ -149,11 +149,10 @@ impl AppState {
             whitelist.insert(s);
         }
     }
-
     pub fn new(config: Config) -> Self {
         let wal = WalStorage::new(&config.db_path);
         let (raw_blocklist, raw_whitelist, raw_common) = wal.load_lists();
-        let is_private = config.dns_access_mode.to_lowercase() == "private";
+        let is_private = config.access_mode_is_private();
         let now = SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -204,9 +203,9 @@ impl AppState {
             custom_blocklist: RwLock::new(custom_blocklist),
             custom_whitelist: RwLock::new(custom_whitelist),
             custom_common: RwLock::new(custom_common),
-            cache: DnsCache::new(250_000),
+            cache: DnsCache::new(150_000), // 150k entries ≈ 70-100 MB — dynamic expansion, governed under 200 MB hard cap
             upstreams: UpstreamPool::new(),
-            rate_limiter: RateLimiter::new(100.0, 50.0), // 100 capacity, 50/sec refill
+            rate_limiter: RateLimiter::new(100.0, 50.0, 500.0, 200.0), // 100 capacity, 50/sec refill; 500 IP ceiling, 200/sec refill
             metrics: Metrics::new(),
             wal,
             safe_browsing,
@@ -223,7 +222,7 @@ impl AppState {
             expected_whitelist_total: AtomicUsize::new(0),
             feed_overlap_count: AtomicUsize::new(0),
             fast_neg_filter: moka::sync::Cache::builder()
-                .max_capacity(20_000)
+                .max_capacity(20_000)  // 20k fast negative-cache entries ≈ 4 MB
                 .time_to_live(std::time::Duration::from_secs(60))
                 .build(),
             passive_dns: PassiveDnsStore::new(),
@@ -258,8 +257,9 @@ impl AppState {
             action: action.to_string(),
             reason: reason.to_string(),
         });
+        // Cap at 100, drain to 60 when full
         if guard.len() > 100 {
-            guard.drain(0..50);
+            guard.drain(0..40);
         }
     }
 
@@ -274,8 +274,9 @@ impl AppState {
             anomaly_type: anomaly_type.to_string(),
             err: err.to_string(),
         });
+        // Cap at 100, drain to 60 when full
         if guard.len() > 100 {
-            guard.drain(0..50);
+            guard.drain(0..40);
         }
     }
 
@@ -313,8 +314,9 @@ impl AppState {
             reason: reason.to_string(),
             upstream: upstream.to_string(),
         });
-        if guard.len() > 300 {
-            guard.drain(0..100);
+        // Cap at 150 entries (~52 KB), drain to 75 when full
+        if guard.len() > 150 {
+            guard.drain(0..75);
         }
         // Feature 8: Broadcast to live SSE stream subscribers (non-blocking)
         if self.log_broadcaster.receiver_count() > 0 {
@@ -716,7 +718,8 @@ impl AppState {
             return;
         }
         let mut guard = self.custom_whitelist.write();
-        if guard.len() < 1000 && !guard.contains(&clean) {
+        // Cap at 500 to prevent memory growth from auto-whitelisting
+        if guard.len() < 500 && !guard.contains(&clean) {
             guard.insert(clean);
         }
     }
@@ -749,7 +752,8 @@ impl AppState {
         let hour = ((now_sec / 3600) % 24) as usize;
 
         let mut guard = self.heatmap.write();
-        if guard.len() >= 2000 && !guard.contains_key(&clean) {
+        // Cap heatmap at 1000 domains to limit memory usage; evict oldest if over
+        if guard.len() >= 1000 && !guard.contains_key(&clean) {
             if let Some(first_key) = guard.keys().next().cloned() {
                 guard.remove(&first_key);
             }
@@ -775,7 +779,8 @@ impl AppState {
             return;
         }
         let mut guard = self.custom_blocklist.write();
-        if guard.len() >= 1000 && !guard.contains_key(&clean) {
+        // Cap auto-detected blocks at 500 to limit memory growth
+        if guard.len() >= 500 && !guard.contains_key(&clean) {
             return;
         }
         let now = SystemTime::now()
@@ -799,6 +804,14 @@ impl AppState {
             auto,
             created_at: now,
         });
+    }
+
+    /// Convenience wrapper for the DNS hot-path: checks the rate limiter with an optional
+    /// device/client identity hint. Always returns `true` in the current implementation
+    /// (AmarDNS never hard-blocks), but calling this instead of `rate_limiter.check` directly
+    /// keeps a single call-site for future per-identity throttling.
+    pub fn check_rate_limit(&self, ip: std::net::IpAddr, identity: Option<&str>) -> bool {
+        self.rate_limiter.check_with_identity(ip, identity)
     }
 }
 

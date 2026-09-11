@@ -4,13 +4,19 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::dns::parser::{build_blocked_response, build_servfail_response, parse_dns_query};
 use crate::state::AppState;
 
-const DOT_IDLE_TIMEOUT: Duration = Duration::from_secs(25);
-const DOT_READ_TIMEOUT: Duration = Duration::from_secs(5);
+// RFC 7858 Section 3.4: server SHOULD close after 25s idle.
+// We use 15s to ensure we always close BEFORE Fly.io's 30s TCP backhaul limit,
+// eliminating the 'unexpected end of file' race where Fly kills the backhaul first.
+const DOT_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
+// Allow 8s for slow upstream resolvers. The 'Broken pipe' error occurs when the
+// client times out (usually 5s) before we can write the response.
+const DOT_READ_TIMEOUT: Duration = Duration::from_secs(8);
+const DOT_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// DNS-over-TLS (DoT, RFC 7858) internal backend listener.
 ///
@@ -57,10 +63,24 @@ pub async fn start_dot_server(
 
 async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, state: Arc<AppState>) {
     let _ = socket.set_nodelay(true);
+
+    // TCP keepalive via socket2: probes after 10s idle, every 5s.
+    // Keeps Fly.io's TCP backhaul alive on idle DoT connections,
+    // preventing the 'unexpected end of file' race with Fly's 30s idle timeout.
+    {
+        use socket2::{SockRef, TcpKeepalive};
+        let sock_ref = SockRef::from(&socket);
+        let ka = TcpKeepalive::new()
+            .with_time(std::time::Duration::from_secs(10))
+            .with_interval(std::time::Duration::from_secs(5));
+        let _ = sock_ref.set_tcp_keepalive(&ka);
+    }
+
     let client_ip = client_addr.ip();
 
-    // Check rate limiter (private/internal Fly.io proxy IPs are automatically exempt)
-    if !state.rate_limiter.check(client_ip) {
+    // Check rate limiter (private/internal Fly.io proxy IPs are automatically exempt).
+    // DoT has no per-device identity; rate limiting is per source IP.
+    if !state.check_rate_limit(client_ip, None) {
         let _ = socket.shutdown().await;
         return;
     }
@@ -106,8 +126,9 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
             break;
         }
 
-        // Per-query rate limit check to prevent pipelined connection flooding over persistent TCP
-        if !state.rate_limiter.check(client_ip) {
+        // Per-query rate limit check to prevent pipelined connection flooding over persistent TCP.
+        // DoT has no per-device identity token; enforced at IP level.
+        if !state.check_rate_limit(client_ip, None) {
             let fail = build_servfail_response(&buf[..msg_len]);
             let _ = send_length_prefixed(&mut socket, &fail).await;
             let _ = socket.shutdown().await;
@@ -411,10 +432,37 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
     let _ = socket.shutdown().await;
 }
 
+/// Writes a RFC 7858 length-prefixed DNS response with a 5s write timeout.
+/// Returns Ok(()) on success. Translates BrokenPipe and ConnectionReset to
+/// debug-level events — these mean the client already closed the connection
+/// (normal for Android Private DNS and iOS DoT clients).
 async fn send_length_prefixed(socket: &mut TcpStream, data: &[u8]) -> Result<(), std::io::Error> {
     let len = data.len() as u16;
-    socket.write_all(&len.to_be_bytes()).await?;
-    socket.write_all(data).await?;
-    socket.flush().await?;
-    Ok(())
+    let write_fut = async {
+        socket.write_all(&len.to_be_bytes()).await?;
+        socket.write_all(data).await?;
+        socket.flush().await?;
+        Ok::<(), std::io::Error>(())
+    };
+
+    match tokio::time::timeout(DOT_WRITE_TIMEOUT, write_fut).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => {
+            match e.kind() {
+                std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset => {
+                    // Client closed connection before we could write — normal for DoT clients
+                    debug!("[dot] Client closed connection before response: {}", e);
+                }
+                _ => {
+                    debug!("[dot] Write error: {}", e);
+                }
+            }
+            Err(e)
+        }
+        Err(_) => {
+            // Write timed out — client is unresponsive
+            debug!("[dot] Write timeout — client unresponsive");
+            Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "write timeout"))
+        }
+    }
 }

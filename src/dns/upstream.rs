@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,7 +22,7 @@ pub struct UpstreamNode {
     pub pulls: AtomicU64,
     pub successes: AtomicU64,
     pub consecutive_successes: AtomicU64,
-    pub recent_latencies: parking_lot::RwLock<Vec<u32>>,
+    pub recent_latencies: parking_lot::RwLock<VecDeque<u32>>,
 }
 
 impl UpstreamNode {
@@ -35,7 +36,7 @@ impl UpstreamNode {
             pulls: AtomicU64::new(0),
             successes: AtomicU64::new(0),
             consecutive_successes: AtomicU64::new(0),
-            recent_latencies: parking_lot::RwLock::new(Vec::with_capacity(30)),
+            recent_latencies: parking_lot::RwLock::new(VecDeque::with_capacity(30)),
         }
     }
 
@@ -59,9 +60,9 @@ impl UpstreamNode {
 
         let mut rec = self.recent_latencies.write();
         if rec.len() >= 30 {
-            rec.remove(0);
+            rec.pop_front();
         }
-        rec.push(latency.max(1));
+        rec.push_back(latency.max(1));
     }
 
     pub fn record_error(&self) {
@@ -72,14 +73,14 @@ impl UpstreamNode {
     pub fn get_percentiles(&self) -> (u32, u32, u32) {
         let rec = self.recent_latencies.read();
         if rec.len() >= 4 {
-            let mut sorted = rec.clone();
+            let mut sorted: Vec<u32> = rec.iter().copied().collect();
             sorted.sort_unstable();
             let p50 = sorted[sorted.len() / 2];
             let p95_idx = ((sorted.len() as f64 * 0.95).round() as usize).min(sorted.len() - 1);
             let p99_idx = ((sorted.len() as f64 * 0.99).round() as usize).min(sorted.len() - 1);
             (p50, sorted[p95_idx], sorted[p99_idx])
         } else if !rec.is_empty() {
-            let mut sorted = rec.clone();
+            let mut sorted: Vec<u32> = rec.iter().copied().collect();
             sorted.sort_unstable();
             let p50 = sorted[sorted.len() / 2];
             let p95 = sorted[sorted.len() - 1];
@@ -117,6 +118,56 @@ pub struct UpstreamPool {
 }
 
 impl UpstreamPool {
+    pub fn default_upstreams_config() -> Vec<UpstreamConfig> {
+        vec![
+            UpstreamConfig {
+                provider: "Cloudflare".to_string(),
+                url: "https://cloudflare-dns.com/dns-query".to_string(),
+                aura: "high".to_string(),
+            },
+            UpstreamConfig {
+                provider: "Cloudflare (1.1.1.1)".to_string(),
+                url: "https://1.1.1.1/dns-query".to_string(),
+                aura: "high".to_string(),
+            },
+            UpstreamConfig {
+                provider: "Cloudflare (1.0.0.1)".to_string(),
+                url: "https://1.0.0.1/dns-query".to_string(),
+                aura: "high".to_string(),
+            },
+            UpstreamConfig {
+                provider: "Google DNS".to_string(),
+                url: "https://dns.google/dns-query".to_string(),
+                aura: "high".to_string(),
+            },
+            UpstreamConfig {
+                provider: "Google (8.8.8.8)".to_string(),
+                url: "https://8.8.8.8/dns-query".to_string(),
+                aura: "high".to_string(),
+            },
+            UpstreamConfig {
+                provider: "Google (8.8.4.4)".to_string(),
+                url: "https://8.8.4.4/dns-query".to_string(),
+                aura: "high".to_string(),
+            },
+            UpstreamConfig {
+                provider: "Quad9".to_string(),
+                url: "https://dns.quad9.net/dns-query".to_string(),
+                aura: "high".to_string(),
+            },
+            UpstreamConfig {
+                provider: "OpenDNS".to_string(),
+                url: "https://doh.opendns.com/dns-query".to_string(),
+                aura: "medium".to_string(),
+            },
+            UpstreamConfig {
+                provider: "AdGuard".to_string(),
+                url: "https://dns.adguard-dns.com/dns-query".to_string(),
+                aura: "medium".to_string(),
+            },
+        ]
+    }
+
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(3000))
@@ -131,53 +182,10 @@ impl UpstreamPool {
             .build()
             .unwrap_or_default();
 
-        let default_upstreams = vec![
-            Arc::new(UpstreamNode::new(UpstreamConfig {
-                provider: "Cloudflare".to_string(),
-                url: "https://cloudflare-dns.com/dns-query".to_string(),
-                aura: "high".to_string(),
-            })),
-            Arc::new(UpstreamNode::new(UpstreamConfig {
-                provider: "Cloudflare (1.1.1.1)".to_string(),
-                url: "https://1.1.1.1/dns-query".to_string(),
-                aura: "high".to_string(),
-            })),
-            Arc::new(UpstreamNode::new(UpstreamConfig {
-                provider: "Cloudflare (1.0.0.1)".to_string(),
-                url: "https://1.0.0.1/dns-query".to_string(),
-                aura: "high".to_string(),
-            })),
-            Arc::new(UpstreamNode::new(UpstreamConfig {
-                provider: "Google DNS".to_string(),
-                url: "https://dns.google/dns-query".to_string(),
-                aura: "high".to_string(),
-            })),
-            Arc::new(UpstreamNode::new(UpstreamConfig {
-                provider: "Google (8.8.8.8)".to_string(),
-                url: "https://8.8.8.8/dns-query".to_string(),
-                aura: "high".to_string(),
-            })),
-            Arc::new(UpstreamNode::new(UpstreamConfig {
-                provider: "Google (8.8.4.4)".to_string(),
-                url: "https://8.8.4.4/dns-query".to_string(),
-                aura: "high".to_string(),
-            })),
-            Arc::new(UpstreamNode::new(UpstreamConfig {
-                provider: "Quad9".to_string(),
-                url: "https://dns.quad9.net/dns-query".to_string(),
-                aura: "high".to_string(),
-            })),
-            Arc::new(UpstreamNode::new(UpstreamConfig {
-                provider: "OpenDNS".to_string(),
-                url: "https://doh.opendns.com/dns-query".to_string(),
-                aura: "medium".to_string(),
-            })),
-            Arc::new(UpstreamNode::new(UpstreamConfig {
-                provider: "AdGuard".to_string(),
-                url: "https://dns.adguard-dns.com/dns-query".to_string(),
-                aura: "medium".to_string(),
-            })),
-        ];
+        let default_upstreams = Self::default_upstreams_config()
+            .into_iter()
+            .map(|cfg| Arc::new(UpstreamNode::new(cfg)))
+            .collect();
 
         Self {
             client,
@@ -425,19 +433,38 @@ impl UpstreamPool {
         }
     }
 
-    /// Syncs upstream list from CDN, probes candidates concurrently, and ranks top 9 (3xN pool)
+    /// Syncs upstream list (optionally from UPSTREAM_DNS_CONFIG_URL), probes candidates concurrently, and ranks top 9 (3xN pool)
     pub async fn sync_and_rank(&self) -> Result<usize, String> {
-        let cdn_url = "https://cdn.jsdelivr.net/gh/abir614/-@latest/dns-upstream.json";
-        let resp = self.client.get(cdn_url).send().await.map_err(|e| e.to_string())?;
-        if !resp.status().is_success() {
-            return Err(format!("CDN returned HTTP {}", resp.status()));
-        }
+        let mut cfgs = Self::default_upstreams_config();
 
-        let payload: UpstreamPayload = resp.json().await.map_err(|e| e.to_string())?;
-        let cfgs = match payload {
-            UpstreamPayload::Wrapped { dns_over_https } => dns_over_https,
-            UpstreamPayload::Direct(list) => list,
-        };
+        if let Ok(custom_url) = std::env::var("UPSTREAM_DNS_CONFIG_URL") {
+            let trimmed = custom_url.trim();
+            if !trimmed.is_empty() {
+                match self.client.get(trimmed).send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        if let Ok(payload) = resp.json::<UpstreamPayload>().await {
+                            let fetched = match payload {
+                                UpstreamPayload::Wrapped { dns_over_https } => dns_over_https,
+                                UpstreamPayload::Direct(list) => list,
+                            };
+                            let valid_fetched: Vec<_> = fetched
+                                .into_iter()
+                                .filter(|c| c.url.starts_with("https://"))
+                                .collect();
+                            if !valid_fetched.is_empty() {
+                                cfgs = valid_fetched;
+                            }
+                        }
+                    }
+                    Ok(resp) => {
+                        tracing::warn!("[upstream] Custom upstream URL returned HTTP {}; using default upstreams", resp.status());
+                    }
+                    Err(e) => {
+                        tracing::warn!("[upstream] Failed to fetch custom upstreams from {}: {}; using default upstreams", trimmed, e);
+                    }
+                }
+            }
+        }
 
         // Probe packet: query for cloudflare.com A record
         const PROBE_PACKET: &[u8] = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\ncloudflare\x03com\x00\x00\x01\x00\x01";
@@ -497,7 +524,7 @@ impl UpstreamPool {
                     pulls: AtomicU64::new(1),
                     successes: AtomicU64::new(if ok { 1 } else { 0 }),
                     consecutive_successes: AtomicU64::new(if ok { 1 } else { 0 }),
-                    recent_latencies: parking_lot::RwLock::new(if ok { vec![latency] } else { vec![] }),
+                    recent_latencies: parking_lot::RwLock::new(if ok { VecDeque::from([latency]) } else { VecDeque::new() }),
                 };
                 (ok, node)
             }));
@@ -745,3 +772,56 @@ fn to_base64_url(input: &[u8]) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_to_base64_url() {
+        assert_eq!(to_base64_url(b""), "");
+        assert_eq!(to_base64_url(b"f"), "Zg");
+        assert_eq!(to_base64_url(b"fo"), "Zm8");
+        assert_eq!(to_base64_url(b"foo"), "Zm9v");
+        assert_eq!(to_base64_url(b"foob"), "Zm9vYg");
+        assert_eq!(to_base64_url(b"fooba"), "Zm9vYmE");
+        assert_eq!(to_base64_url(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn test_upstream_node_metrics_and_healing() {
+        let node = UpstreamNode::new(UpstreamConfig {
+            provider: "TestProvider".to_string(),
+            url: "https://test.local/dns-query".to_string(),
+            aura: "high".to_string(),
+        });
+
+        assert_eq!(node.aura_rank(), 3);
+
+        // Record error
+        node.record_error();
+        assert_eq!(node.errors.load(Ordering::Relaxed), 1);
+        assert_eq!(node.consecutive_successes.load(Ordering::Relaxed), 0);
+
+        // Record 2 consecutive successes -> heals 1 error
+        node.record_success(20);
+        node.record_success(30);
+        assert_eq!(node.errors.load(Ordering::Relaxed), 0);
+        assert_eq!(node.consecutive_successes.load(Ordering::Relaxed), 2);
+        assert_eq!(node.successes.load(Ordering::Relaxed), 2);
+
+        let (p50, p95, p99) = node.get_percentiles();
+        assert!(p50 > 0 && p95 >= p50 && p99 >= p95);
+    }
+
+    #[test]
+    fn test_default_upstreams_config() {
+        let upstreams = UpstreamPool::default_upstreams_config();
+        assert!(!upstreams.is_empty());
+        let providers: Vec<&str> = upstreams.iter().map(|u| u.provider.as_str()).collect();
+        assert!(providers.contains(&"Cloudflare"));
+        assert!(providers.contains(&"Google DNS"));
+        assert!(providers.contains(&"Quad9"));
+    }
+}
+

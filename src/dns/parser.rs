@@ -17,6 +17,89 @@ pub struct ParsedDnsQuery {
     pub question_bytes_len: usize,
 }
 
+/// Safely parses a domain name from a DNS buffer starting at `pos`, following compression pointers.
+/// Returns `Some((domain_name, next_stream_pos))` where `next_stream_pos` is the position
+/// in the original packet stream immediately following the domain name (or the first pointer).
+pub fn parse_name_with_offset(buf: &[u8], mut pos: usize) -> Option<(String, usize)> {
+    let mut name = String::with_capacity(64);
+    let mut jumps = 0;
+    let mut next_pos = None;
+    let mut label_count = 0;
+
+    while pos < buf.len() {
+        label_count += 1;
+        if label_count > 128 || jumps > 16 {
+            return None; // Loop or excessive depth detected
+        }
+        let len = buf[pos] as usize;
+        if len == 0 {
+            if next_pos.is_none() {
+                next_pos = Some(pos + 1);
+            }
+            break;
+        }
+        if len & 0xc0 == 0xc0 {
+            if pos + 1 >= buf.len() {
+                return None;
+            }
+            let ptr = ((len & 0x3f) << 8) | (buf[pos + 1] as usize);
+            if next_pos.is_none() {
+                next_pos = Some(pos + 2);
+            }
+            if ptr >= buf.len() {
+                return None; // Invalid pointer offset
+            }
+            pos = ptr;
+            jumps += 1;
+            continue;
+        }
+        if len > 63 {
+            return None; // RFC 1035 max label length is 63 octets
+        }
+        pos += 1;
+        if pos + len > buf.len() {
+            return None;
+        }
+        if !name.is_empty() {
+            name.push('.');
+        }
+        if name.len() + len > 253 {
+            return None; // RFC 1035 max domain length
+        }
+        for &b in &buf[pos..pos + len] {
+            name.push((b as char).to_ascii_lowercase());
+        }
+        pos += len;
+    }
+
+    let end_pos = next_pos.unwrap_or(pos);
+    Some((name, end_pos))
+}
+
+/// Skips over a DNS name in the buffer starting at `pos` without allocating or decoding.
+/// Returns the offset immediately after the name in the stream.
+pub fn skip_dns_name(buf: &[u8], mut pos: usize) -> Option<usize> {
+    let mut count = 0;
+    while pos < buf.len() && count < 128 {
+        count += 1;
+        let len = buf[pos] as usize;
+        if len == 0 {
+            return Some(pos + 1);
+        }
+        if len & 0xc0 == 0xc0 {
+            if pos + 2 > buf.len() {
+                return None;
+            }
+            return Some(pos + 2);
+        }
+        if len > 63 || pos + 1 + len > buf.len() {
+            return None;
+        }
+        pos += 1 + len;
+    }
+    None
+}
+
 /// Parses a DNS packet header and question section with zero unnecessary allocations.
 pub fn parse_dns_query(buf: &[u8]) -> Option<ParsedDnsQuery> {
     if buf.len() < 12 {
@@ -36,43 +119,7 @@ pub fn parse_dns_query(buf: &[u8]) -> Option<ParsedDnsQuery> {
         });
     }
 
-    let mut pos = 12;
-    let mut name = String::with_capacity(64);
-    let mut label_count = 0;
-
-    while pos < buf.len() {
-        label_count += 1;
-        if label_count > 128 {
-            return None;
-        }
-        let len = buf[pos] as usize;
-        if len == 0 {
-            pos += 1;
-            break;
-        }
-        // DNS compression pointer (handle safely)
-        if len & 0xc0 == 0xc0 {
-            pos += 2;
-            break;
-        }
-        if len > 63 {
-            return None;
-        }
-        pos += 1;
-        if pos + len > buf.len() {
-            return None;
-        }
-        if !name.is_empty() {
-            name.push('.');
-        }
-        if name.len() + len > 255 {
-            return None;
-        }
-        for &b in &buf[pos..pos + len] {
-            name.push((b as char).to_ascii_lowercase());
-        }
-        pos += len;
-    }
+    let (name, pos) = parse_name_with_offset(buf, 12)?;
 
     if pos + 4 > buf.len() {
         return None;
@@ -93,6 +140,7 @@ pub fn parse_dns_query(buf: &[u8]) -> Option<ParsedDnsQuery> {
         question_bytes_len,
     })
 }
+
 
 /// Synthesizes an authoritative blocked DNS response (NXDOMAIN or NODATA) matching RFC 1035 + RFC 6891.
 /// Preserves Question and Additional Records (EDNS0 OPT RR) from the query buffer verbatim.
@@ -216,18 +264,7 @@ pub fn extract_rebind_ip(buf: &[u8]) -> Option<IpAddr> {
     let mut pos = 12;
     // Skip Question records
     for _ in 0..qdcount {
-        while pos < buf.len() {
-            let len = buf[pos] as usize;
-            if len == 0 {
-                pos += 1;
-                break;
-            }
-            if (len & 0xc0) == 0xc0 {
-                pos += 2;
-                break;
-            }
-            pos += 1 + len;
-        }
+        pos = skip_dns_name(buf, pos)?;
         pos += 4; // QTYPE + QCLASS
         if pos > buf.len() {
             return None;
@@ -240,18 +277,10 @@ pub fn extract_rebind_ip(buf: &[u8]) -> Option<IpAddr> {
             break;
         }
         // Skip NAME
-        while pos < buf.len() {
-            let len = buf[pos] as usize;
-            if len == 0 {
-                pos += 1;
-                break;
-            }
-            if (len & 0xc0) == 0xc0 {
-                pos += 2;
-                break;
-            }
-            pos += 1 + len;
-        }
+        pos = match skip_dns_name(buf, pos) {
+            Some(p) => p,
+            None => break,
+        };
         if pos + 10 > buf.len() {
             break;
         }
@@ -445,7 +474,81 @@ mod tests {
         assert_eq!(answers[0].ttl, 300);
         assert_eq!(answers[0].r#type, 1);
     }
+
+    #[test]
+    fn test_parse_dns_query_compression_pointer() {
+        let mut pkt = vec![
+            0x12, 0x34, 0x01, 0x00,
+            0x00, 0x01, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+        ];
+        pkt.extend_from_slice(&[0x03, b's', b'u', b'b', 0xC0, 22]);
+        pkt.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]); // QTYPE=1, QCLASS=1
+        pkt.extend_from_slice(&[0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00]);
+
+        let parsed = parse_dns_query(&pkt).expect("compressed query should parse");
+        let q = parsed.question.expect("question exists");
+        assert_eq!(q.name, "sub.example.com");
+        assert_eq!(q.qtype, 1);
+        assert_eq!(parsed.question_bytes_len, 10);
+    }
+
+    #[test]
+    fn test_parse_dns_query_pointer_loop_safe() {
+        let pkt = [
+            0x12, 0x34, 0x01, 0x00,
+            0x00, 0x01, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0xC0, 0x0C, // points to offset 12 (itself)
+            0x00, 0x01, 0x00, 0x01,
+        ];
+        assert!(parse_dns_query(&pkt).is_none(), "pointer loop must return None safely");
+    }
+
+    #[test]
+    fn test_parse_dns_query_malformed_packets() {
+        // Buffer too short
+        assert!(parse_dns_query(&[0x12, 0x34]).is_none());
+
+        // Label length > 63
+        let mut pkt = vec![
+            0x12, 0x34, 0x01, 0x00,
+            0x00, 0x01, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            64,
+        ];
+        pkt.extend_from_slice(&[b'a'; 64]);
+        pkt.extend_from_slice(&[0x00, 0x00, 0x01, 0x00, 0x01]);
+        assert!(parse_dns_query(&pkt).is_none());
+
+        // Truncated packet before QTYPE/QCLASS
+        let pkt_trunc = [
+            0x12, 0x34, 0x01, 0x00,
+            0x00, 0x01, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x03, b'f', b'o', b'o', 0x00,
+            0x00, 0x01,
+        ];
+        assert!(parse_dns_query(&pkt_trunc).is_none());
+    }
+
+    #[test]
+    fn test_parse_dns_query_root_domain() {
+        let pkt = [
+            0x12, 0x34, 0x01, 0x00,
+            0x00, 0x01, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, // Root label
+            0x00, 0x02, // QTYPE = NS
+            0x00, 0x01, // QCLASS = IN
+        ];
+        let parsed = parse_dns_query(&pkt).expect("root domain query is valid");
+        let q = parsed.question.expect("question exists");
+        assert_eq!(q.name, "");
+        assert_eq!(q.qtype, 2);
+    }
 }
+
 
 /// Extracts all IPv4 addresses from the Answer section of a DNS response wire packet.
 /// Used by the passive DNS timeline to record domain→IP history.
@@ -459,24 +562,20 @@ pub fn extract_a_records(buf: &[u8]) -> Vec<std::net::IpAddr> {
     let mut pos = 12;
     // Skip question section
     for _ in 0..qdcount {
-        while pos < buf.len() {
-            let len = buf[pos] as usize;
-            if len == 0 { pos += 1; break; }
-            if (len & 0xc0) == 0xc0 { pos += 2; break; }
-            pos += 1 + len;
-        }
+        pos = match skip_dns_name(buf, pos) {
+            Some(p) => p,
+            None => return ips,
+        };
         pos += 4;
         if pos > buf.len() { return ips; }
     }
     // Walk answers
     for _ in 0..ancount {
         if pos >= buf.len() { break; }
-        while pos < buf.len() {
-            let len = buf[pos] as usize;
-            if len == 0 { pos += 1; break; }
-            if (len & 0xc0) == 0xc0 { pos += 2; break; }
-            pos += 1 + len;
-        }
+        pos = match skip_dns_name(buf, pos) {
+            Some(p) => p,
+            None => break,
+        };
         if pos + 10 > buf.len() { break; }
         let rtype = u16::from_be_bytes([buf[pos], buf[pos + 1]]);
         let rdlen = u16::from_be_bytes([buf[pos + 8], buf[pos + 9]]) as usize;
@@ -504,12 +603,7 @@ pub fn extract_min_ttl(buf: &[u8]) -> Option<u32> {
 
     let mut pos = 12;
     for _ in 0..qdcount {
-        while pos < buf.len() {
-            let len = buf[pos] as usize;
-            if len == 0 { pos += 1; break; }
-            if (len & 0xc0) == 0xc0 { pos += 2; break; }
-            pos += 1 + len;
-        }
+        pos = skip_dns_name(buf, pos)?;
         pos += 4;
         if pos > buf.len() { return None; }
     }
@@ -517,12 +611,10 @@ pub fn extract_min_ttl(buf: &[u8]) -> Option<u32> {
     let mut min_ttl: Option<u32> = None;
     for _ in 0..ancount {
         if pos >= buf.len() { break; }
-        while pos < buf.len() {
-            let len = buf[pos] as usize;
-            if len == 0 { pos += 1; break; }
-            if (len & 0xc0) == 0xc0 { pos += 2; break; }
-            pos += 1 + len;
-        }
+        pos = match skip_dns_name(buf, pos) {
+            Some(p) => p,
+            None => break,
+        };
         if pos + 10 > buf.len() { break; }
         let ttl = u32::from_be_bytes([buf[pos+4], buf[pos+5], buf[pos+6], buf[pos+7]]);
         let rdlen = u16::from_be_bytes([buf[pos+8], buf[pos+9]]) as usize;
@@ -541,22 +633,12 @@ pub fn extract_answer_ttl(buf: &[u8]) -> Option<u32> {
 
     let mut pos = 12;
     for _ in 0..qdcount {
-        while pos < buf.len() {
-            let len = buf[pos] as usize;
-            if len == 0 { pos += 1; break; }
-            if (len & 0xc0) == 0xc0 { pos += 2; break; }
-            pos += 1 + len;
-        }
+        pos = skip_dns_name(buf, pos)?;
         pos += 4;
         if pos > buf.len() { return None; }
     }
     // Skip name of first answer
-    while pos < buf.len() {
-        let len = buf[pos] as usize;
-        if len == 0 { pos += 1; break; }
-        if (len & 0xc0) == 0xc0 { pos += 2; break; }
-        pos += 1 + len;
-    }
+    pos = skip_dns_name(buf, pos)?;
     if pos + 8 > buf.len() { return None; }
     Some(u32::from_be_bytes([buf[pos+4], buf[pos+5], buf[pos+6], buf[pos+7]]))
 }
@@ -596,27 +678,8 @@ pub struct DohAnswerRecord {
 }
 
 /// Safely parse a DNS domain name from a packet starting at pos, following compression pointers.
-pub fn parse_domain_name_at(buf: &[u8], mut pos: usize) -> Option<String> {
-    let mut name = String::new();
-    let mut jumps = 0;
-    while pos < buf.len() && jumps < 16 {
-        let len = buf[pos] as usize;
-        if len == 0 { break; }
-        if (len & 0xc0) == 0xc0 {
-            if pos + 1 >= buf.len() { return None; }
-            pos = ((len & 0x3f) << 8) | (buf[pos + 1] as usize);
-            jumps += 1;
-            continue;
-        }
-        pos += 1;
-        if pos + len > buf.len() { return None; }
-        if !name.is_empty() { name.push('.'); }
-        for &b in &buf[pos..pos + len] {
-            name.push((b as char).to_ascii_lowercase());
-        }
-        pos += len;
-    }
-    if name.is_empty() { None } else { Some(name) }
+pub fn parse_domain_name_at(buf: &[u8], pos: usize) -> Option<String> {
+    parse_name_with_offset(buf, pos).map(|(name, _)| if name.is_empty() { ".".to_string() } else { name })
 }
 
 /// Parses the answers from a raw wire DNS response into RFC 8427 format.
@@ -635,12 +698,10 @@ pub fn parse_answers_for_doh_json(buf: &[u8], query_domain: &str) -> (u8, Vec<Do
     let mut pos = 12;
     // Skip question section
     for _ in 0..qdcount {
-        while pos < buf.len() {
-            let len = buf[pos] as usize;
-            if len == 0 { pos += 1; break; }
-            if (len & 0xc0) == 0xc0 { pos += 2; break; }
-            pos += 1 + len;
-        }
+        pos = match skip_dns_name(buf, pos) {
+            Some(p) => p,
+            None => return (rcode, Vec::new()),
+        };
         pos += 4;
         if pos > buf.len() { return (rcode, Vec::new()); }
     }
@@ -651,12 +712,10 @@ pub fn parse_answers_for_doh_json(buf: &[u8], query_domain: &str) -> (u8, Vec<Do
         // Parse record name
         let rec_name = parse_domain_name_at(buf, pos).unwrap_or_else(|| query_domain.to_string());
         // Skip over the name in the record
-        while pos < buf.len() {
-            let len = buf[pos] as usize;
-            if len == 0 { pos += 1; break; }
-            if (len & 0xc0) == 0xc0 { pos += 2; break; }
-            pos += 1 + len;
-        }
+        pos = match skip_dns_name(buf, pos) {
+            Some(p) => p,
+            None => break,
+        };
         if pos + 10 > buf.len() { break; }
         let rtype = u16::from_be_bytes([buf[pos], buf[pos + 1]]);
         let ttl = u32::from_be_bytes([buf[pos + 4], buf[pos + 5], buf[pos + 6], buf[pos + 7]]);
@@ -700,3 +759,4 @@ pub fn parse_answers_for_doh_json(buf: &[u8], query_domain: &str) -> (u8, Vec<Do
 
     (rcode, answers)
 }
+

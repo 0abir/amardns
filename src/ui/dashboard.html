@@ -1178,7 +1178,7 @@ function render(d){
     {id:'req',label:'DNS Requests',val:fmt(d.dnsRequestsTotal),sub:'Total processed',color:'#38bdf8'},
     {id:'hit',label:'Cache Hit',val:(d.cache&&d.cache.hitRate)||'0%',sub:fmt(d.cache&&d.cache.hits||0)+' hits',color:'#a78bfa'},
     {id:'neg',label:'Neg-Cache',val:fmt(ai.negCacheHits),sub:'Upstream saves',color:'#34d399'},
-    {id:'users',label:'Est. Devices',val:fmt(ai.activeDevices||ai.expectedUsers||1),sub:(ai.activeDevices||ai.expectedUsers||1)+' dev · '+(ai.activeIps||1)+' IP · AI',color:'#22d3ee'},
+    {id:'users',label:'Active Devices',val:fmt(ai.activeDevices!=null?ai.activeDevices:0),sub:(ai.activeDevices!=null?ai.activeDevices:0)+' dev · '+(ai.activeIps!=null?ai.activeIps:0)+' IP',color:'#22d3ee'},
     {id:'cts',label:'Threat Score',val:cts,sub:cts<20?'Nominal':cts<50?'Elevated':'High',color:cts>60?'#ff2d6b':cts>30?'#ffcc00':'#34d399'},
     {id:'brain',label:'Brain',val:ai.brainLoading?'Warming…':(ai.brainUtilization||0)+su('%'),sub:ai.brainLoading?'Loading from PulseDB…':(ai.domainIQSize||0)+' domains learned',color:'#b8ff57'},
     {id:'dga',label:'DGA Blocked',val:fmt(ai.dgaBlocked||0),sub:ai.dgaBlocked?'Classifier blocked':'0 detected · Active',color:ai.dgaBlocked?'#ff2d6b':'#38bdf8'},
@@ -1198,8 +1198,8 @@ function render(d){
     {id:'blk_rate',label:'Block Rate',val:d.blockRate||'0.0%',sub:'Threats filtered',color:'#ff2d6b'},
     {id:'load',label:'Network Load',val:(ai.rpsPeak!=null?ai.rpsPeak:(ai.rps||0)).toFixed(1)+su(' peak'),sub:(ai.lbMode||'FAST')+' mode',color:'#a78bfa'},
     {id:'aero_cache',label:'AERO Cache',val:fmt((d.cache&&d.cache.size)||(d.storage&&d.storage.cache&&d.storage.cache.size)||0),sub:'In-memory wire',color:'#38bdf8'},
-    {id:'shield',label:'Shield',val:fmt((ai.repBlocks||0)+(ai.dgaBlocked||0)+(ai.rebindBlocks||0)+(ai.alikeBlocks||0)+(ai.abirBlocks||0)+(ai.autoBlockActive||0)),sub:'Total blocked',color:'#00ffe7'},
-    {id:'mem',label:'RAM Allocation',val:((d.node&&d.node.memory&&d.node.memory.rssMB!=null)?d.node.memory.rssMB:((d.memory&&d.memory.rssMB!=null)?d.memory.rssMB:0))+su(' MB'),sub:'Zero-GC · 256MB Cap',color:'#00ffe7'},
+    {id:'shield',label:'Shield',val:fmt((ai.repBlocks||0)+(ai.dgaBlocked||0)+(ai.rebindBlocks||0)+(ai.alikeBlocks||0)+(ai.abirBlocks||0)+(ai.autoBlockActive||0)+(ai.gsbBlocked||0)+(ai.ttlGuardBlocks||0)+(ai.scheduleBlocks||0)),sub:'Total blocked',color:'#00ffe7'},
+    {id:'mem',label:'RAM Allocation',val:((d.node&&d.node.memory&&d.node.memory.rssMB!=null)?d.node.memory.rssMB:((d.memory&&d.memory.rssMB!=null)?d.memory.rssMB:0))+su(' MB'),sub:'Zero-GC · 200MB Cap',color:'#00ffe7'},
     {id:'fp',label:'Rogue Clients',val:fmt((ai.fpSuspicious&&ai.fpSuspicious.length)||ai.fpEvents||0),sub:(ai.fpSuspicious&&ai.fpSuspicious.length)?ai.fpSuspicious.length+' scanners flagged':'0 detected · Clean',color:(ai.fpSuspicious&&ai.fpSuspicious.length)?'#ff2d6b':'#34d399'},
     {id:'gsb',label:'Safe Browsing',val:ai.gsbOk?'ACTIVE':'OFFLINE',sub:(ai.gsbKeyCount!=null?ai.gsbKeyCount:0)+' API keys · '+fmt(ai.gsbBlocks||ai.gsbBlocked||0)+' blocked',color:ai.gsbOk?'#34d399':'#ff2d6b'},
     {id:'aiver',label:'AI Version',val:(ai.brainVersion||'1.0.0'),sub:'v'+fmt(ai.learningCycles||0)+' cycles',color:'#9d4edd'},
@@ -1547,6 +1547,12 @@ function renderBrain(d) {
     var vEl = document.getElementById('brn-chip-version');
     if (vEl) vEl.textContent = 'VERSION: ' + ai.brainVersion;
   }
+  var clockEl = document.getElementById('brain-hero-clock');
+  if (clockEl) {
+    var upSec = ai.brainUptimeSec != null ? ai.brainUptimeSec : (d.uptime != null ? d.uptime : 0);
+    var upStr = upSec < 60 ? upSec + 's' : upSec < 3600 ? Math.floor(upSec / 60) + 'm ' + (upSec % 60) + 's' : Math.floor(upSec / 3600) + 'h ' + Math.floor((upSec % 3600) / 60) + 'm';
+    clockEl.textContent = 'AI Engine Online · Uptime: ' + upStr + ' · ' + (ai.learningCycles || 0) + ' Cycles';
+  }
   if (d.avgLatency != null) {
     var savedEl = document.getElementById('bst-saved');
     if (savedEl && (savedEl.textContent === '—' || !_brainData)) {
@@ -1582,7 +1588,7 @@ function loadBrainData() {
     st('bst-cycles', fmt(s.trainingCycles));
     st('bst-speed', (s.inferenceSpeedMs != null ? s.inferenceSpeedMs + ' ms' : '—'));
     st('bst-fp', fmt(s.fpSuppressions));
-    var latSaved = s.latencySavedMs != null && s.latencySavedMs > 0 ? s.latencySavedMs : (window._lastData && window._lastData.avgLatency ? window._lastData.avgLatency : 0);
+    var latSaved = s.latencySavedMs != null && s.latencySavedMs > 0 ? s.latencySavedMs : (_D && _D.avgLatency ? _D.avgLatency : 0);
     st('bst-saved', latSaved > 0 ? '~' + latSaved + ' ms' : '—');
     st('bst-mem', (s.memoryKB || 0) + ' KB');
     var infSpeedStr = s.inferenceSpeedMs != null ? s.inferenceSpeedMs + ' ms' : '—';
@@ -2152,9 +2158,9 @@ function renderInc(intel,tid){
 function renderIntelligence(d){
   if(!d)return;
   var ai=d.ai||{};
-  var bsB=ai.brainSyncBytes||0;
+  var bsB=ai.brainSyncBytes||(ai.brainMemoryKB?ai.brainMemoryKB*1024:0);
   var bsStr=bsB>=1048576?(bsB/1048576).toFixed(2)+' MB':bsB>=1024?(bsB/1024).toFixed(1)+' KB':bsB+' B';
-  var bsAge=ai.brainSyncAge!=null?(ai.brainSyncAge<120?ai.brainSyncAge+'s ago':Math.floor(ai.brainSyncAge/60)+'m ago'):'—';
+  var bsAge=ai.brainSyncAge!=null?(ai.brainSyncAge<120?ai.brainSyncAge+'s ago':Math.floor(ai.brainSyncAge/60)+'m ago'):(ai.brainUptimeSec!=null?'Active':'—');
   var bsUptime=ai.brainUptimeSec!=null?(ai.brainUptimeSec<3600?Math.floor(ai.brainUptimeSec/60)+'m':Math.floor(ai.brainUptimeSec/3600)+'h'):'—';
   renderDP('dp-brain',[
     ['Brain Loaded',ai.brainLoading?'Loading…':'Yes',ai.brainLoading?'cv-w':'cv-g'],
@@ -2233,9 +2239,10 @@ function renderSecurity(d){
   renderDP('dp-signals',[
     ['Composite Threat Score',(ai.cts||0),(ai.cts>60?'cv-b':ai.cts>30?'cv-w':'cv-g')],
     ['Anomaly Score',((ai.cts||0)/100).toFixed(2),''],
-    ['Client NX Flood Alarms',fmt(ai.cnxfAlarms||0),ai.cnxfAlarms>0?'cv-w':''],
-    ['QRSD Alarms',fmt(ai.qrsdAlarms||0),ai.qrsdAlarms>0?'cv-w':''],
-    ['Cache Poison Guard Blocks',fmt(ai.pgSnap&&ai.pgSnap.blocks||0),ai.pgSnap&&ai.pgSnap.blocks>0?'cv-w':''],
+    ['Client NX Flood Alarms',fmt(ai.nxAlarms||0),ai.nxAlarms>0?'cv-w':'cv-g'],
+    ['Query Burst Spikes',fmt(ai.burstEvents||0),ai.burstEvents>0?'cv-w':'cv-g'],
+    ['Swarm Flood Alarms',fmt(ai.swarmAlarms||0),ai.swarmAlarms>0?'cv-b':'cv-g'],
+    ['DNS Rebind Interceptions',fmt(ai.rebindBlocks||0),ai.rebindBlocks>0?'cv-b':'cv-g'],
   ]);
 }
 
@@ -2246,11 +2253,11 @@ function renderAdmin(d){
   var st=d.storage||{};var ac=st.cache||{};var pdb=st.db||{};
   var walStr=pdb.walBytes!=null?(pdb.walBytes>=1048576?(pdb.walBytes/1048576).toFixed(2)+su('MB'):(pdb.walBytes/1024).toFixed(1)+su('KB')):((pdb.walMB||0)+su('MB'));
   renderDP('dp-storage',[
-    ['Cache Engine','AeroCache (S3-FIFO)','cv-g'],
+    ['Cache Engine','AeroCache (W-TinyLFU)','cv-g'],
     ['Cached Records',fmt(ac.size||0)+' / '+(ac.maxEntries!=null?fmt(ac.maxEntries):'—'),'cv-t'],
     ['Cache Memory',(ac.memoryMB||0)+su('MB')+' (Dynamic Zero-GC)','cv-t'],
     ['Cache Hit Rate',ac.hitRate||'0%','cv-g'],
-    ['Database Engine','PulseDB (SuffixTrie WAL)','cv-g'],
+    ['Database Engine','PulseDB (WAL)','cv-g'],
     ['Blocked Domains',fmt(pdb.blocklistDomains||0),'cv-w'],
     ['WAL Disk Size',walStr,'cv-t'],
     ['WAL Records',fmt(pdb.totalRecords||0),'cv-t'],

@@ -216,10 +216,14 @@ impl ClientFingerprintTracker {
         let now = Instant::now();
         let mut map = self.fp_map.write();
 
-        // Prevent unbounded memory growth
-        if map.len() > 5000 {
+        // Prevent unbounded memory growth — cap at 3000 clients.
+        // Retain: flagged clients (still serving out flag expiry) OR recently active (within 120s)
+        if map.len() > 3_000 {
             map.retain(|_, v| {
-                v.flagged.is_some() && v.flagged_at.is_some_and(|t| now.duration_since(t).as_millis() < FLAG_EXPIRY_MS as u128)
+                let recently_active = now.duration_since(v.window_start).as_secs() < 120;
+                let flagged_valid = v.flagged.is_some()
+                    && v.flagged_at.is_some_and(|t| now.duration_since(t).as_millis() < FLAG_EXPIRY_MS as u128);
+                recently_active || flagged_valid
             });
         }
 
@@ -252,7 +256,9 @@ impl ClientFingerprintTracker {
         fp.queries += 1;
         let clean = domain.trim_end_matches('.').to_ascii_lowercase();
         let is_legit = is_known_immune(&clean);
-        if !clean.is_empty() && !is_legit {
+
+        // Cap per-client uniq_domains: sufficient for scan detection, prevents per-client heap growth
+        if fp.uniq_domains.len() <= FP_SCAN_UNIQ + 10 && !clean.is_empty() && !is_legit {
             fp.uniq_domains.insert(clean.clone());
         }
 

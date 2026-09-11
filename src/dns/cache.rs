@@ -2,14 +2,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use moka::future::Cache;
 
-/// zstd compression level 1 — fastest, ~60-70% size reduction on DNS wire responses
-const ZSTD_LEVEL: i32 = 1;
-
 #[derive(Clone)]
 pub struct CachedResponse {
-    pub compressed: Vec<u8>,  // zstd-compressed wire response
-    #[allow(dead_code)]
-    pub original_len: usize,  // uncompressed byte length
+    pub raw_wire: Vec<u8>,
     pub created_at: Instant,
     pub original_ttl: u32,
     pub stale_grace_secs: u32,
@@ -40,8 +35,8 @@ impl DnsCache {
                 .time_to_idle(Duration::from_secs(3600))
                 .build(),
             neg_cache: Cache::builder()
-                .max_capacity(50_000)
-                .time_to_idle(Duration::from_secs(600))
+                .max_capacity(50_000)  // 50k negative entries ≈ 8 MB
+                .time_to_idle(Duration::from_secs(300))
                 .build(),
             neg_hits: AtomicU64::new(0),
             swr_hits: AtomicU64::new(0),
@@ -65,24 +60,19 @@ impl DnsCache {
     }
 
     /// Fast lookup supporting RFC 8767 Stale-While-Revalidate (Serve-Stale).
+    /// Zero zstd decode CPU overhead on cache hits for sub-millisecond response times.
     pub async fn get_with_swr(&self, qname: &str, qtype: u16, client_tx_id: u16) -> CacheLookupResult {
         let key = Self::make_key(qname, qtype);
         if let Some(entry) = self.cache.get(&key).await {
             let elapsed_secs = entry.created_at.elapsed().as_secs() as u32;
-            // Decompress stored response
-            let raw = match zstd::decode_all(entry.compressed.as_slice()) {
-                Ok(r) => r,
-                Err(_) => return CacheLookupResult::Miss,
-            };
+            let mut out = entry.raw_wire.clone();
             if elapsed_secs < entry.original_ttl {
-                let mut out = raw;
                 if out.len() >= 2 {
                     out[0..2].copy_from_slice(&client_tx_id.to_be_bytes());
                 }
                 return CacheLookupResult::Fresh(out);
             } else if elapsed_secs < entry.original_ttl.saturating_add(entry.stale_grace_secs) {
                 self.swr_hits.fetch_add(1, Ordering::Relaxed);
-                let mut out = raw;
                 if out.len() >= 2 {
                     out[0..2].copy_from_slice(&client_tx_id.to_be_bytes());
                 }
@@ -112,14 +102,10 @@ impl DnsCache {
         let safe_ttl = ttl.clamp(10, 86400);
         let safe_grace = grace_secs.clamp(30, 3600);
         let original_len = raw_response.len();
-        // Compress the response wire bytes
-        let compressed = zstd::encode_all(raw_response.as_slice(), ZSTD_LEVEL)
-            .unwrap_or(raw_response); // fallback: store uncompressed
-        self.compressed_bytes.fetch_add(compressed.len() as u64, Ordering::Relaxed);
+        self.compressed_bytes.fetch_add(original_len as u64, Ordering::Relaxed);
         self.uncompressed_bytes.fetch_add(original_len as u64, Ordering::Relaxed);
         let entry = CachedResponse {
-            compressed,
-            original_len,
+            raw_wire: raw_response,
             created_at: Instant::now(),
             original_ttl: safe_ttl,
             stale_grace_secs: safe_grace,
@@ -228,6 +214,12 @@ impl DnsCache {
         self.cache.invalidate_all();
         self.neg_cache.invalidate_all();
         self.neg_hits.store(0, Ordering::Relaxed);
+    }
+
+    /// Flushes pending maintenance tasks and evicts expired entries immediately.
+    pub async fn run_pending_tasks(&self) {
+        self.cache.run_pending_tasks().await;
+        self.neg_cache.run_pending_tasks().await;
     }
 
     #[allow(dead_code)]
