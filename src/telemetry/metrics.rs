@@ -180,9 +180,14 @@ impl Metrics {
 
         // 1. Update active devices
         if let Ok(mut map) = self.devices.lock() {
-            if map.len() > 10_000 {
+            if map.len() >= 10_000 {
                 let cutoff = now_ms.saturating_sub(300_000);
                 map.retain(|_, v| v.last_seen >= cutoff);
+                if map.len() >= 10_000 && !map.contains_key(clean_ip) {
+                    if let Some(oldest) = map.keys().next().cloned() {
+                        map.remove(&oldest);
+                    }
+                }
             }
             let entry = map.entry(clean_ip.to_string()).or_insert_with(|| DeviceEntry {
                 id: clean_ip.to_string(),
@@ -197,9 +202,14 @@ impl Metrics {
 
         // 2. Update user map
         if let Ok(mut users) = self.users.lock() {
-            if users.len() > 10_000 {
+            if users.len() >= 10_000 {
                 let cutoff = now_ms.saturating_sub(300_000);
                 users.retain(|_, last| *last >= cutoff);
+                if users.len() >= 10_000 && !users.contains_key(clean_ip) {
+                    if let Some(oldest) = users.keys().next().cloned() {
+                        users.remove(&oldest);
+                    }
+                }
             }
             users.insert(clean_ip.to_string(), now_ms);
         }

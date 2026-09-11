@@ -224,9 +224,39 @@ pub fn create_doh_router(state: Arc<AppState>) -> Router {
         // Prometheus-compatible metrics scrape endpoint
         // Requires master key via ?key=<key> or X-Api-Key header (same as other /api endpoints)
         .route("/metrics", get(prometheus_metrics_handler))
-        .route("/metrics/", get(prometheus_metrics_handler))
-
+        .layer(axum::middleware::map_response(add_security_headers))
         .with_state(state)
+}
+
+async fn add_security_headers(mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        header::HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::X_FRAME_OPTIONS,
+        header::HeaderValue::from_static("DENY"),
+    );
+    headers.insert(
+        header::REFERRER_POLICY,
+        header::HeaderValue::from_static("strict-origin-when-cross-origin"),
+    );
+    if let Ok(name) = header::HeaderName::from_bytes(b"permissions-policy") {
+        headers.insert(
+            name,
+            header::HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+        );
+    }
+    if let Some(ct) = headers.get(header::CONTENT_TYPE) {
+        if ct.to_str().map(|s| s.starts_with("text/html")).unwrap_or(false) {
+            headers.insert(
+                header::CONTENT_SECURITY_POLICY,
+                header::HeaderValue::from_static("default-src 'self' 'unsafe-inline' data:; connect-src 'self' *; img-src 'self' data: https:;"),
+            );
+        }
+    }
+    response
 }
 
 // ── Root & Status Handlers ──────────────────────────────────────────────────
