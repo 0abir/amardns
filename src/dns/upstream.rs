@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_UPSTREAM_URL: &str = "https://cdn.jsdelivr.net/gh/abir614/-@latest/dns-upstream.json";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UpstreamConfig {
     pub provider: String,
@@ -121,33 +123,8 @@ impl UpstreamPool {
     pub fn default_upstreams_config() -> Vec<UpstreamConfig> {
         vec![
             UpstreamConfig {
-                provider: "Cloudflare".to_string(),
-                url: "https://cloudflare-dns.com/dns-query".to_string(),
-                aura: "high".to_string(),
-            },
-            UpstreamConfig {
-                provider: "Cloudflare (1.1.1.1)".to_string(),
-                url: "https://1.1.1.1/dns-query".to_string(),
-                aura: "high".to_string(),
-            },
-            UpstreamConfig {
-                provider: "Cloudflare (1.0.0.1)".to_string(),
-                url: "https://1.0.0.1/dns-query".to_string(),
-                aura: "high".to_string(),
-            },
-            UpstreamConfig {
-                provider: "Google DNS".to_string(),
-                url: "https://dns.google/dns-query".to_string(),
-                aura: "high".to_string(),
-            },
-            UpstreamConfig {
-                provider: "Google (8.8.8.8)".to_string(),
-                url: "https://8.8.8.8/dns-query".to_string(),
-                aura: "high".to_string(),
-            },
-            UpstreamConfig {
-                provider: "Google (8.8.4.4)".to_string(),
-                url: "https://8.8.4.4/dns-query".to_string(),
+                provider: "Mullvad DNS".to_string(),
+                url: "https://doh.mullvad.net/dns-query".to_string(),
                 aura: "high".to_string(),
             },
             UpstreamConfig {
@@ -156,13 +133,38 @@ impl UpstreamPool {
                 aura: "high".to_string(),
             },
             UpstreamConfig {
-                provider: "OpenDNS".to_string(),
-                url: "https://doh.opendns.com/dns-query".to_string(),
+                provider: "AdGuard DNS".to_string(),
+                url: "https://dns.adguard-dns.com/dns-query".to_string(),
+                aura: "high".to_string(),
+            },
+            UpstreamConfig {
+                provider: "Applied Privacy".to_string(),
+                url: "https://doh.applied-privacy.net/query".to_string(),
+                aura: "high".to_string(),
+            },
+            UpstreamConfig {
+                provider: "Digitale Gesellschaft".to_string(),
+                url: "https://dns.digitale-gesellschaft.ch/dns-query".to_string(),
+                aura: "high".to_string(),
+            },
+            UpstreamConfig {
+                provider: "Cloudflare".to_string(),
+                url: "https://cloudflare-dns.com/dns-query".to_string(),
                 aura: "medium".to_string(),
             },
             UpstreamConfig {
-                provider: "AdGuard".to_string(),
-                url: "https://dns.adguard-dns.com/dns-query".to_string(),
+                provider: "NextDNS".to_string(),
+                url: "https://dns.nextdns.io/dns-query".to_string(),
+                aura: "medium".to_string(),
+            },
+            UpstreamConfig {
+                provider: "Control D".to_string(),
+                url: "https://freedns.controld.com/p0".to_string(),
+                aura: "medium".to_string(),
+            },
+            UpstreamConfig {
+                provider: "DNS.SB".to_string(),
+                url: "https://doh.dns.sb/dns-query".to_string(),
                 aura: "medium".to_string(),
             },
         ]
@@ -433,36 +435,37 @@ impl UpstreamPool {
         }
     }
 
-    /// Syncs upstream list (optionally from UPSTREAM_DNS_CONFIG_URL), probes candidates concurrently, and ranks top 9 (3xN pool)
+    /// Syncs upstream list from CDN feed (default: https://cdn.jsdelivr.net/gh/abir614/-@latest/dns-upstream.json),
+    /// probes candidates concurrently, and ranks top 9 active upstreams according to priority (aura) and lowest latency.
     pub async fn sync_and_rank(&self) -> Result<usize, String> {
+        let feed_url = std::env::var("UPSTREAM_DNS_CONFIG_URL")
+            .or_else(|_| std::env::var("UPSTREAM_FEED_URL"))
+            .unwrap_or_else(|_| DEFAULT_UPSTREAM_URL.to_string());
+
         let mut cfgs = Self::default_upstreams_config();
 
-        if let Ok(custom_url) = std::env::var("UPSTREAM_DNS_CONFIG_URL") {
-            let trimmed = custom_url.trim();
-            if !trimmed.is_empty() {
-                match self.client.get(trimmed).send().await {
-                    Ok(resp) if resp.status().is_success() => {
-                        if let Ok(payload) = resp.json::<UpstreamPayload>().await {
-                            let fetched = match payload {
-                                UpstreamPayload::Wrapped { dns_over_https } => dns_over_https,
-                                UpstreamPayload::Direct(list) => list,
-                            };
-                            let valid_fetched: Vec<_> = fetched
-                                .into_iter()
-                                .filter(|c| c.url.starts_with("https://"))
-                                .collect();
-                            if !valid_fetched.is_empty() {
-                                cfgs = valid_fetched;
-                            }
-                        }
-                    }
-                    Ok(resp) => {
-                        tracing::warn!("[upstream] Custom upstream URL returned HTTP {}; using default upstreams", resp.status());
-                    }
-                    Err(e) => {
-                        tracing::warn!("[upstream] Failed to fetch custom upstreams from {}: {}; using default upstreams", trimmed, e);
+        match self.client.get(&feed_url).timeout(Duration::from_millis(4000)).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(payload) = resp.json::<UpstreamPayload>().await {
+                    let fetched = match payload {
+                        UpstreamPayload::Wrapped { dns_over_https } => dns_over_https,
+                        UpstreamPayload::Direct(list) => list,
+                    };
+                    let valid_fetched: Vec<_> = fetched
+                        .into_iter()
+                        .filter(|c| c.url.starts_with("https://"))
+                        .collect();
+                    if !valid_fetched.is_empty() {
+                        tracing::info!("[upstream] Loaded {} candidate upstreams from {}", valid_fetched.len(), feed_url);
+                        cfgs = valid_fetched;
                     }
                 }
+            }
+            Ok(resp) => {
+                tracing::warn!("[upstream] Upstream feed URL {} returned HTTP {}; using default fallback upstreams", feed_url, resp.status());
+            }
+            Err(e) => {
+                tracing::warn!("[upstream] Failed to fetch upstreams from {}: {}; using default fallback upstreams", feed_url, e);
             }
         }
 
@@ -538,25 +541,25 @@ impl UpstreamPool {
         }
 
         // Rank upstreams:
-        // 1. ok (healthy) first
-        // 2. aura: "high" (3) > "medium" (2) > "low" (1)
-        // Rank upstreams:
-        // 1. ok (healthy) first
-        // 2. High performance (lowest latency with slight aura tie-break bonus)
+        // 1. ok (healthy / reachable) first
+        // 2. Priority: aura "high" (3) > "medium" (2) > "low" (1)
+        // 3. Lowest latency first
         probed.sort_by(|(ok_a, node_a), (ok_b, node_b)| {
             if ok_a != ok_b {
                 return ok_b.cmp(ok_a);
             }
+            let aura_a = node_a.aura_rank();
+            let aura_b = node_b.aura_rank();
+            if aura_a != aura_b {
+                return aura_b.cmp(&aura_a);
+            }
             let lat_a = node_a.latency_ms.load(Ordering::Relaxed);
             let lat_b = node_b.latency_ms.load(Ordering::Relaxed);
-            let score_a = (1000.0 / lat_a.max(1) as f64) * (1.0 + (node_a.aura_rank() as f64 * 0.15));
-            let score_b = (1000.0 / lat_b.max(1) as f64) * (1.0 + (node_b.aura_rank() as f64 * 0.15));
-            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+            lat_a.cmp(&lat_b)
         });
 
-        // Select 3xN active upstreams (default 9 = 3x3 pool)
-        let active_count = if probed.len() >= 9 { 9 } else { (probed.len() / 3) * 3 };
-        let count = if active_count >= 3 { active_count } else { probed.len() };
+        // Exactly 9 upstreams loaded at a time according to their priority & low latency
+        let count = probed.len().min(9);
 
         let active_nodes: Vec<Arc<UpstreamNode>> = probed
             .into_iter()
@@ -817,11 +820,92 @@ mod tests {
     #[test]
     fn test_default_upstreams_config() {
         let upstreams = UpstreamPool::default_upstreams_config();
-        assert!(!upstreams.is_empty());
+        assert_eq!(upstreams.len(), 9);
         let providers: Vec<&str> = upstreams.iter().map(|u| u.provider.as_str()).collect();
         assert!(providers.contains(&"Cloudflare"));
-        assert!(providers.contains(&"Google DNS"));
+        assert!(providers.contains(&"Mullvad DNS"));
         assert!(providers.contains(&"Quad9"));
+        assert!(providers.contains(&"AdGuard DNS"));
+    }
+
+    #[test]
+    fn test_upstream_priority_and_latency_ranking_9_cap() {
+        let json = r#"{
+            "dns_over_https": [
+                {"provider": "SlowHigh", "url": "https://slow.high/dns-query", "aura": "high"},
+                {"provider": "FastHigh", "url": "https://fast.high/dns-query", "aura": "high"},
+                {"provider": "OfflineHigh", "url": "https://offline.high/dns-query", "aura": "high"},
+                {"provider": "FastMedium", "url": "https://fast.med/dns-query", "aura": "medium"},
+                {"provider": "SlowMedium", "url": "https://slow.med/dns-query", "aura": "medium"},
+                {"provider": "FastLow", "url": "https://fast.low/dns-query", "aura": "low"},
+                {"provider": "Med1", "url": "https://m1/dns-query", "aura": "medium"},
+                {"provider": "Med2", "url": "https://m2/dns-query", "aura": "medium"},
+                {"provider": "Med3", "url": "https://m3/dns-query", "aura": "medium"},
+                {"provider": "Med4", "url": "https://m4/dns-query", "aura": "medium"},
+                {"provider": "Med5", "url": "https://m5/dns-query", "aura": "medium"},
+                {"provider": "Med6", "url": "https://m6/dns-query", "aura": "medium"}
+            ]
+        }"#;
+
+        let payload: UpstreamPayload = serde_json::from_str(json).expect("valid json");
+        let list = match payload {
+            UpstreamPayload::Wrapped { dns_over_https } => dns_over_https,
+            UpstreamPayload::Direct(l) => l,
+        };
+        assert_eq!(list.len(), 12);
+
+        // Simulate probing
+        let mut probed: Vec<(bool, UpstreamNode)> = list.into_iter().map(|cfg| {
+            let (ok, lat) = match cfg.provider.as_str() {
+                "OfflineHigh" => (false, 9999),
+                "SlowHigh" => (true, 50),
+                "FastHigh" => (true, 10),
+                "FastMedium" => (true, 5),
+                "SlowMedium" => (true, 60),
+                "FastLow" => (true, 2),
+                _ => (true, 20),
+            };
+            let node = UpstreamNode {
+                provider: cfg.provider,
+                url: cfg.url,
+                aura: cfg.aura,
+                latency_ms: AtomicU32::new(lat),
+                errors: AtomicU64::new(if ok { 0 } else { 1 }),
+                pulls: AtomicU64::new(1),
+                successes: AtomicU64::new(if ok { 1 } else { 0 }),
+                consecutive_successes: AtomicU64::new(if ok { 1 } else { 0 }),
+                recent_latencies: parking_lot::RwLock::new(VecDeque::new()),
+            };
+            (ok, node)
+        }).collect();
+
+        // Sort by health (ok), priority (aura), low latency
+        probed.sort_by(|(ok_a, node_a), (ok_b, node_b)| {
+            if ok_a != ok_b {
+                return ok_b.cmp(ok_a);
+            }
+            let aura_a = node_a.aura_rank();
+            let aura_b = node_b.aura_rank();
+            if aura_a != aura_b {
+                return aura_b.cmp(&aura_a);
+            }
+            let lat_a = node_a.latency_ms.load(Ordering::Relaxed);
+            let lat_b = node_b.latency_ms.load(Ordering::Relaxed);
+            lat_a.cmp(&lat_b)
+        });
+
+        // Take exactly 9
+        let top9: Vec<_> = probed.into_iter().take(9).collect();
+        assert_eq!(top9.len(), 9);
+
+        // #1 must be FastHigh (high aura, 10ms)
+        assert_eq!(top9[0].1.provider, "FastHigh");
+        // #2 must be SlowHigh (high aura, 50ms)
+        assert_eq!(top9[1].1.provider, "SlowHigh");
+        // #3 must be FastMedium (medium aura, 5ms)
+        assert_eq!(top9[2].1.provider, "FastMedium");
+        // OfflineHigh must NOT be in top9 because it's unreachable (ok=false)
+        assert!(!top9.iter().any(|(_, n)| n.provider == "OfflineHigh"));
     }
 }
 
