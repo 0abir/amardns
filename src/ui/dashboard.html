@@ -2426,6 +2426,21 @@ function loadBlock(){
     }
   }).catch(function(e){var tags=document.getElementById('btags');if(tags&&!tags.children.length)tags.innerHTML='<span style="color:var(--mut);font-size:8px">Blocklist empty.</span>';});
 }
+function _cleanDom(str) {
+  if (!str) return null;
+  var s = String(str).trim().toLowerCase();
+  if (s.indexOf('://') !== -1) {
+    try { s = new URL(s).hostname; } catch(_) { s = s.split('://')[1].split('/')[0]; }
+  }
+  s = s.split('/')[0].split(':')[0].split('?')[0].split('#')[0].replace(/^\.+|\.+$/g, '');
+  if (!s || s.length > 253) return null;
+  if (s === 'localhost') return s;
+  var domainRegex = /^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+  if (!domainRegex.test(s) && !/^[0-9a-f:.]+$/i.test(s)) {
+    return null;
+  }
+  return s;
+}
 function addBlock(){
   var v=document.getElementById('block-in').value.trim();
   if(!v)return;

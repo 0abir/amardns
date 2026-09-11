@@ -329,7 +329,7 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
             }
         };
 
-        if let Some((upstream_resp, upstream_name)) = resolve_result {
+        if let Some((mut upstream_resp, upstream_name)) = resolve_result {
             let lat = start_upstream.elapsed().as_millis() as u32;
             let rcode = if upstream_resp.len() >= 4 { (upstream_resp[3] & 0x0F) as u16 } else { 0 };
             if let Some(flag) = state.fingerprint.record_response(client_ip, rcode) {
@@ -346,10 +346,8 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
                 }
             }
 
-            // Feature 6: TTL Manipulation Guard — detect fast-flux botnets (extremely low TTL + DGA pattern)
-            // Robust & universal check: ultra-low TTL (<= 5s) combined with verified algorithmic threat
-            // (DGA entropy AND AI brain confirmation). Necessary services (VoIP, CDNs, banking, APIs)
-            // are NEVER harmed.
+            // Feature 6: TTL Manipulation Guard — detect fast-flux botnets (extremely low TTL + DGA / AI anomaly)
+            // & TTL Inflation Guard (clamp bogus high TTLs > 86400s)
             if state.ttl_guard_enabled.load(Ordering::Relaxed)
                 && state.blocking_enabled.load(Ordering::Relaxed)
                 && !state.is_exempt(&q.name)
@@ -358,12 +356,15 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
                 if let Some(min_ttl) = crate::dns::parser::extract_min_ttl(&upstream_resp) {
                     let is_dga_suspect = crate::security::heuristics::is_dga_threat(&q.name);
                     let (ai_score, _) = state.brain.evaluate_internal(&q.name);
-                    if min_ttl <= 5 && is_dga_suspect && ai_score > 0.85 {
+                    let learned_ttl = state.ttl_learner.smart_ttl(&q.name, 300);
+                    let is_fast_flux = min_ttl <= 5 && (is_dga_suspect || ai_score > 0.50 || (learned_ttl >= 60 && ai_score > 0.35));
+
+                    if is_fast_flux {
                         state.metrics.ttl_guard_blocks.fetch_add(1, Ordering::Relaxed);
                         state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
                         state.log_action("ttl_guard_block", &format!("{} TTL={}s (fast-flux/DGA confirmed, AI={:.2})", q.name, min_ttl, ai_score));
                         state.log_anomaly("ttl_manipulation_guard", &format!(
-                            "Fast-flux botnet blocked: low TTL {}s + DGA pattern + AI {:.2} on {}", min_ttl, ai_score, q.name
+                            "Fast-flux botnet blocked: low TTL {}s + DGA/AI pattern (AI={:.2}) on {}", min_ttl, ai_score, q.name
                         ));
                         state.wal.append_query(&q.name, q.qtype, &client_ip.to_string(), 3, lat, "TTL_GUARD_BLOCK");
                         state.log_query(&q.name, q.qtype, &client_ip.to_string(), "DoT", "TTL_GUARD_BLOCK", 3, lat, "ttl_manipulation_guard", "TTL Guard");
@@ -374,6 +375,10 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
                             break;
                         }
                         continue;
+                    }
+
+                    if min_ttl > 86400 {
+                        crate::dns::cache::DnsCache::cap_response_ttl(&mut upstream_resp, 86400);
                     }
                 }
             }

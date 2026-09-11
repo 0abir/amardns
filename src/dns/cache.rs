@@ -4,7 +4,8 @@ use moka::future::Cache;
 
 #[derive(Clone)]
 pub struct CachedResponse {
-    pub raw_wire: Vec<u8>,
+    pub compressed_wire: Vec<u8>,
+    pub uncompressed_len: usize,
     pub created_at: Instant,
     pub original_ttl: u32,
     pub stale_grace_secs: u32,
@@ -60,12 +61,15 @@ impl DnsCache {
     }
 
     /// Fast lookup supporting RFC 8767 Stale-While-Revalidate (Serve-Stale).
-    /// Zero zstd decode CPU overhead on cache hits for sub-millisecond response times.
+    /// Decompresses zstd level-1 stored wire format in ~1µs.
     pub async fn get_with_swr(&self, qname: &str, qtype: u16, client_tx_id: u16) -> CacheLookupResult {
         let key = Self::make_key(qname, qtype);
         if let Some(entry) = self.cache.get(&key).await {
             let elapsed_secs = entry.created_at.elapsed().as_secs() as u32;
-            let mut out = entry.raw_wire.clone();
+            let mut out = match zstd::bulk::decompress(&entry.compressed_wire, entry.uncompressed_len) {
+                Ok(decomp) => decomp,
+                Err(_) => entry.compressed_wire.clone(),
+            };
             if elapsed_secs < entry.original_ttl {
                 if out.len() >= 2 {
                     out[0..2].copy_from_slice(&client_tx_id.to_be_bytes());
@@ -101,11 +105,20 @@ impl DnsCache {
         let key = Self::make_key(qname, qtype);
         let safe_ttl = ttl.clamp(10, 86400);
         let safe_grace = grace_secs.clamp(30, 3600);
-        let original_len = raw_response.len();
-        self.compressed_bytes.fetch_add(original_len as u64, Ordering::Relaxed);
-        self.uncompressed_bytes.fetch_add(original_len as u64, Ordering::Relaxed);
+        let uncompressed_len = raw_response.len();
+        
+        let compressed_wire = match zstd::bulk::compress(&raw_response, 1) {
+            Ok(c) => c,
+            Err(_) => raw_response.clone(),
+        };
+        let compressed_len = compressed_wire.len();
+
+        self.compressed_bytes.fetch_add(compressed_len as u64, Ordering::Relaxed);
+        self.uncompressed_bytes.fetch_add(uncompressed_len as u64, Ordering::Relaxed);
+
         let entry = CachedResponse {
-            raw_wire: raw_response,
+            compressed_wire,
+            uncompressed_len,
             created_at: Instant::now(),
             original_ttl: safe_ttl,
             stale_grace_secs: safe_grace,
@@ -214,6 +227,8 @@ impl DnsCache {
         self.cache.invalidate_all();
         self.neg_cache.invalidate_all();
         self.neg_hits.store(0, Ordering::Relaxed);
+        self.compressed_bytes.store(0, Ordering::Relaxed);
+        self.uncompressed_bytes.store(0, Ordering::Relaxed);
     }
 
     /// Flushes pending maintenance tasks and evicts expired entries immediately.
@@ -237,7 +252,7 @@ impl DnsCache {
         (count, bytes, mb, self.max_capacity)
     }
 
-    /// Returns compression ratio as a percentage (e.g. 65.0 = 65% smaller)
+    /// Returns compression ratio as a percentage (e.g. 52.4 = 52.4% smaller)
     pub fn compression_ratio(&self) -> f64 {
         let comp = self.compressed_bytes.load(Ordering::Relaxed);
         let uncomp = self.uncompressed_bytes.load(Ordering::Relaxed);
@@ -245,7 +260,7 @@ impl DnsCache {
             return 0.0;
         }
         let ratio = (1.0 - (comp as f64 / uncomp as f64)) * 100.0;
-        (ratio * 10.0).round() / 10.0
+        (ratio.clamp(0.0, 99.9) * 10.0).round() / 10.0
     }
 
     #[allow(dead_code)]
@@ -283,5 +298,27 @@ mod tests {
         // Test missing domain
         let res_miss = cache.get_with_swr("unknown.org", 1, 0x1111).await;
         assert_eq!(res_miss, CacheLookupResult::Miss);
+    }
+
+    #[tokio::test]
+    async fn test_cache_zstd_compression() {
+        let cache = DnsCache::new(100);
+        // Realistic DNS packet with repetitions
+        let mut sample_dns = vec![0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00];
+        sample_dns.extend(vec![0x41; 200]); // compressible payload
+
+        cache.insert("cdn.example.org", 1, sample_dns.clone(), 300).await;
+        cache.run_pending_tasks().await;
+        let (count, bytes, _, _) = cache.get_stats();
+        assert_eq!(count, 1);
+        assert!(bytes < sample_dns.len() as u64); // zstd compressed size is smaller
+        assert!(cache.compression_ratio() > 0.0);
+
+        let retrieved = cache.get("cdn.example.org", 1, 0x9999).await;
+        assert!(retrieved.is_some());
+        let wire = retrieved.unwrap();
+        assert_eq!(wire.len(), sample_dns.len());
+        assert_eq!(wire[0..2], [0x99, 0x99]);
+        assert_eq!(&wire[12..], &sample_dns[12..]);
     }
 }

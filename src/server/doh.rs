@@ -68,9 +68,6 @@ pub fn create_doh_router(state: Arc<AppState>) -> Router {
     Router::new()
         // Dashboard & Gateway
         .route("/", get(dashboard_handler))
-        .route("/dashboard", get(dashboard_handler))
-        .route("/dashboard/", get(dashboard_handler))
-        .route("/status", get(dashboard_handler))
         .route("/health", get(health_handler))
         .route("/favicon.ico", get(favicon_handler))
         .route("/dns-query", get(doh_get_handler).post(doh_post_handler))
@@ -81,7 +78,6 @@ pub fn create_doh_router(state: Arc<AppState>) -> Router {
         .route("/api/intelligence", get(status_no_key_handler))
         .route("/api/intelligence/", get(status_no_key_handler))
         .route("/:key", get(status_handler))
-        .route("/dashboard/:key", get(status_handler))
         .route("/api/status/:key", get(status_handler))
         .route("/api/intelligence/:key", get(status_handler))
 
@@ -502,12 +498,12 @@ async fn status_handler(
     headers: HeaderMap,
 ) -> Response {
     let auth = check_auth(&state, Some(&key), &headers, "/api/status");
-    let is_html = headers.get(header::ACCEPT)
+    let is_json = headers.get(header::ACCEPT)
         .and_then(|h| h.to_str().ok())
-        .map(|a| a.contains("text/html"))
+        .map(|a| a.starts_with("application/json") || a == "application/json")
         .unwrap_or(false);
 
-    if is_html {
+    if !is_json {
         if auth.is_view_or_admin() {
             let fly_machine_id = std::env::var("FLY_MACHINE_ID").unwrap_or_default();
             let fly_region = std::env::var("FLY_REGION").unwrap_or_else(|_| "sin".to_string());
@@ -1345,10 +1341,13 @@ async fn handle_add_blocklist(
             .unwrap_or_default()
             .as_millis() as u64;
         for raw in to_add {
-            let clean = raw.trim().trim_end_matches('.').to_ascii_lowercase();
-            if clean.is_empty() {
-                continue;
-            }
+            let clean = match crate::security::sanitizer::sanitize_domain(&raw) {
+                Ok(c) => c,
+                Err(err) => {
+                    skipped.push(format!("{}: {}", raw.trim(), err));
+                    continue;
+                }
+            };
             if guard.contains_key(&clean) {
                 skipped.push(format!("{} already exists", clean));
             } else {
@@ -1415,11 +1414,13 @@ async fn handle_delete_blocklist(
         ).into_response();
     }
 
-    let domain = payload.domain.clone().unwrap_or_default();
-    let clean = domain.trim().trim_end_matches('.').to_ascii_lowercase();
-    if clean.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": "invalid domain" }))).into_response();
-    }
+    let raw = payload.domain.clone().unwrap_or_default();
+    let clean = match crate::security::sanitizer::sanitize_domain(&raw) {
+        Ok(c) => c,
+        Err(err) => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": format!("invalid domain: {}", err) }))).into_response();
+        }
+    };
     state.wal.append_unblock(&clean);
     state.custom_blocklist.write().remove(&clean);
     broadcast_peer_sync(headers, &state.config.dns_master_key, reqwest::Method::DELETE, "/api/blocklist", Some(serde_json::json!(payload)));
@@ -1538,10 +1539,13 @@ async fn handle_add_whitelist(
     {
         let mut guard = state.custom_whitelist.write();
         for raw in to_add {
-            let clean = raw.trim().trim_end_matches('.').to_ascii_lowercase();
-            if clean.is_empty() {
-                continue;
-            }
+            let clean = match crate::security::sanitizer::sanitize_domain(&raw) {
+                Ok(c) => c,
+                Err(err) => {
+                    skipped.push(format!("{}: {}", raw.trim(), err));
+                    continue;
+                }
+            };
             if guard.contains(&clean) {
                 skipped.push(format!("{} already exists", clean));
             } else {
@@ -1552,8 +1556,8 @@ async fn handle_add_whitelist(
             }
         }
     }
-    for dom in added_domains {
-        state.cache.invalidate_negative(&dom).await;
+    for dom in &added_domains {
+        state.cache.invalidate_negative(dom).await;
     }
 
     broadcast_peer_sync(headers, &state.config.dns_master_key, reqwest::Method::POST, "/api/whitelist", Some(serde_json::json!(payload)));
@@ -1602,11 +1606,13 @@ async fn handle_delete_whitelist(
         ).into_response();
     }
 
-    let domain = payload.domain.clone().unwrap_or_default();
-    let clean = domain.trim().trim_end_matches('.').to_ascii_lowercase();
-    if clean.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": "invalid domain" }))).into_response();
-    }
+    let raw = payload.domain.clone().unwrap_or_default();
+    let clean = match crate::security::sanitizer::sanitize_domain(&raw) {
+        Ok(c) => c,
+        Err(err) => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": format!("invalid domain: {}", err) }))).into_response();
+        }
+    };
     state.wal.append_unwhitelist(&clean);
     state.custom_whitelist.write().remove(&clean);
     broadcast_peer_sync(headers, &state.config.dns_master_key, reqwest::Method::DELETE, "/api/whitelist", Some(serde_json::json!(payload)));
@@ -1724,10 +1730,13 @@ async fn handle_add_common(
     {
         let mut guard = state.custom_common.write();
         for raw in to_add {
-            let clean = raw.trim().trim_end_matches('.').to_ascii_lowercase();
-            if clean.is_empty() {
-                continue;
-            }
+            let clean = match crate::security::sanitizer::sanitize_domain(&raw) {
+                Ok(c) => c,
+                Err(err) => {
+                    skipped.push(format!("{}: {}", raw.trim(), err));
+                    continue;
+                }
+            };
             if guard.contains(&clean) {
                 skipped.push(format!("{} already exists", clean));
             } else {
@@ -1738,8 +1747,8 @@ async fn handle_add_common(
             }
         }
     }
-    for dom in added_domains {
-        state.cache.invalidate_negative(&dom).await;
+    for dom in &added_domains {
+        state.cache.invalidate_negative(dom).await;
     }
 
     broadcast_peer_sync(headers, &state.config.dns_master_key, reqwest::Method::POST, "/api/common", Some(serde_json::json!(payload)));
@@ -1788,11 +1797,13 @@ async fn handle_delete_common(
         ).into_response();
     }
 
-    let domain = payload.domain.clone().unwrap_or_default();
-    let clean = domain.trim().trim_end_matches('.').to_ascii_lowercase();
-    if clean.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": "invalid domain" }))).into_response();
-    }
+    let raw = payload.domain.clone().unwrap_or_default();
+    let clean = match crate::security::sanitizer::sanitize_domain(&raw) {
+        Ok(c) => c,
+        Err(err) => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": format!("invalid domain: {}", err) }))).into_response();
+        }
+    };
     state.wal.append_uncommon(&clean);
     state.custom_common.write().remove(&clean);
     broadcast_peer_sync(headers, &state.config.dns_master_key, reqwest::Method::DELETE, "/api/common", Some(serde_json::json!(payload)));
@@ -1866,9 +1877,8 @@ async fn handle_add_auto_block(
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": "Forbidden: Generated tokens are view-only. No changes can be made." }))).into_response();
     }
 
-    if let Some(dom) = payload.domain {
-        let clean = dom.trim().trim_end_matches('.').to_ascii_lowercase();
-        if !clean.is_empty() {
+    if let Some(ref raw) = payload.domain {
+        if let Ok(clean) = crate::security::sanitizer::sanitize_domain(raw) {
             let now = SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -1922,9 +1932,8 @@ async fn handle_delete_auto_block(
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": "Forbidden: Generated tokens are view-only. No changes can be made." }))).into_response();
     }
 
-    if let Some(dom) = payload.domain {
-        let clean = dom.trim().trim_end_matches('.').to_ascii_lowercase();
-        if !clean.is_empty() {
+    if let Some(ref raw) = payload.domain {
+        if let Ok(clean) = crate::security::sanitizer::sanitize_domain(raw) {
             state.custom_blocklist.write().remove(&clean);
             state.wal.append_unblock(&clean);
             state.log_action("auto_block_removed", &clean);
@@ -2035,10 +2044,16 @@ async fn handle_set_dns_mode(
     if !auth.is_admin() {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": "Forbidden: DNS mode can only be toggled with the Master Key" }))).into_response();
     }
-    let is_private = payload.mode.to_lowercase() == "private";
+    let clean_mode = match crate::security::sanitizer::sanitize_mode(&payload.mode) {
+        Ok(m) => m,
+        Err(err) => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": err }))).into_response();
+        }
+    };
+    let is_private = clean_mode == "private" || clean_mode == "strict";
     state.is_private_mode.store(is_private, Ordering::Relaxed);
-    state.log_action("dns_mode_changed", &payload.mode);
-    Json(serde_json::json!({ "ok": true, "dnsMode": payload.mode })).into_response()
+    state.log_action("dns_mode_changed", &clean_mode);
+    Json(serde_json::json!({ "ok": true, "dnsMode": clean_mode })).into_response()
 }
 
 // ── Upstreams Handlers ──────────────────────────────────────────────────────
@@ -2164,18 +2179,19 @@ async fn get_heatmap_top_key(
 }
 
 fn handle_heatmap_lookup(state: &AppState, domain_opt: Option<&str>) -> Json<serde_json::Value> {
-    let raw = domain_opt.unwrap_or_default().trim().trim_end_matches('.').to_ascii_lowercase();
-    if raw.is_empty() {
-        return Json(serde_json::json!({ "ok": true, "domain": "", "found": false }));
-    }
+    let raw = domain_opt.unwrap_or_default();
+    let clean = match crate::security::sanitizer::sanitize_domain(raw) {
+        Ok(c) => c,
+        Err(_) => return Json(serde_json::json!({ "ok": true, "domain": "", "found": false })),
+    };
     let guard = state.heatmap.read();
-    if let Some(rec) = guard.get(&raw) {
+    if let Some(rec) = guard.get(&clean) {
         let max_val = *rec.hourly.iter().max().unwrap_or(&0);
         let peak_hour = rec.hourly.iter().position(|&v| v == max_val).unwrap_or(0);
         Json(serde_json::json!({
             "ok": true,
             "found": true,
-            "domain": raw,
+            "domain": clean,
             "total": rec.total,
             "peak": peak_hour,
             "peakRps": max_val,
@@ -2184,7 +2200,7 @@ fn handle_heatmap_lookup(state: &AppState, domain_opt: Option<&str>) -> Json<ser
     } else {
         Json(serde_json::json!({
             "ok": true,
-            "domain": raw,
+            "domain": clean,
             "found": false
         }))
     }
@@ -2219,8 +2235,13 @@ async fn dga_test(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<DomainReq>,
 ) -> Json<serde_json::Value> {
-    let domain = payload.domain.unwrap_or_default();
-    let clean = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    let raw = payload.domain.unwrap_or_default();
+    let clean = match crate::security::sanitizer::sanitize_domain(&raw) {
+        Ok(c) => c,
+        Err(err) => {
+            return Json(serde_json::json!({ "ok": false, "error": format!("Invalid domain: {}", err) }));
+        }
+    };
     let is_dga = crate::security::heuristics::is_dga_threat(&clean);
     let is_alike = crate::security::heuristics::is_lookalike_threat(&clean);
     let (features, entropy) = state.brain.extract_features(&clean);
@@ -3007,7 +3028,7 @@ async fn process_dns_query(state: Arc<AppState>, query_wire: &[u8], client_ip: I
         }
     };
 
-    if let Some((upstream_resp, upstream_name)) = resolve_result {
+    if let Some((mut upstream_resp, upstream_name)) = resolve_result {
         let lat = start_upstream.elapsed().as_millis() as u32;
         let rcode = if upstream_resp.len() >= 4 { (upstream_resp[3] & 0x0F) as u16 } else { 0 };
         if let Some(flag) = state.fingerprint.record_response(client_ip, rcode) {
@@ -3036,10 +3057,8 @@ async fn process_dns_query(state: Arc<AppState>, query_wire: &[u8], client_ip: I
             ));
         }
 
-        // Feature 6: TTL Manipulation Guard — detect fast-flux botnets (extremely low TTL + DGA pattern)
-        // Robust & universal check: ultra-low TTL (<= 5s) combined with verified algorithmic threat
-        // (DGA entropy AND AI brain confirmation). Necessary services (VoIP, CDNs, banking, APIs)
-        // are NEVER harmed.
+        // Feature 6: TTL Manipulation Guard — detect fast-flux botnets (extremely low TTL + DGA / AI anomaly)
+        // & TTL Inflation Guard (clamp bogus high TTLs > 86400s)
         if state.ttl_guard_enabled.load(Ordering::Relaxed)
             && state.blocking_enabled.load(Ordering::Relaxed)
             && !state.is_exempt(&q.name)
@@ -3048,14 +3067,17 @@ async fn process_dns_query(state: Arc<AppState>, query_wire: &[u8], client_ip: I
             if let Some(min_ttl) = crate::dns::parser::extract_min_ttl(&upstream_resp) {
                 let is_dga_suspect = crate::security::heuristics::is_dga_threat(&q.name);
                 let (ai_score, _) = state.brain.evaluate_internal(&q.name);
-                if min_ttl <= 5 && is_dga_suspect && ai_score > 0.85 {
+                let learned_ttl = state.ttl_learner.smart_ttl(&q.name, 300);
+                let is_fast_flux = min_ttl <= 5 && (is_dga_suspect || ai_score > 0.50 || (learned_ttl >= 60 && ai_score > 0.35));
+
+                if is_fast_flux {
                     state.metrics.ttl_guard_blocks.fetch_add(1, Ordering::Relaxed);
                     state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
                     state.log_action("ttl_guard_block", &format!(
                         "{} TTL={}s (fast-flux/DGA confirmed, AI={:.2})", q.name, min_ttl, ai_score
                     ));
                     state.log_anomaly("ttl_manipulation_guard", &format!(
-                        "Fast-flux botnet blocked: low TTL {}s + DGA pattern + AI {:.2} on {}", min_ttl, ai_score, q.name
+                        "Fast-flux botnet blocked: low TTL {}s + DGA/AI pattern (AI={:.2}) on {}", min_ttl, ai_score, q.name
                     ));
                     state.wal.append_query(&q.name, q.qtype, log_id, 3, lat, "TTL_GUARD_BLOCK");
                     state.log_query(&q.name, q.qtype, log_id, proto, "TTL_GUARD_BLOCK", 3, lat, "ttl_manipulation_guard", "TTL Guard");
@@ -3069,6 +3091,10 @@ async fn process_dns_query(state: Arc<AppState>, query_wire: &[u8], client_ip: I
                         .header("x-block-reason", "ttl_manipulation_guard")
                         .body(Bytes::from(blocked).into())
                         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+                }
+
+                if min_ttl > 86400 {
+                    crate::dns::cache::DnsCache::cap_response_ttl(&mut upstream_resp, 86400);
                 }
             }
         }
@@ -3404,14 +3430,23 @@ async fn add_schedule(
     if !auth.is_admin() {
         return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"ok":false,"error":"Admin key required"}))).into_response();
     }
+    let clean_domain = match crate::security::sanitizer::sanitize_domain(&body.domain) {
+        Ok(d) => d,
+        Err(err) => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"ok":false,"error":format!("Invalid domain: {}", err)}))).into_response();
+        }
+    };
+    if body.start_hour > 23 || body.end_hour > 23 {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"ok":false,"error":"Hours must be 0-23"}))).into_response();
+    }
     let reason = if body.reason.is_empty() {
         format!("Blocked {}-{}h", body.start_hour, body.end_hour)
     } else { body.reason };
-    let id = state.schedule_store.add_rule(body.domain.clone(), body.start_hour, body.end_hour, body.tz_offset, reason);
+    let id = state.schedule_store.add_rule(clean_domain.clone(), body.start_hour, body.end_hour, body.tz_offset, reason);
     Json(serde_json::json!({
         "ok": true,
         "id": id,
-        "domain": body.domain,
+        "domain": clean_domain,
         "startHour": body.start_hour,
         "endHour": body.end_hour,
         "tzOffset": body.tz_offset,
