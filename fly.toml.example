@@ -5,8 +5,8 @@ primary_region = "sin"
   dockerfile = "Dockerfile"
 
 [env]
-  PORT = "443"
-  DOT_PORT = "853"
+  PORT = "8443"
+  DOT_PORT = "8853"
   HOST = "::"
   DB_PATH = "/data/amardns.wal"
   LOG_LEVEL = "info"
@@ -27,7 +27,7 @@ primary_region = "sin"
 
 # HTTP & DoH (DNS-over-HTTPS)
 [[services]]
-  internal_port = 443
+  internal_port = 8443
   protocol = "tcp"
   auto_stop_machines = false
   auto_start_machines = true
@@ -51,7 +51,7 @@ primary_region = "sin"
 
 # DoT (DNS-over-TLS for Android Private DNS)
 [[services]]
-  internal_port = 853
+  internal_port = 8853
   protocol = "tcp"
   auto_stop_machines = false
   auto_start_machines = true
