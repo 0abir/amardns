@@ -348,8 +348,8 @@ impl UpstreamPool {
         let fut1 = execute_query(first, wire.clone());
         tokio::pin!(fut1);
 
-        // Stage 1 hedge timer: 10ms (top resolvers typically answer in 2-6ms)
-        let hedge_sleep_1 = tokio::time::sleep(Duration::from_millis(10));
+        // Stage 1 hedge timer: 8ms (top resolvers in SG typically answer in 2-5ms)
+        let hedge_sleep_1 = tokio::time::sleep(Duration::from_millis(8));
         tokio::pin!(hedge_sleep_1);
 
         tokio::select! {
@@ -359,7 +359,7 @@ impl UpstreamPool {
                 }
             }
             _ = &mut hedge_sleep_1 => {
-                // First didn't finish in 10ms, race with second resolver!
+                // First didn't finish in 8ms, race with second resolver!
             }
         }
 
@@ -367,7 +367,7 @@ impl UpstreamPool {
             let fut2 = execute_query(sec, wire.clone());
             tokio::pin!(fut2);
 
-            let hedge_sleep_2 = tokio::time::sleep(Duration::from_millis(15));
+            let hedge_sleep_2 = tokio::time::sleep(Duration::from_millis(12));
             tokio::pin!(hedge_sleep_2);
 
             tokio::select! {

@@ -4,8 +4,9 @@ use moka::future::Cache;
 
 #[derive(Clone)]
 pub struct CachedResponse {
-    pub compressed_wire: Vec<u8>,
+    pub wire: Vec<u8>,
     pub uncompressed_len: usize,
+    pub is_compressed: bool,
     pub created_at: Instant,
     pub original_ttl: u32,
     pub stale_grace_secs: u32,
@@ -60,16 +61,22 @@ impl DnsCache {
         key
     }
 
-    /// Fast lookup supporting RFC 8767 Stale-While-Revalidate (Serve-Stale).
-    /// Decompresses zstd level-1 stored wire format in ~1µs.
+    /// Ultra-fast lookup supporting RFC 8767 Stale-While-Revalidate (Serve-Stale).
+    /// Instant 0-decompression memory copy for standard responses (<128 bytes);
+    /// Decompresses zstd level-1 stored wire format in ~1µs for larger multi-record responses.
     pub async fn get_with_swr(&self, qname: &str, qtype: u16, client_tx_id: u16) -> CacheLookupResult {
         let key = Self::make_key(qname, qtype);
         if let Some(entry) = self.cache.get(&key).await {
             let elapsed_secs = entry.created_at.elapsed().as_secs() as u32;
-            let mut out = match zstd::bulk::decompress(&entry.compressed_wire, entry.uncompressed_len) {
-                Ok(decomp) => decomp,
-                Err(_) => entry.compressed_wire.clone(),
+            let mut out = if entry.is_compressed {
+                match zstd::bulk::decompress(&entry.wire, entry.uncompressed_len) {
+                    Ok(decomp) => decomp,
+                    Err(_) => entry.wire.clone(),
+                }
+            } else {
+                entry.wire.clone()
             };
+
             if elapsed_secs < entry.original_ttl {
                 if out.len() >= 2 {
                     out[0..2].copy_from_slice(&client_tx_id.to_be_bytes());
@@ -107,18 +114,28 @@ impl DnsCache {
         let safe_grace = grace_secs.clamp(30, 3600);
         let uncompressed_len = raw_response.len();
         
-        let compressed_wire = match zstd::bulk::compress(&raw_response, 1) {
-            Ok(c) => c,
-            Err(_) => raw_response.clone(),
+        let (wire, is_compressed, stored_len) = if uncompressed_len >= 128 {
+            if let Ok(c) = zstd::bulk::compress(&raw_response, 1) {
+                if c.len() < uncompressed_len {
+                    let clen = c.len();
+                    (c, true, clen)
+                } else {
+                    (raw_response, false, uncompressed_len)
+                }
+            } else {
+                (raw_response, false, uncompressed_len)
+            }
+        } else {
+            (raw_response, false, uncompressed_len)
         };
-        let compressed_len = compressed_wire.len();
 
-        self.compressed_bytes.fetch_add(compressed_len as u64, Ordering::Relaxed);
+        self.compressed_bytes.fetch_add(stored_len as u64, Ordering::Relaxed);
         self.uncompressed_bytes.fetch_add(uncompressed_len as u64, Ordering::Relaxed);
 
         let entry = CachedResponse {
-            compressed_wire,
+            wire,
             uncompressed_len,
+            is_compressed,
             created_at: Instant::now(),
             original_ttl: safe_ttl,
             stale_grace_secs: safe_grace,
