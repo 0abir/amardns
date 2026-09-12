@@ -373,29 +373,46 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 7. Shutdown coordination channel
+    // 7. Load TLS configuration if enabled
+    let (doh_tls_config, dot_tls_config) = if config.is_tls_enabled() {
+        let cert_path = config.tls_cert_path.as_deref().unwrap();
+        let key_path = config.tls_key_path.as_deref().unwrap();
+        info!("[tls] Loading TLS certificates from '{}' and private key from '{}'", cert_path, key_path);
+        let doh_cfg = server::tls::create_doh_tls_config(cert_path, key_path)?;
+        let dot_cfg = server::tls::create_dot_tls_config(cert_path, key_path)?;
+        (Some(doh_cfg), Some(dot_cfg))
+    } else {
+        (None, None)
+    };
+
+    // 8. Shutdown coordination channel
     let (shutdown_tx, shutdown_rx_dot) = tokio::sync::watch::channel(());
 
-    // 8. Start DoT Server
+    // 9. Start DoT Server
     let dot_state = state.clone();
     let dot_host = config.host.clone();
     let dot_port = config.dot_port;
     let dot_handle = tokio::spawn(async move {
-        if let Err(e) = server::dot::start_dot_server(dot_state, &dot_host, dot_port, shutdown_rx_dot).await {
+        if let Err(e) = server::dot::start_dot_server(dot_state, &dot_host, dot_port, dot_tls_config, shutdown_rx_dot).await {
             error!("[dot] Server error: {}", e);
         }
     });
 
-    // 9. Start DoH Server
+    // 10. Start DoH Server
     let app = server::doh::create_doh_router(state.clone());
     let host_ip: std::net::IpAddr = config.host.parse().unwrap_or(std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED));
     let addr = SocketAddr::new(host_ip, config.port);
-    info!("[doh] AmarDNS DoH server listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    if let Some(tls_cfg) = doh_tls_config {
+        info!("[doh] AmarDNS DoH server listening on https://{} (Native TLS Termination)", addr);
+        server::tls::serve_axum_tls(listener, app, tls_cfg, shutdown_signal()).await?;
+    } else {
+        info!("[doh] AmarDNS DoH server listening on http://{} (Edge TLS / Plain HTTP)", addr);
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
+    }
 
     // Signal DoT server to shut down cleanly
     let _ = shutdown_tx.send(());

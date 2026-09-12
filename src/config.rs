@@ -14,6 +14,9 @@ pub struct Config {
     pub upstream_cron: String,
     pub upstream_tz: String,
     pub safe_browsing_keys: Vec<String>,
+    pub tls_cert_path: Option<String>,
+    pub tls_key_path: Option<String>,
+    pub tls_enabled: bool,
 }
 
 /// Parse a port number from the named environment variable.  If the variable
@@ -56,6 +59,12 @@ impl Config {
             .filter(|k| !k.is_empty())
             .collect();
 
+        let tls_cert_path = env::var("TLS_CERT_PATH").ok().filter(|s| !s.trim().is_empty());
+        let tls_key_path = env::var("TLS_KEY_PATH").ok().filter(|s| !s.trim().is_empty());
+        let tls_enabled = env::var("TLS_ENABLED")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(tls_cert_path.is_some() && tls_key_path.is_some());
+
         Self {
             port: parse_port("PORT", 8443),
             dot_port: parse_port("DOT_PORT", 8853),
@@ -71,6 +80,9 @@ impl Config {
             upstream_tz: env::var("UPSTREAM_TZ")
                 .unwrap_or_else(|_| "Asia/Dhaka".to_string()),
             safe_browsing_keys,
+            tls_cert_path,
+            tls_key_path,
+            tls_enabled,
         }
     }
 
@@ -173,6 +185,22 @@ impl Config {
             ));
         }
 
+        // ── TLS ─────────────────────────────────────────────────────────────
+        if self.tls_enabled {
+            if self.tls_cert_path.is_none() {
+                issues.push(
+                    "ERROR: TLS_ENABLED is true but TLS_CERT_PATH is not set or is empty."
+                        .to_string(),
+                );
+            }
+            if self.tls_key_path.is_none() {
+                issues.push(
+                    "ERROR: TLS_ENABLED is true but TLS_KEY_PATH is not set or is empty."
+                        .to_string(),
+                );
+            }
+        }
+
         issues
     }
 
@@ -181,5 +209,48 @@ impl Config {
     pub fn access_mode_is_private(&self) -> bool {
         self.dns_access_mode.trim().eq_ignore_ascii_case("private")
     }
+
+    /// Returns `true` when native TLS termination is configured and enabled.
+    pub fn is_tls_enabled(&self) -> bool {
+        self.tls_enabled && self.tls_cert_path.is_some() && self.tls_key_path.is_some()
+    }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_tls_disabled_by_default() {
+        let mut cfg = Config::from_env();
+        cfg.tls_cert_path = None;
+        cfg.tls_key_path = None;
+        cfg.tls_enabled = false;
+        assert!(!cfg.is_tls_enabled());
+    }
+
+    #[test]
+    fn test_config_tls_enabled_with_paths() {
+        let mut cfg = Config::from_env();
+        cfg.tls_cert_path = Some("/etc/ssl/certs/amardns.pem".to_string());
+        cfg.tls_key_path = Some("/etc/ssl/private/amardns.key".to_string());
+        cfg.tls_enabled = true;
+        assert!(cfg.is_tls_enabled());
+    }
+
+    #[test]
+    fn test_config_tls_validation_missing_paths() {
+        let mut cfg = Config::from_env();
+        cfg.dns_master_key = "strong_test_master_key_12345".to_string();
+        cfg.dns_token_secret = "strong_test_token_secret_0123456789_abcdef".to_string();
+        cfg.tls_enabled = true;
+        cfg.tls_cert_path = None;
+        cfg.tls_key_path = None;
+
+        let issues = cfg.validate();
+        assert!(issues.iter().any(|i| i.contains("TLS_CERT_PATH")));
+        assert!(issues.iter().any(|i| i.contains("TLS_KEY_PATH")));
+    }
+}
+
 

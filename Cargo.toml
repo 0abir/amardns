@@ -9,6 +9,9 @@ description = "Ultra-lightweight, zero-GC, Z+ security DNS resolver (DoH + DoT) 
 # Async runtime & networking
 tokio = { version = "1.39", features = ["full"] }
 axum = { version = "0.7", default-features = false, features = ["http1", "http2", "json", "tokio", "query"] }
+hyper = { version = "1.4", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["server-auto", "tokio", "service"] }
+tower-service = "0.3"
 bytes = "1.6"
 
 # DNS Protocol wire handling: custom zero-GC RFC 1035 parser (src/dns/parser.rs)
@@ -24,6 +27,9 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 
 # Cryptography & Security
 ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rustls-pemfile = "2.1"
 
 # Compression (Response Compression Cache — Feature 11)
 zstd = { version = "0.13", default-features = false }

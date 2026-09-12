@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tracing::{debug, info, warn};
 
 use crate::dns::parser::{build_blocked_response, build_servfail_response, parse_dns_query};
@@ -30,12 +30,19 @@ pub async fn start_dot_server(
     state: Arc<AppState>,
     host: &str,
     port: u16,
+    tls_config: Option<Arc<tokio_rustls::rustls::ServerConfig>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<()>,
 ) -> Result<(), std::io::Error> {
     let host_ip: std::net::IpAddr = host.parse().unwrap_or(std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED));
     let addr = SocketAddr::new(host_ip, port);
     let listener = TcpListener::bind(addr).await?;
-    info!("[dot] AmarDNS DoT server listening on {} (Edge TLS terminated via Fly proxy on 853)", addr);
+    let tls_acceptor = tls_config.map(tokio_rustls::TlsAcceptor::from);
+
+    if tls_acceptor.is_some() {
+        info!("[dot] AmarDNS DoT server listening on {} with native TLS termination (RFC 7858)", addr);
+    } else {
+        info!("[dot] AmarDNS DoT server listening on {} (Edge TLS terminated via Fly proxy on 853)", addr);
+    }
 
     loop {
         tokio::select! {
@@ -43,8 +50,30 @@ pub async fn start_dot_server(
                 match accept_res {
                     Ok((socket, client_addr)) => {
                         let state_clone = state.clone();
+                        let acceptor_clone = tls_acceptor.clone();
                         tokio::spawn(async move {
-                            handle_dot_connection(socket, client_addr, state_clone).await;
+                            let _ = socket.set_nodelay(true);
+                            {
+                                use socket2::{SockRef, TcpKeepalive};
+                                let sock_ref = SockRef::from(&socket);
+                                let ka = TcpKeepalive::new()
+                                    .with_time(std::time::Duration::from_secs(30))
+                                    .with_interval(std::time::Duration::from_secs(10));
+                                let _ = sock_ref.set_tcp_keepalive(&ka);
+                            }
+
+                            if let Some(acceptor) = acceptor_clone {
+                                match acceptor.accept(socket).await {
+                                    Ok(tls_stream) => {
+                                        handle_dot_connection(tls_stream, client_addr, state_clone).await;
+                                    }
+                                    Err(e) => {
+                                        debug!("[dot] TLS handshake failed: {}", e);
+                                    }
+                                }
+                            } else {
+                                handle_dot_connection(socket, client_addr, state_clone).await;
+                            }
                         });
                     }
                     Err(e) => {
@@ -61,21 +90,10 @@ pub async fn start_dot_server(
     Ok(())
 }
 
-async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, state: Arc<AppState>) {
-    let _ = socket.set_nodelay(true);
-
-    // TCP keepalive via socket2: probes after 30s idle, every 10s.
-    // Keeps Fly.io's TCP backhaul alive on idle DoT connections,
-    // preventing the 'unexpected end of file' race with Fly's idle timeout.
-    {
-        use socket2::{SockRef, TcpKeepalive};
-        let sock_ref = SockRef::from(&socket);
-        let ka = TcpKeepalive::new()
-            .with_time(std::time::Duration::from_secs(30))
-            .with_interval(std::time::Duration::from_secs(10));
-        let _ = sock_ref.set_tcp_keepalive(&ka);
-    }
-
+async fn handle_dot_connection<S>(mut socket: S, client_addr: SocketAddr, state: Arc<AppState>)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let client_ip = client_addr.ip();
 
     // Check rate limiter (private/internal Fly.io proxy IPs are automatically exempt).
@@ -460,7 +478,10 @@ async fn handle_dot_connection(mut socket: TcpStream, client_addr: SocketAddr, s
 /// Returns Ok(()) on success. Translates BrokenPipe and ConnectionReset to
 /// debug-level events — these mean the client already closed the connection
 /// (normal for Android Private DNS and iOS DoT clients).
-async fn send_length_prefixed(socket: &mut TcpStream, data: &[u8]) -> Result<(), std::io::Error> {
+async fn send_length_prefixed<S>(socket: &mut S, data: &[u8]) -> Result<(), std::io::Error>
+where
+    S: tokio::io::AsyncWrite + Unpin,
+{
     let len = data.len() as u16;
     let write_fut = async {
         socket.write_all(&len.to_be_bytes()).await?;
