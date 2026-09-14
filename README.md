@@ -3,7 +3,7 @@
 **Autonomous Zero-GC Edge DNS Security Gateway & Threat Intelligence Engine in Rust**
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/Rust-2021_Edition-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-2024_Edition-orange.svg)](https://www.rust-lang.org/)
 [![Platform](https://img.shields.io/badge/Platform-Fly.io%20%7C%20Linux%20%7C%20Docker-purple.svg)](https://fly.io/)
 [![Memory](https://img.shields.io/badge/Memory-Zero_GC_~13MB-green.svg)](#zero-allocation-memory-architecture)
 [![Latency](https://img.shields.io/badge/Latency-P95_<5ms-brightgreen.svg)](#singleflight-coalescing--hedged-upstream-racing)

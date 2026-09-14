@@ -668,7 +668,7 @@ impl Metrics {
 }
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
-extern "C" {
+unsafe extern "C" {
     fn malloc_trim(pad: usize) -> i32;
 }
 

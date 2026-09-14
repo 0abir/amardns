@@ -646,7 +646,7 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
                 .hourly
                 .iter()
                 .enumerate()
-                .max_by_key(|(_, &v)| v)
+                .max_by_key(|&(_, &v)| v)
                 .map(|(i, _)| i)
                 .unwrap_or(0);
             serde_json::json!({

@@ -113,7 +113,7 @@ impl AIBrain {
         let transitions = self.domain_transitions.read();
         if let Some(children) = transitions.get(&clean) {
             let mut candidates: Vec<(&String, &u32)> =
-                children.iter().filter(|(_, &count)| count >= 2).collect();
+                children.iter().filter(|&(_, &count)| count >= 2).collect();
             candidates.sort_by(|a, b| b.1.cmp(a.1));
             candidates
                 .into_iter()
