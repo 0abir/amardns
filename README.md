@@ -7,7 +7,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Fly.io%20%7C%20Linux%20%7C%20Docker-purple.svg)](https://fly.io/)
 [![Memory](https://img.shields.io/badge/Memory-Zero_GC_~13MB-green.svg)](#zero-allocation-memory-architecture)
 [![Latency](https://img.shields.io/badge/Latency-P95_<5ms-brightgreen.svg)](#singleflight-coalescing--hedged-upstream-racing)
-[![Tests](https://img.shields.io/badge/Tests-132%20Passed%20(100%25)-success.svg)](#testing--verification)
+[![Tests](https://img.shields.io/badge/Tests-138%20Passed%20(100%25)-success.svg)](#testing--verification)
 
 ---
 
@@ -256,6 +256,102 @@ All settings are configured via environment variables matching `src/config.rs` a
 | `UPSTREAM_TZ` | `Asia/Dhaka` | IANA timezone for scheduled maintenance tasks. |
 | `TLS_CERT_PATH` | *(empty)* | Optional path to custom TLS certificate file (X.509 PEM). |
 | `TLS_KEY_PATH` | *(empty)* | Optional path to custom TLS private key file (PKCS#8 PEM). |
+
+---
+
+## Dynamic DNS (DDNS) & ACME TLS Automation
+
+AmarDNS features built-in, autonomous Dynamic DNS (DDNS) and ACME DNS-01 certificate automation. It automatically discovers the app's public Anycast IPv4 and IPv6 addresses, updates DNS records across all configured providers, and provisions unified multi-SAN SSL/TLS certificates with zero manual intervention.
+
+### Supported DDNS Providers & Configuration
+
+| Provider | Supported Suffixes | Domain Variable | Auth Token Variable | Features |
+| :--- | :--- | :--- | :--- | :--- |
+| **deSEC** | `*.dedyn.io` or custom deSEC domains | `DESEC_DOMAIN` | `DESEC_TOKEN` | Automated `A` & `AAAA` IP sync + ACME DNS-01 challenge TXT records |
+| **DuckDNS** | `*.duckdns.org` | `DUCKDNS_DOMAIN` | `DUCKDNS_TOKEN` | Automated `A` & `AAAA` IP sync + ACME DNS-01 challenge TXT records |
+| **Dynu** | `*.dynu.net`, `*.ddnsfree.com`, `*.freeddns.org`, `*.mywire.org`, `*.accesscam.org`, `*.camdvr.org`, `*.kozow.com`, `*.webhop.me`, `*.dns-cloud.net`, `*.blogdns.com`, `*.dynu.email` | `DYNU_DOMAIN` | `DYNU_API_KEY` | Automated `A` & `AAAA` IP sync via REST API v2 + ACME DNS-01 challenge TXT records |
+
+#### Configuration Example (`fly.toml`):
+```toml
+[env]
+  # Platform Domain Access Policy:
+  # Set to "false" to restrict access exclusively to your custom domains below.
+  # If no custom domains are defined, this automatically defaults/overrides to "true".
+  PLATFORM_DOMAIN = "false"
+
+  # Domain Configurations (supports single or comma-separated multiple domains)
+  DESEC_DOMAIN = "amardns.dedyn.io"
+  DUCKDNS_DOMAIN = "amardns.duckdns.org"
+  DYNU_DOMAIN = "amardns.ddnsfree.com"
+
+  # API Credentials for Automated DDNS & ACME DNS-01
+  DESEC_TOKEN = "your_desec_api_token"
+  DUCKDNS_TOKEN = "your_duckdns_token"
+  DYNU_API_KEY = "your_dynu_api_key"
+
+  # Certificate Authority (Optional: uses ZeroSSL when set, Let's Encrypt when omitted)
+  ZEROSSL_API_KEY = "your_zerossl_api_key"
+
+  # Persistent Storage Paths for NVMe Mount
+  TLS_CERT_PATH = "/data/cert.pem"
+  TLS_KEY_PATH = "/data/key.pem"
+```
+
+### Automated DDNS IP Synchronization
+
+Whenever AmarDNS boots (and automatically on every daily cron run at 00:00 UTC):
+1. **Public IP Discovery**: Resolves the application Anycast hostname (`{app}.fly.dev`) using DoH to detect the active public IPv4 (`66.241.124.24`) and IPv6 (`2a09:8280:1::18e:50e2:0`) addresses (with automatic fallbacks to public IP echo endpoints).
+2. **Provider Sync**:
+   - Updates deSEC `A` and `AAAA` records via `PATCH https://desec.io/api/v1/domains/{domain}/rrsets/`.
+   - Updates DuckDNS IPv4 and IPv6 via `https://www.duckdns.org/update`.
+   - Updates Dynu IPv4 and IPv6 via `POST https://api.dynu.com/v2/dns/{id}`.
+
+### Automated SSL/TLS Certificate Lifecycle & ZeroSSL Rotation
+
+AmarDNS manages the full lifecycle of your SSL/TLS certificates with zero downtime and zero server restarts:
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        AmarDNS Boot / Daily Cron                       │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                                    ▼
+       ┌─────────────────────────────────────────────────────────┐
+       │ Check Certificate on Disk (/data/cert.pem)              │
+       │  • Validate private key syntax                          │
+       │  • Verify all configured domains exist in cert's SANs   │
+       │  • Calculate remaining days until expiration            │
+       └────────────────────────────┬────────────────────────────┘
+                                    │
+           ┌────────────────────────┴────────────────────────┐
+           │                                                 │
+   Valid (>= 30 days) &                              Missing domain OR
+   All domains covered                               < 30 days remaining
+           │                                                 │
+           ▼                                                 ▼
+┌──────────────────────────────┐              ┌──────────────────────────────┐
+│  PRESERVE EXISTING CERT      │              │  RUN ACME DNS-01 ISSUANCE    │
+│  • Skip duplicate request    │              │  1. Create DNS-01 TXT record │
+│  • Hot-load in-memory        │              │  2. Verify propagation (DoH) │
+│  • Zero downtime / 0 restart │              │  3. Issue 90-day ZeroSSL/LE  │
+└──────────────────────────────┘              │  4. Save /data/cert.pem & key│
+                                              │  5. Dynamic in-memory reload │
+                                              │  6. Sync to replica nodes    │
+                                              └──────────────────────────────┘
+```
+
+#### How & When Certificates Are Rotated:
+1. **Rotation Threshold (When)**:
+   - ZeroSSL (and Let's Encrypt) certificates are issued with **90-day validity**.
+   - AmarDNS evaluates certificate health on every boot and every 24 hours.
+   - When **less than 30 days remaining** (around day 60 after issuance), or whenever a new domain is added to your configuration, the background supervisor automatically initiates certificate renewal.
+2. **Zero-Downtime Hot Reload (How)**:
+   - The ACME coordinator generates a fresh ECDSA P-256 key pair, publishes `_acme-challenge` TXT records to deSEC, DuckDNS, and Dynu, verifies propagation via DoH, and submits the finalized CSR to ZeroSSL.
+   - The renewed certificate chain is saved atomically to `/data/cert.pem` and `/data/key.pem`.
+   - The `DynamicCertResolver` immediately reloads the new certificate into active TLS, DoT, DoQ, and DoH3 listeners in RAM **with zero process restarts and zero dropped connections**.
+3. **Multi-Region Synchronization**:
+   - The primary region node (`sin`) acts as the ACME leader.
+   - Secondary region replica nodes (e.g., `fra`) automatically sync the renewed certificate bundle from the leader over internal encrypted Anycast mesh (`http://sin.amardns.internal:443/internal/tls/bundle/{master_key}`) and update their local resolvers in-memory.
 
 ---
 
