@@ -17,7 +17,11 @@ pub struct Config {
     pub upstream_cron: String,
     pub upstream_tz: String,
     pub safe_browsing_keys: Vec<String>,
+    pub desec_domains: Vec<String>,
+    pub duckdns_domains: Vec<String>,
+    pub dynu_domains: Vec<String>,
     pub custom_domains: Vec<String>,
+    pub platform_domain: bool,
     pub shield_fly_dev: bool,
     pub tls_cert_path: Option<String>,
     pub tls_key_path: Option<String>,
@@ -61,6 +65,22 @@ fn parse_port(var: &str, default: u16) -> u16 {
     }
 }
 
+fn parse_domain_list(var_names: &[&str]) -> Vec<String> {
+    for name in var_names {
+        if let Ok(val) = env::var(name) {
+            let list: Vec<String> = val
+                .split(',')
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !list.is_empty() {
+                return list;
+            }
+        }
+    }
+    Vec::new()
+}
+
 impl Config {
     pub fn from_env() -> Self {
         let sb_env = env::var("SAFE_BROWSING_KEYS")
@@ -72,19 +92,44 @@ impl Config {
             .filter(|k| !k.is_empty())
             .collect();
 
-        let custom_domains_env = env::var("CUSTOM_DOMAINS")
-            .or_else(|_| env::var("ALLOWED_DOMAINS"))
-            .unwrap_or_default();
-        let custom_domains: Vec<String> = custom_domains_env
-            .split(',')
-            .map(|s| s.trim().to_ascii_lowercase())
-            .filter(|s| !s.is_empty())
-            .collect();
+        let desec_domains = parse_domain_list(&["DESEC_DOMAIN", "DESEC_DOMAINS"]);
+        let duckdns_domains = parse_domain_list(&["DUCKDNS_DOMAIN", "DUCKDNS_DOMAINS"]);
+        let dynu_domains = parse_domain_list(&["DYNU_DOMAIN", "DYNU_DOMAINS"]);
+        let generic_custom = parse_domain_list(&["CUSTOM_DOMAINS", "ALLOWED_DOMAINS"]);
 
-        let shield_fly_dev = env::var("SHIELD_FLY_DEV")
-            .or_else(|_| env::var("HIDE_FLY_DEV"))
+        let mut custom_domains: Vec<String> = Vec::new();
+        for d in desec_domains
+            .iter()
+            .chain(duckdns_domains.iter())
+            .chain(dynu_domains.iter())
+            .chain(generic_custom.iter())
+        {
+            if !custom_domains.contains(d) {
+                custom_domains.push(d.clone());
+            }
+        }
+
+        let has_custom_domains = !custom_domains.is_empty();
+
+        // PLATFORM_DOMAIN controls access via platform domain (*.fly.dev). Defaults to true.
+        // If no custom domain is defined, PLATFORM_DOMAIN is automatically overridden to true.
+        let mut platform_domain = env::var("PLATFORM_DOMAIN")
+            .or_else(|_| env::var("ALLOW_PLATFORM_DOMAIN"))
+            .ok()
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-            .unwrap_or(!custom_domains.is_empty());
+            .or_else(|| {
+                env::var("SHIELD_FLY_DEV")
+                    .or_else(|_| env::var("HIDE_FLY_DEV"))
+                    .ok()
+                    .map(|v| !(v.eq_ignore_ascii_case("true") || v == "1"))
+            })
+            .unwrap_or(true);
+
+        if !has_custom_domains {
+            platform_domain = true;
+        }
+
+        let shield_fly_dev = !platform_domain;
 
         let tls_cert_path = env::var("TLS_CERT_PATH")
             .ok()
@@ -118,7 +163,12 @@ impl Config {
 
         let acme_enabled = env::var("ACME_ENABLED")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-            .unwrap_or(desec_token.is_some() || duckdns_token.is_some() || dynu_api_key.is_some() || zerossl_api_key.is_some());
+            .unwrap_or(
+                desec_token.is_some()
+                    || duckdns_token.is_some()
+                    || dynu_api_key.is_some()
+                    || zerossl_api_key.is_some(),
+            );
 
         let host = env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
         let udp_host = env::var("UDP_HOST").unwrap_or_else(|_| host.clone());
@@ -140,7 +190,11 @@ impl Config {
             upstream_cron: env::var("UPSTREAM_CRON").unwrap_or_else(|_| "0 0 * * *".to_string()),
             upstream_tz: env::var("UPSTREAM_TZ").unwrap_or_else(|_| "Asia/Dhaka".to_string()),
             safe_browsing_keys,
+            desec_domains,
+            duckdns_domains,
+            dynu_domains,
             custom_domains,
+            platform_domain,
             shield_fly_dev,
             tls_cert_path,
             tls_key_path,
@@ -284,9 +338,6 @@ impl Config {
 
     /// Verifies if an incoming HTTP Host header is allowed under custom domain & shield policies.
     pub fn is_host_allowed(&self, host_header: Option<&str>) -> bool {
-        if self.custom_domains.is_empty() && !self.shield_fly_dev {
-            return true;
-        }
         let host = match host_header {
             Some(h) => h
                 .split(':')
@@ -306,15 +357,15 @@ impl Config {
         {
             return true;
         }
-        // Block .fly.dev when shield is active
-        if self.shield_fly_dev && host.ends_with(".fly.dev") {
-            return false;
+        // Check platform domain access (*.fly.dev)
+        if host.ends_with(".fly.dev") {
+            return self.platform_domain;
         }
         // If specific custom domains are defined, enforce them
         if !self.custom_domains.is_empty() {
             return self.custom_domains.iter().any(|d| d == &host);
         }
-        true
+        self.platform_domain
     }
 
     /// Returns `true` when native TLS termination is configured and enabled.
@@ -354,20 +405,45 @@ mod tests {
         cfg.custom_domains = vec![
             "amardns.dedyn.io".to_string(),
             "amardns.duckdns.org".to_string(),
+            "amardns.ddnsfree.com".to_string(),
         ];
+        cfg.platform_domain = false;
         cfg.shield_fly_dev = true;
 
         assert!(cfg.is_host_allowed(Some("amardns.dedyn.io")));
         assert!(cfg.is_host_allowed(Some("amardns.dedyn.io:443")));
         assert!(cfg.is_host_allowed(Some("amardns.duckdns.org")));
+        assert!(cfg.is_host_allowed(Some("amardns.ddnsfree.com")));
         assert!(cfg.is_host_allowed(Some("localhost:8443")));
         assert!(cfg.is_host_allowed(Some("127.0.0.1:8443")));
         assert!(cfg.is_host_allowed(Some("amardns.internal:8080")));
 
-        // Block .fly.dev
+        // Block .fly.dev when platform_domain is false
         assert!(!cfg.is_host_allowed(Some("amardns.fly.dev")));
         assert!(!cfg.is_host_allowed(Some("random-scanner.fly.dev:443")));
         assert!(!cfg.is_host_allowed(Some("unauthorized-domain.com")));
+    }
+
+    #[test]
+    fn test_platform_domain_allowed() {
+        let mut cfg = Config::from_env();
+        cfg.custom_domains = vec!["amardns.dedyn.io".to_string()];
+        cfg.platform_domain = true;
+        cfg.shield_fly_dev = false;
+
+        assert!(cfg.is_host_allowed(Some("amardns.dedyn.io")));
+        assert!(cfg.is_host_allowed(Some("amardns.fly.dev")));
+        assert!(!cfg.is_host_allowed(Some("unauthorized.com")));
+    }
+
+    #[test]
+    fn test_platform_domain_override_when_no_custom_domains() {
+        let mut cfg = Config::from_env();
+        cfg.custom_domains = vec![];
+        cfg.platform_domain = true; // overridden when empty
+
+        assert!(cfg.is_host_allowed(Some("amardns.fly.dev")));
+        assert!(cfg.is_host_allowed(Some("localhost")));
     }
 
     #[test]

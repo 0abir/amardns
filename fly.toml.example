@@ -31,10 +31,15 @@ kill_timeout = 10
   DNS_MASTER_KEY = "CHANGE_ME_MASTER_KEY"
   DNS_TOKEN_SECRET = "CHANGE_ME_64_CHAR_HEX_TOKEN_SECRET_0123456789abcdef0123456789abcdef"
   DNSSEC_ENABLED = "true"
-  SHIELD_FLY_DEV = "true"
 
-  # Domain & ACME Provisioning
-  CUSTOM_DOMAINS = "dns.yourdomain.com"
+  # Domain & Platform Access Control
+  # Set PLATFORM_DOMAIN to false to restrict queries to your custom domain(s) only.
+  # If no custom domains are configured, PLATFORM_DOMAIN automatically defaults/overrides to true.
+  PLATFORM_DOMAIN = "true"
+  DESEC_DOMAIN = ""
+  DUCKDNS_DOMAIN = ""
+  DYNU_DOMAIN = ""
+  CUSTOM_DOMAINS = ""
   TLS_CERT_PATH = "/data/cert.pem"
   TLS_KEY_PATH = "/data/key.pem"
 

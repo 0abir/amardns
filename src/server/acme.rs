@@ -663,6 +663,9 @@ pub struct AcmeConfig {
     pub desec_token: Option<String>,
     pub duckdns_token: Option<String>,
     pub dynu_api_key: Option<String>,
+    pub desec_domains: Vec<String>,
+    pub duckdns_domains: Vec<String>,
+    pub dynu_domains: Vec<String>,
     pub domains: Vec<String>,
     pub cert_path: String,
     pub key_path: String,
@@ -826,13 +829,13 @@ pub async fn provision_acme_certificate(
         expected_challenges.push((domain.clone(), digest_b64.clone()));
         challenge_triggers.push((domain.clone(), challenge_url));
 
-        if domain.ends_with(".dedyn.io") {
+        if config.desec_domains.contains(&domain) || domain.ends_with(".dedyn.io") {
             if let Some(ref dtoken) = config.desec_token {
                 set_desec_txt(&http, dtoken, &domain, &digest_b64).await?;
             } else {
                 warn!("[acme] DESEC_TOKEN not configured for domain '{}'", domain);
             }
-        } else if domain.ends_with(".duckdns.org") {
+        } else if config.duckdns_domains.contains(&domain) || domain.ends_with(".duckdns.org") {
             if let Some(ref dtoken) = config.duckdns_token {
                 set_duckdns_txt(&http, dtoken, &digest_b64).await?;
             } else {
@@ -841,7 +844,7 @@ pub async fn provision_acme_certificate(
                     domain
                 );
             }
-        } else if is_dynu_domain(&domain) || config.dynu_api_key.is_some() {
+        } else if config.dynu_domains.contains(&domain) || is_dynu_domain(&domain) || config.dynu_api_key.is_some() {
             if let Some(ref dkey) = config.dynu_api_key {
                 set_dynu_txt(&http, dkey, &domain, &digest_b64).await?;
             } else {
@@ -1043,15 +1046,15 @@ pub async fn provision_acme_certificate(
 
     // Clean up TXT challenge records
     for domain in &config.domains {
-        if domain.ends_with(".dedyn.io") {
+        if config.desec_domains.contains(domain) || domain.ends_with(".dedyn.io") {
             if let Some(ref dtoken) = config.desec_token {
                 let _ = clear_desec_txt(&http, dtoken, domain).await;
             }
-        } else if domain.ends_with(".duckdns.org") {
+        } else if config.duckdns_domains.contains(domain) || domain.ends_with(".duckdns.org") {
             if let Some(ref dtoken) = config.duckdns_token {
                 let _ = clear_duckdns_txt(&http, dtoken).await;
             }
-        } else if is_dynu_domain(domain) || config.dynu_api_key.is_some() {
+        } else if config.dynu_domains.contains(domain) || is_dynu_domain(domain) || config.dynu_api_key.is_some() {
             if let Some(ref dkey) = config.dynu_api_key {
                 let _ = clear_dynu_txt(&http, dkey, domain).await;
             }

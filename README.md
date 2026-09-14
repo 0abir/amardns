@@ -242,12 +242,15 @@ All settings are configured via environment variables matching `src/config.rs` a
 | `DNS_TOKEN_SECRET` | *(empty)* | 64-character secret for HMAC-signed view-only tokens. |
 | `DNS_ACCESS_MODE` | `public` | Access policy: `public` (open resolver) or `private` (key/token enforced). |
 | `DNSSEC_ENABLED` | `true` | Enables RFC 4034/4035/5155 cryptographic DNSSEC validation. |
-| `SHIELD_FLY_DEV` | `true` | Enables host-shielding to block unauthorized direct *.fly.dev domains. |
-| `CUSTOM_DOMAINS` | *(empty)* | Comma-separated list of authorized custom domains for host shield. |
+| `PLATFORM_DOMAIN` | `true` | Controls access via platform domain (`*.fly.dev`). Set `false` to restrict to custom domains only. Overridden to `true` if no custom domains are defined. |
+| `DESEC_DOMAIN` | *(empty)* | Optional deSEC domain name(s), comma-separated (e.g. `amardns.dedyn.io`). |
+| `DUCKDNS_DOMAIN` | *(empty)* | Optional DuckDNS domain name(s), comma-separated (e.g. `amardns.duckdns.org`). |
+| `DYNU_DOMAIN` | *(empty)* | Optional Dynu domain name(s), comma-separated (e.g. `amardns.ddnsfree.com`). |
+| `CUSTOM_DOMAINS` | *(empty)* | Additional custom domain name(s), comma-separated. |
 | `SAFE_BROWSING_KEYS` | *(empty)* | Optional comma-separated Google Safe Browsing v4 API keys. |
 | `DESEC_TOKEN` | *(empty)* | Optional deSEC API token for automated ACME DNS-01 challenges. |
 | `DUCKDNS_TOKEN` | *(empty)* | Optional DuckDNS API token for automated ACME DNS-01 challenges. |
-| `DYNU_API_KEY` | *(empty)* | Optional Dynu API key for automated ACME DNS-01 challenges (*.dynu.net). |
+| `DYNU_API_KEY` | *(empty)* | Optional Dynu API key for automated ACME DNS-01 challenges (`*.dynu.net`, `*.ddnsfree.com`, etc.). |
 | `ZEROSSL_API_KEY` | *(empty)* | Optional ZeroSSL API key for automated ACME EAB certificate provisioning. |
 | `UPSTREAM_CRON` | `0 0 * * *` | Cron expression for background threat feed sync and ranking. |
 | `UPSTREAM_TZ` | `Asia/Dhaka` | IANA timezone for scheduled maintenance tasks. |
