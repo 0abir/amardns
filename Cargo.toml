@@ -1,0 +1,58 @@
+[package]
+name = "amardns"
+version = "1.0.0"
+edition = "2021"
+authors = ["0abir <abir@amardns.local>"]
+description = "Ultra-lightweight, zero-GC, Z+ security DNS resolver (DoH + DoT) with AI threat intelligence."
+
+[dependencies]
+# Async runtime & networking
+tokio = { version = "1.39", features = ["full"] }
+axum = { version = "0.7", default-features = false, features = ["http1", "http2", "json", "tokio", "query"] }
+hyper = { version = "1.4", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["server-auto", "tokio", "service"] }
+tower-service = "0.3"
+bytes = "1.6"
+
+# DNS Protocol wire handling: custom zero-GC RFC 1035 parser (src/dns/parser.rs)
+
+# High-performance in-memory caching
+moka = { version = "0.12", features = ["future", "sync"] }
+parking_lot = "0.12"
+
+# Serialization & HTTP client for CDN threat feed sync
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
+
+# Cryptography & Security
+ring = "0.17"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rustls-pemfile = "2.1"
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+
+# Compression (Response Compression Cache — Feature 11)
+zstd = { version = "0.13", default-features = false }
+
+# Async stream helpers (SSE /api/logs/stream — Feature 8)
+async-stream = "0.3"
+
+# Timezone support: full IANA tz database with correct DST transitions
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+chrono-tz = "0.10"
+
+# Utilities & Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+socket2 = { version = "0.6.5", features = ["all"] }
+
+
+
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

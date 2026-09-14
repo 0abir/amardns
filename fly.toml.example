@@ -1,0 +1,142 @@
+# fly.toml.example
+# Production configuration template for deploying AmarDNS v2.0 on Fly.io Anycast Edge.
+# Copy this file to `fly.toml` and configure your domain names and secrets.
+
+app = "amardns-example"
+primary_region = "sin"
+kill_signal = "SIGTERM"
+kill_timeout = 10
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Network Listeners
+  PORT = "443"
+  DOT_PORT = "853"
+  DOQ_PORT = "853"
+  DOH3_PORT = "443"
+  PLAIN53_ENABLED = "true"
+  HOST = "::"
+  UDP_HOST = "fly-global-services"
+
+  # Storage & Logging
+  DB_PATH = "/data/amardns.wal"
+  LOG_LEVEL = "info"
+  RUST_LOG = "amardns=info,tower_http=warn"
+
+  # Security & Access Control
+  # DNS_ACCESS_MODE: "private" (requires Master Key or HMAC token) or "public" (open resolver)
+  DNS_ACCESS_MODE = "private"
+  DNS_MASTER_KEY = "CHANGE_ME_MASTER_KEY"
+  DNS_TOKEN_SECRET = "CHANGE_ME_64_CHAR_HEX_TOKEN_SECRET_0123456789abcdef0123456789abcdef"
+  DNSSEC_ENABLED = "true"
+  SHIELD_FLY_DEV = "true"
+
+  # Domain & ACME Provisioning
+  CUSTOM_DOMAINS = "dns.yourdomain.com"
+  TLS_CERT_PATH = "/data/cert.pem"
+  TLS_KEY_PATH = "/data/key.pem"
+
+  # Optional Threat Intel & ACME API Credentials
+  SAFE_BROWSING_KEYS = ""
+  DESEC_TOKEN = ""
+  DUCKDNS_TOKEN = ""
+  ZEROSSL_API_KEY = ""
+
+  # Scheduled Maintenance Cron
+  UPSTREAM_CRON = "0 0 * * *"
+  UPSTREAM_TZ = "UTC"
+
+# Persistent NVMe volume for Write-Ahead Log (WAL) and TLS certificates
+[[mounts]]
+  source = "amardns_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
+
+# ── 1. DoH (DNS-over-HTTPS) ──────────────────────────────────────────────────
+# TCP port 443. Fly.io Anycast edge terminates TLS and forwards plain HTTP to app.
+[[services]]
+  internal_port = 443
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 2
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "4s"
+    grace_period = "15s"
+    method = "get"
+    path = "/health"
+
+# ── 2. DoT (DNS-over-TLS) ────────────────────────────────────────────────────
+# TCP port 853 with PROXY protocol v2 for real client IP extraction.
+[[services]]
+  internal_port = 853
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 2
+
+  [[services.ports]]
+    port = 853
+    proxy_proto_options = { version = "v2" }
+
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "4s"
+    grace_period = "10s"
+
+# ── 3. DoQ (DNS-over-QUIC) ───────────────────────────────────────────────────
+# UDP port 853 (RFC 9250). App terminates native QUIC/TLS directly.
+[[services]]
+  internal_port = 853
+  protocol = "udp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 2
+
+  [[services.ports]]
+    port = 853
+
+# ── 4. Plain DNS (UDP) ───────────────────────────────────────────────────────
+# UDP port 53. Standard high-speed recursive forwarding.
+[[services]]
+  internal_port = 53
+  protocol = "udp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 2
+
+  [[services.ports]]
+    port = 53
+
+# ── 5. Plain DNS (TCP) ───────────────────────────────────────────────────────
+# TCP port 53. Standard DNS fallback for large response payloads.
+[[services]]
+  internal_port = 53
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 2
+
+  [[services.ports]]
+    port = 53
+
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "4s"
+    grace_period = "10s"
