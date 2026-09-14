@@ -19,6 +19,23 @@ Engineered with a **zero garbage-collection architecture**, AmarDNS indexes over
 
 ---
 
+## Public Edge Endpoints (`amardns.dedyn.io`)
+
+AmarDNS is deployed across Anycast edge nodes with low-latency DNS resolution and real-time telemetry:
+
+| Protocol | Endpoint / Hostname | Port | Usage / Client Configuration |
+| :--- | :--- | :--- | :--- |
+| **DNS-over-HTTPS (DoH)** | `https://amardns.dedyn.io/dns-query` | `443` | Browsers, iOS/macOS Encrypted DNS profiles, `cloudflared`, `dnscrypt-proxy` |
+| **DoH JSON REST API** | `https://amardns.dedyn.io/resolve` | `443` | Web inspector, command-line scripts (`curl "https://amardns.dedyn.io/resolve?name=google.com&type=A"`) |
+| **DNS-over-TLS (DoT)** | `amardns.dedyn.io` | `853` | Android Private DNS, stubby, systemd-resolved |
+| **DNS-over-QUIC (DoQ)** | `quic://amardns.dedyn.io:853` | `853/udp` | AdGuard Home, NextDNS CLI, `q`, `doggo` |
+| **DNS-over-HTTP/3 (DoH3)** | `https://amardns.dedyn.io/dns-query` | `443/udp` | Automatic HTTP/3 upgrade via `Alt-Svc` header |
+| **Plain DNS (IPv4)** | `66.241.124.207` | `53/udp`, `53/tcp` | Standard universal recursive DNS |
+| **Plain DNS (IPv6)** | `2a09:8280:1::186:5faa:0` | `53/udp`, `53/tcp` | Standard IPv6 recursive DNS |
+| **Edge Dashboard & Console** | `https://amardns.dedyn.io/` | `443` | Live telemetry matrix, neural brain inspector, threat feeds |
+
+---
+
 ## System Architecture
 
 ```
@@ -248,7 +265,7 @@ config https-dns-proxy 'amardns_1'
     option user 'nobody'
     option group 'nogroup'
     option bootstrap_dns '66.241.124.207'
-    option resolver_url 'https://amardns.fly.dev/dns-query?client=router_primary'
+    option resolver_url 'https://amardns.dedyn.io/dns-query?client=router_primary'
 
 config https-dns-proxy 'amardns_2'
     option listen_addr '127.0.0.1'
@@ -256,15 +273,15 @@ config https-dns-proxy 'amardns_2'
     option user 'nobody'
     option group 'nogroup'
     option bootstrap_dns '2a09:8280:1::186:5faa:0,66.241.124.207'
-    option resolver_url 'https://amardns.fly.dev/dns-query?client=router_secondary'
+    option resolver_url 'https://amardns.dedyn.io/dns-query?client=router_secondary'
 ```
 
 ### Android (Private DNS / DoT)
 - Navigate to: **Settings** $\rightarrow$ **Network & internet** $\rightarrow$ **Private DNS**.
-- Select **Private DNS provider hostname** and enter: `amardns.fly.dev` (or your custom domain).
+- Select **Private DNS provider hostname** and enter: `amardns.dedyn.io`
 
 ### Apple iOS / macOS (DoH Profile)
-- Configure Encrypted DNS via configuration profile targeting: `https://amardns.fly.dev/dns-query`.
+- Configure Encrypted DNS via configuration profile targeting: `https://amardns.dedyn.io/dns-query`
 
 ---
 
