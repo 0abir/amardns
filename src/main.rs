@@ -497,6 +497,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             zerossl_api_key: config.zerossl_api_key.clone(),
             desec_token: config.desec_token.clone(),
             duckdns_token: config.duckdns_token.clone(),
+            dynu_api_key: config.dynu_api_key.clone(),
             domains: acme_domains,
             cert_path: cert_dest,
             key_path: key_dest,

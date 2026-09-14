@@ -24,6 +24,7 @@ pub struct Config {
     pub tls_enabled: bool,
     pub desec_token: Option<String>,
     pub duckdns_token: Option<String>,
+    pub dynu_api_key: Option<String>,
     pub zerossl_api_key: Option<String>,
     pub acme_enabled: bool,
     pub plain53_enabled: bool,
@@ -104,6 +105,12 @@ impl Config {
             .ok()
             .filter(|s| !s.trim().is_empty());
 
+        let dynu_api_key = env::var("DYNU_API_KEY")
+            .or_else(|_| env::var("DYNU_KEY"))
+            .or_else(|_| env::var("DYNU_TOKEN"))
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+
         let zerossl_api_key = env::var("ZEROSSL_API_KEY")
             .or_else(|_| env::var("ZEROSSL_KEY"))
             .ok()
@@ -111,7 +118,7 @@ impl Config {
 
         let acme_enabled = env::var("ACME_ENABLED")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-            .unwrap_or(desec_token.is_some() || duckdns_token.is_some() || zerossl_api_key.is_some());
+            .unwrap_or(desec_token.is_some() || duckdns_token.is_some() || dynu_api_key.is_some() || zerossl_api_key.is_some());
 
         let host = env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
         let udp_host = env::var("UDP_HOST").unwrap_or_else(|_| host.clone());
@@ -140,6 +147,7 @@ impl Config {
             tls_enabled,
             desec_token,
             duckdns_token,
+            dynu_api_key,
             zerossl_api_key,
             acme_enabled,
             plain53_enabled: env::var("PLAIN53_ENABLED")

@@ -42,6 +42,7 @@ kill_timeout = 10
   SAFE_BROWSING_KEYS = ""
   DESEC_TOKEN = ""
   DUCKDNS_TOKEN = ""
+  DYNU_API_KEY = ""
   ZEROSSL_API_KEY = ""
 
   # Scheduled Maintenance Cron

@@ -373,6 +373,205 @@ async fn clear_desec_txt(
     Ok(())
 }
 
+pub fn is_dynu_domain(domain: &str) -> bool {
+    let d = domain.to_ascii_lowercase();
+    d.ends_with(".dynu.net")
+        || d.ends_with(".dynu.com")
+        || d.ends_with(".freeddns.org")
+        || d.ends_with(".ddnsfree.com")
+        || d.ends_with(".mywire.org")
+        || d.ends_with(".accesscam.org")
+        || d.ends_with(".camdvr.org")
+        || d.ends_with(".kozow.com")
+        || d.ends_with(".webhop.me")
+        || d.ends_with(".dns-cloud.net")
+        || d.ends_with(".blogdns.com")
+        || d.ends_with(".dynu.email")
+}
+
+fn compute_dynu_node_name(full_domain: &str, root_domain: &str) -> String {
+    let full = full_domain.trim_end_matches('.');
+    let root = root_domain.trim_end_matches('.');
+    if full.eq_ignore_ascii_case(root) {
+        "_acme-challenge".to_string()
+    } else if let Some(sub) = full.strip_suffix(root) {
+        let sub_trimmed = sub.trim_end_matches('.');
+        format!("_acme-challenge.{}", sub_trimmed)
+    } else {
+        "_acme-challenge".to_string()
+    }
+}
+
+async fn get_dynu_domain_info(
+    http: &reqwest::Client,
+    api_key: &str,
+    domain: &str,
+) -> Result<(u64, String), Box<dyn std::error::Error + Send + Sync>> {
+    let url = format!("https://api.dynu.com/v2/dns/getroot/{}", domain);
+    if let Ok(resp) = http
+        .get(&url)
+        .header("API-Key", api_key)
+        .header("Accept", "application/json")
+        .send()
+        .await
+    {
+        if resp.status().is_success() {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let (Some(id), Some(name)) = (json["id"].as_u64(), json["domainName"].as_str()) {
+                    return Ok((id, name.to_string()));
+                }
+            }
+        }
+    }
+
+    // Fallback: list all domains
+    let list_url = "https://api.dynu.com/v2/dns";
+    let list_resp = http
+        .get(list_url)
+        .header("API-Key", api_key)
+        .header("Accept", "application/json")
+        .send()
+        .await?;
+
+    if list_resp.status().is_success() {
+        let json: serde_json::Value = list_resp.json().await?;
+        let domains = json["domains"].as_array().or_else(|| json.as_array());
+        if let Some(arr) = domains {
+            for d in arr {
+                if let (Some(name), Some(id)) = (d["name"].as_str(), d["id"].as_u64()) {
+                    if domain.eq_ignore_ascii_case(name)
+                        || domain
+                            .to_ascii_lowercase()
+                            .ends_with(&format!(".{}", name.to_ascii_lowercase()))
+                    {
+                        return Ok((id, name.to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    Err(format!("Could not locate Dynu domain ID for '{}'", domain).into())
+}
+
+async fn set_dynu_txt(
+    http: &reqwest::Client,
+    api_key: &str,
+    domain: &str,
+    txt_val: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    info!("[acme/dynu] Publishing TXT record for {}...", domain);
+    let (domain_id, root_name) = get_dynu_domain_info(http, api_key, domain).await?;
+    let node_name = compute_dynu_node_name(domain, &root_name);
+
+    let records_url = format!("https://api.dynu.com/v2/dns/{}/record", domain_id);
+    let rec_resp = http
+        .get(&records_url)
+        .header("API-Key", api_key)
+        .header("Accept", "application/json")
+        .send()
+        .await?;
+
+    let mut existing_record_id: Option<u64> = None;
+    if rec_resp.status().is_success() {
+        if let Ok(rec_json) = rec_resp.json::<serde_json::Value>().await {
+            let records = rec_json["dnsRecords"].as_array().or_else(|| rec_json.as_array());
+            if let Some(arr) = records {
+                for r in arr {
+                    let rec_type = r["recordType"].as_str().unwrap_or("");
+                    let n_name = r["nodeName"].as_str().unwrap_or("");
+                    if rec_type.eq_ignore_ascii_case("TXT")
+                        && n_name.eq_ignore_ascii_case(&node_name)
+                    {
+                        if let Some(id) = r["id"].as_u64() {
+                            existing_record_id = Some(id);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let payload = serde_json::json!({
+        "nodeName": node_name,
+        "recordType": "TXT",
+        "textData": txt_val,
+        "ttl": 120,
+        "state": true
+    });
+
+    let resp = if let Some(rec_id) = existing_record_id {
+        let update_url = format!(
+            "https://api.dynu.com/v2/dns/{}/record/{}",
+            domain_id, rec_id
+        );
+        http.post(&update_url)
+            .header("API-Key", api_key)
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await?
+    } else {
+        http.post(&records_url)
+            .header("API-Key", api_key)
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await?
+    };
+
+    if resp.status().is_success() {
+        info!("[acme/dynu] TXT record published successfully for {}", domain);
+        Ok(())
+    } else {
+        let err_text = resp.text().await.unwrap_or_default();
+        Err(format!("Dynu API error: {}", err_text).into())
+    }
+}
+
+async fn clear_dynu_txt(
+    http: &reqwest::Client,
+    api_key: &str,
+    domain: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Ok((domain_id, root_name)) = get_dynu_domain_info(http, api_key, domain).await {
+        let node_name = compute_dynu_node_name(domain, &root_name);
+        let records_url = format!("https://api.dynu.com/v2/dns/{}/record", domain_id);
+        if let Ok(rec_resp) = http
+            .get(&records_url)
+            .header("API-Key", api_key)
+            .header("Accept", "application/json")
+            .send()
+            .await
+        {
+            if rec_resp.status().is_success() {
+                if let Ok(rec_json) = rec_resp.json::<serde_json::Value>().await {
+                    let records = rec_json["dnsRecords"].as_array().or_else(|| rec_json.as_array());
+                    if let Some(arr) = records {
+                        for r in arr {
+                            let rec_type = r["recordType"].as_str().unwrap_or("");
+                            let n_name = r["nodeName"].as_str().unwrap_or("");
+                            if rec_type.eq_ignore_ascii_case("TXT")
+                                && n_name.eq_ignore_ascii_case(&node_name)
+                            {
+                                if let Some(rec_id) = r["id"].as_u64() {
+                                    let del_url = format!(
+                                        "https://api.dynu.com/v2/dns/{}/record/{}",
+                                        domain_id, rec_id
+                                    );
+                                    let _ = http.delete(&del_url).header("API-Key", api_key).send().await;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 // ── Certificate Expiry Parser ───────────────────────────────────────────────
 
 /// Parses ASN.1 UTCTime (tag 0x17) or GeneralizedTime (tag 0x18) from DER bytes.
@@ -463,6 +662,7 @@ pub struct AcmeConfig {
     pub zerossl_api_key: Option<String>,
     pub desec_token: Option<String>,
     pub duckdns_token: Option<String>,
+    pub dynu_api_key: Option<String>,
     pub domains: Vec<String>,
     pub cert_path: String,
     pub key_path: String,
@@ -638,6 +838,15 @@ pub async fn provision_acme_certificate(
             } else {
                 warn!(
                     "[acme] DUCKDNS_TOKEN not configured for domain '{}'",
+                    domain
+                );
+            }
+        } else if is_dynu_domain(&domain) || config.dynu_api_key.is_some() {
+            if let Some(ref dkey) = config.dynu_api_key {
+                set_dynu_txt(&http, dkey, &domain, &digest_b64).await?;
+            } else {
+                warn!(
+                    "[acme] DYNU_API_KEY not configured for domain '{}'",
                     domain
                 );
             }
@@ -841,6 +1050,10 @@ pub async fn provision_acme_certificate(
         } else if domain.ends_with(".duckdns.org") {
             if let Some(ref dtoken) = config.duckdns_token {
                 let _ = clear_duckdns_txt(&http, dtoken).await;
+            }
+        } else if is_dynu_domain(domain) || config.dynu_api_key.is_some() {
+            if let Some(ref dkey) = config.dynu_api_key {
+                let _ = clear_dynu_txt(&http, dkey, domain).await;
             }
         }
     }
@@ -1178,5 +1391,20 @@ mod tests {
     fn test_validate_existing_cert_and_key_nonexistent() {
         let res = validate_existing_cert_and_key("/nonexistent/cert.pem", "/nonexistent/key.pem", 30);
         assert!(res.is_none());
+    }
+
+    #[test]
+    fn test_is_dynu_domain() {
+        assert!(is_dynu_domain("amardns.dynu.net"));
+        assert!(is_dynu_domain("sub.test.freeddns.org"));
+        assert!(is_dynu_domain("myhost.ddnsfree.com"));
+        assert!(!is_dynu_domain("amardns.dedyn.io"));
+        assert!(!is_dynu_domain("amardns.duckdns.org"));
+    }
+
+    #[test]
+    fn test_compute_dynu_node_name() {
+        assert_eq!(compute_dynu_node_name("amardns.dynu.net", "amardns.dynu.net"), "_acme-challenge");
+        assert_eq!(compute_dynu_node_name("sub.amardns.dynu.net", "amardns.dynu.net"), "_acme-challenge.sub");
     }
 }

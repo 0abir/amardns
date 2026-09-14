@@ -30,8 +30,8 @@ AmarDNS is deployed across Anycast edge nodes with low-latency DNS resolution an
 | **DNS-over-TLS (DoT)** | `amardns.dedyn.io` | `853` | Android Private DNS, stubby, systemd-resolved |
 | **DNS-over-QUIC (DoQ)** | `quic://amardns.dedyn.io:853` | `853/udp` | AdGuard Home, NextDNS CLI, `q`, `doggo` |
 | **DNS-over-HTTP/3 (DoH3)** | `https://amardns.dedyn.io/dns-query` | `443/udp` | Automatic HTTP/3 upgrade via `Alt-Svc` header |
-| **Plain DNS (IPv4)** | `66.241.124.207` | `53/udp`, `53/tcp` | Standard universal recursive DNS |
-| **Plain DNS (IPv6)** | `2a09:8280:1::186:5faa:0` | `53/udp`, `53/tcp` | Standard IPv6 recursive DNS |
+| **Plain DNS (IPv4)** | `66.241.124.24` | `53/udp`, `53/tcp` | Standard universal recursive DNS |
+| **Plain DNS (IPv6)** | `2a09:8280:1::18e:50e2:0` | `53/udp`, `53/tcp` | Standard IPv6 recursive DNS |
 | **Edge Dashboard & Console** | `https://amardns.dedyn.io/` | `443` | Live telemetry matrix, neural brain inspector, threat feeds |
 
 ---
@@ -247,6 +247,7 @@ All settings are configured via environment variables matching `src/config.rs` a
 | `SAFE_BROWSING_KEYS` | *(empty)* | Optional comma-separated Google Safe Browsing v4 API keys. |
 | `DESEC_TOKEN` | *(empty)* | Optional deSEC API token for automated ACME DNS-01 challenges. |
 | `DUCKDNS_TOKEN` | *(empty)* | Optional DuckDNS API token for automated ACME DNS-01 challenges. |
+| `DYNU_API_KEY` | *(empty)* | Optional Dynu API key for automated ACME DNS-01 challenges (*.dynu.net). |
 | `ZEROSSL_API_KEY` | *(empty)* | Optional ZeroSSL API key for automated ACME EAB certificate provisioning. |
 | `UPSTREAM_CRON` | `0 0 * * *` | Cron expression for background threat feed sync and ranking. |
 | `UPSTREAM_TZ` | `Asia/Dhaka` | IANA timezone for scheduled maintenance tasks. |
@@ -264,7 +265,7 @@ config https-dns-proxy 'amardns_1'
     option listen_port '5053'
     option user 'nobody'
     option group 'nogroup'
-    option bootstrap_dns '66.241.124.207'
+    option bootstrap_dns '66.241.124.24'
     option resolver_url 'https://amardns.dedyn.io/dns-query?client=router_primary'
 
 config https-dns-proxy 'amardns_2'
@@ -272,7 +273,7 @@ config https-dns-proxy 'amardns_2'
     option listen_port '5054'
     option user 'nobody'
     option group 'nogroup'
-    option bootstrap_dns '2a09:8280:1::186:5faa:0,66.241.124.207'
+    option bootstrap_dns '2a09:8280:1::18e:50e2:0,66.241.124.24'
     option resolver_url 'https://amardns.dedyn.io/dns-query?client=router_secondary'
 ```
 
