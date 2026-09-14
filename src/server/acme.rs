@@ -657,7 +657,25 @@ pub fn extract_cert_sans_der(der_bytes: &[u8]) -> Vec<String> {
                     }
                 }
                 let end = (start + octet_len).min(der_bytes.len());
-                let san_slice = &der_bytes[start..end];
+                let mut san_slice = &der_bytes[start..end];
+
+                // Unwrap outer SEQUENCE (tag 0x30) if present
+                if !san_slice.is_empty() && san_slice[0] == 0x30 && san_slice.len() > 2 {
+                    let mut seq_len = san_slice[1] as usize;
+                    let mut seq_start = 2;
+                    if seq_len & 0x80 != 0 {
+                        let num_bytes = seq_len & 0x7F;
+                        if 2 + num_bytes <= san_slice.len() {
+                            seq_len = 0;
+                            for b in &san_slice[2..2 + num_bytes] {
+                                seq_len = (seq_len << 8) | (*b as usize);
+                            }
+                            seq_start = 2 + num_bytes;
+                        }
+                    }
+                    let seq_end = (seq_start + seq_len).min(san_slice.len());
+                    san_slice = &san_slice[seq_start..seq_end];
+                }
 
                 let mut p = 0;
                 while p + 1 < san_slice.len() {
@@ -1508,5 +1526,15 @@ mod tests {
     fn test_compute_dynu_node_name() {
         assert_eq!(compute_dynu_node_name("amardns.dynu.net", "amardns.dynu.net"), "_acme-challenge");
         assert_eq!(compute_dynu_node_name("sub.amardns.dynu.net", "amardns.dynu.net"), "_acme-challenge.sub");
+    }
+
+    #[test]
+    fn test_extract_cert_domains_live() {
+        if Path::new("live_cert.pem").exists() {
+            let domains = extract_cert_domains("live_cert.pem");
+            assert!(domains.contains(&"amardns.dedyn.io".to_string()));
+            assert!(domains.contains(&"amardns.duckdns.org".to_string()));
+            assert!(domains.contains(&"amardns.ddnsfree.com".to_string()));
+        }
     }
 }
