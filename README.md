@@ -132,7 +132,7 @@ Incoming Query (DoH / DoT / DoH3 / DoQ / Plain 53)
 ## Getting Started
 
 ### Prerequisites
-- [Rust 1.75+](https://www.rust-lang.org/tools/install) (Edition 2021)
+- [Rust 1.98+](https://www.rust-lang.org/tools/install) (Edition 2024)
 - *Optional*: Docker or Podman for containerized deployment
 
 ### Build & Run Locally
