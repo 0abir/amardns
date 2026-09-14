@@ -633,17 +633,109 @@ pub fn get_cert_days_remaining(cert_path: &str) -> Option<i64> {
     Some(duration.num_days())
 }
 
+/// Extracts all dNSName Subject Alternative Names (SANs) from a DER-encoded X.509 certificate.
+pub fn extract_cert_sans_der(der_bytes: &[u8]) -> Vec<String> {
+    let mut sans = Vec::new();
+    // SubjectAltName extension OID: 2.5.29.17 -> 0x55, 0x1D, 0x11 (DER: 0x06, 0x03, 0x55, 0x1D, 0x11)
+    let san_oid = [0x06, 0x03, 0x55, 0x1D, 0x11];
+
+    if let Some(pos) = der_bytes.windows(san_oid.len()).position(|w| w == san_oid) {
+        let mut i = pos + san_oid.len();
+        // Look for OCTET STRING (tag 0x04) containing the GeneralNames sequence
+        while i + 2 < der_bytes.len() && i < pos + 60 {
+            if der_bytes[i] == 0x04 {
+                let mut octet_len = der_bytes[i + 1] as usize;
+                let mut start = i + 2;
+                if octet_len & 0x80 != 0 {
+                    let num_bytes = octet_len & 0x7F;
+                    if i + 2 + num_bytes <= der_bytes.len() {
+                        octet_len = 0;
+                        for b in &der_bytes[i + 2..i + 2 + num_bytes] {
+                            octet_len = (octet_len << 8) | (*b as usize);
+                        }
+                        start = i + 2 + num_bytes;
+                    }
+                }
+                let end = (start + octet_len).min(der_bytes.len());
+                let san_slice = &der_bytes[start..end];
+
+                let mut p = 0;
+                while p + 1 < san_slice.len() {
+                    let tag = san_slice[p];
+                    let mut len = san_slice[p + 1] as usize;
+                    let mut val_start = p + 2;
+                    if len & 0x80 != 0 {
+                        let num_bytes = len & 0x7F;
+                        if p + 2 + num_bytes <= san_slice.len() {
+                            len = 0;
+                            for b in &san_slice[p + 2..p + 2 + num_bytes] {
+                                len = (len << 8) | (*b as usize);
+                            }
+                            val_start = p + 2 + num_bytes;
+                        }
+                    }
+                    if tag == 0x82 && val_start + len <= san_slice.len() {
+                        if let Ok(name) = std::str::from_utf8(&san_slice[val_start..val_start + len]) {
+                            let n = name.trim().to_ascii_lowercase();
+                            if !sans.contains(&n) {
+                                sans.push(n);
+                            }
+                        }
+                    }
+                    p = val_start + len;
+                }
+                break;
+            }
+            i += 1;
+        }
+    }
+    sans
+}
+
+/// Extracts all domain names (SANs) from a PEM certificate file.
+pub fn extract_cert_domains(cert_path: &str) -> Vec<String> {
+    let cert_data = match fs::read_to_string(cert_path) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+    let mut reader = std::io::BufReader::new(cert_data.as_bytes());
+    let certs: Vec<_> = rustls_pemfile::certs(&mut reader)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_default();
+    let first_cert = match certs.first() {
+        Some(c) => c,
+        None => return Vec::new(),
+    };
+    extract_cert_sans_der(first_cert.as_ref())
+}
+
 /// Validates an existing certificate and private key pair on disk.
 /// Checks that the files exist, parse cleanly into valid DER, have valid signing keys,
-/// and have at least `min_days_remaining` days remaining before expiration.
+/// have at least `min_days_remaining` days remaining before expiration,
+/// and that ALL `expected_domains` are covered by the certificate's SANs.
 pub fn validate_existing_cert_and_key(
     cert_path: &str,
     key_path: &str,
+    expected_domains: &[String],
     min_days_remaining: i64,
 ) -> Option<i64> {
     let days = get_cert_days_remaining(cert_path)?;
     if days < min_days_remaining {
         return None;
+    }
+
+    if !expected_domains.is_empty() {
+        let cert_domains = extract_cert_domains(cert_path);
+        for d in expected_domains {
+            let dl = d.trim().to_ascii_lowercase();
+            if !cert_domains.iter().any(|cd| cd == &dl) {
+                info!(
+                    "[acme-supervisor] Existing certificate missing domain '{}' (cert covers: {:?}). Re-provisioning required.",
+                    d, cert_domains
+                );
+                return None;
+            }
+        }
     }
 
     // Verify key exists and is a valid supported private key
@@ -1236,12 +1328,19 @@ pub fn spawn_acme_supervisor(config: AcmeConfig, master_key: Option<String>) {
         tokio::time::sleep(Duration::from_secs(3)).await;
 
         loop {
-            let days_opt = validate_existing_cert_and_key(&config.cert_path, &config.key_path, 30);
+            let days_opt = validate_existing_cert_and_key(
+                &config.cert_path,
+                &config.key_path,
+                &config.domains,
+                30,
+            );
             let needs_action = match days_opt {
                 Some(days) => {
                     info!(
-                        "[acme-supervisor] Active TLS certificate and key validated on disk ({} days remaining). Preserving existing certificate without issuing duplicate.",
-                        days
+                        "[acme-supervisor] Active TLS certificate and key validated on disk ({} days remaining, covers all {} domains: {:?}). Preserving existing certificate without issuing duplicate.",
+                        days,
+                        config.domains.len(),
+                        config.domains
                     );
                     // Ensure live in-memory resolver is updated with the validated cert on disk
                     if let Some(ref resolver) = config.cert_resolver {
@@ -1251,8 +1350,8 @@ pub fn spawn_acme_supervisor(config: AcmeConfig, master_key: Option<String>) {
                 }
                 None => {
                     info!(
-                        "[acme-supervisor] No valid TLS certificate/key pair found at '{}' and '{}' (or <30 days remaining)",
-                        config.cert_path, config.key_path
+                        "[acme-supervisor] No valid TLS certificate/key pair found at '{}' and '{}' covering all domains {:?} (or <30 days remaining)",
+                        config.cert_path, config.key_path, config.domains
                     );
                     true
                 }
@@ -1392,7 +1491,7 @@ mod tests {
 
     #[test]
     fn test_validate_existing_cert_and_key_nonexistent() {
-        let res = validate_existing_cert_and_key("/nonexistent/cert.pem", "/nonexistent/key.pem", 30);
+        let res = validate_existing_cert_and_key("/nonexistent/cert.pem", "/nonexistent/key.pem", &[], 30);
         assert!(res.is_none());
     }
 

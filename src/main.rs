@@ -217,6 +217,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let cron_expr = config.upstream_cron.clone();
     let cron_tz = config.upstream_tz.clone();
     let cron_stamp = cron_stamp_path(&config.db_path);
+    let cron_ddns_cfg = config.clone();
     tokio::spawn(async move {
         // Resolve timezone offset at startup using the full IANA tz database
         // (chrono-tz) with correct DST handling. Falls back to UTC on error.
@@ -257,10 +258,11 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                             tokio::time::sleep(std::time::Duration::from_secs(61)).await;
                             continue;
                         }
-                        info!("[cron] Running threat feed, IANA root anchors, and upstream ranker sync (wall-clock cron)...");
+                        info!("[cron] Running threat feed, IANA root anchors, DDNS IP sync, and upstream ranker sync (wall-clock cron)...");
                         write_cron_stamp(&cron_stamp);
                         cron_state.trigger_background_feed_sync();
                         cron_state.sync_dnssec_root_anchors().await;
+                        server::ddns::sync_all_ddns_records(&cron_ddns_cfg).await;
                         let _ = cron_state.upstreams.sync_and_rank().await;
                         tokio::time::sleep(std::time::Duration::from_secs(61)).await;
                     } else {
@@ -273,10 +275,11 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                             cron_tz
                         );
                         tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
-                        info!("[cron] Running threat feed, IANA root anchors, and upstream ranker sync (wall-clock cron)...");
+                        info!("[cron] Running threat feed, IANA root anchors, DDNS IP sync, and upstream ranker sync (wall-clock cron)...");
                         write_cron_stamp(&cron_stamp);
                         cron_state.trigger_background_feed_sync();
                         cron_state.sync_dnssec_root_anchors().await;
+                        server::ddns::sync_all_ddns_records(&cron_ddns_cfg).await;
                         let _ = cron_state.upstreams.sync_and_rank().await;
                         // Guard sleep: move past the firing minute.
                         tokio::time::sleep(std::time::Duration::from_secs(61)).await;
@@ -292,9 +295,10 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
                 loop {
                     interval.tick().await;
-                    info!("[cron] Running daily threat feed, IANA root anchors, and upstream ranker sync (fallback 24 h)...");
+                    info!("[cron] Running daily threat feed, IANA root anchors, DDNS IP sync, and upstream ranker sync (fallback 24 h)...");
                     cron_state.trigger_background_feed_sync();
                     cron_state.sync_dnssec_root_anchors().await;
+                    server::ddns::sync_all_ddns_records(&cron_ddns_cfg).await;
                     let _ = cron_state.upstreams.sync_and_rank().await;
                 }
             }
@@ -426,7 +430,19 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 6g. Initialize Hot-Reloadable Dynamic TLS Resolver for QUIC / DoQ / DoH3
+    // 6g. Automated Dynamic DNS (DDNS) IP Synchronizer
+    // Automatically discovers the app's public Anycast IPv4 and IPv6 addresses
+    // and synchronizes DNS A & AAAA records across deSEC, DuckDNS, and Dynu.
+    if config.desec_token.is_some() || config.duckdns_token.is_some() || config.dynu_api_key.is_some() {
+        let startup_ddns_cfg = config.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            info!("[boot] Running automated DDNS IP synchronization for custom domains...");
+            server::ddns::sync_all_ddns_records(&startup_ddns_cfg).await;
+        });
+    }
+
+    // 6h. Initialize Hot-Reloadable Dynamic TLS Resolver for QUIC / DoQ / DoH3
     let quic_cert_resolver = match config.get_effective_tls_paths() {
         Some((cert_path, key_path)) => {
             info!(
