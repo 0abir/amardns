@@ -452,12 +452,40 @@ pub fn render_403(path: &str, client_ip: &str, region: &str, machine_id: &str) -
 }
 
 #[allow(dead_code)]
+pub fn render_400(path: &str, client_ip: &str, region: &str, machine_id: &str) -> String {
+    render_error_page(
+        400,
+        "EDGE_400_BAD_REQUEST",
+        "Malformed Client Request",
+        "The edge resolver node could not process the request due to invalid syntax, missing query parameters, or malformed DNS wire format.",
+        path,
+        client_ip,
+        region,
+        machine_id,
+    )
+}
+
+#[allow(dead_code)]
 pub fn render_405(path: &str, client_ip: &str, region: &str, machine_id: &str) -> String {
     render_error_page(
         405,
         "EDGE_405_METHOD_NOT_ALLOWED",
         "HTTP Method Not Allowed",
         "The requested HTTP method is not permitted for this route. Use GET for web inspection or POST/GET for DNS wire payloads.",
+        path,
+        client_ip,
+        region,
+        machine_id,
+    )
+}
+
+#[allow(dead_code)]
+pub fn render_429(path: &str, client_ip: &str, region: &str, machine_id: &str) -> String {
+    render_error_page(
+        429,
+        "EDGE_429_TOO_MANY_REQUESTS",
+        "Query Rate Limit Exceeded",
+        "Your client IP has exceeded the allowed query rate ceiling or token-bucket quota. Please wait a brief moment before sending subsequent queries.",
         path,
         client_ip,
         region,
@@ -481,6 +509,34 @@ pub fn render_500(
             "An internal exception was encountered during query processing: {}",
             html_escape(error_msg)
         ),
+        path,
+        client_ip,
+        region,
+        machine_id,
+    )
+}
+
+#[allow(dead_code)]
+pub fn render_502(path: &str, client_ip: &str, region: &str, machine_id: &str) -> String {
+    render_error_page(
+        502,
+        "EDGE_502_BAD_GATEWAY",
+        "Upstream Resolver Gateway Failure",
+        "The edge node encountered an invalid or unreachable response from configured upstream DNS nameservers. Self-healing circuit breakers are rerouting traffic.",
+        path,
+        client_ip,
+        region,
+        machine_id,
+    )
+}
+
+#[allow(dead_code)]
+pub fn render_503(path: &str, client_ip: &str, region: &str, machine_id: &str) -> String {
+    render_error_page(
+        503,
+        "EDGE_503_SERVICE_UNAVAILABLE",
+        "Service Temporarily Unavailable",
+        "The edge DNS resolver node is currently synchronizing threat databases or undergoing brief maintenance. Normal resolution will resume momentarily.",
         path,
         client_ip,
         region,
@@ -516,5 +572,16 @@ mod tests {
         assert!(html.contains("401"));
         assert!(html.contains("EDGE_401_UNAUTHORIZED"));
         assert!(html.contains("AUTHENTICATE ACCESS"));
+    }
+
+    #[test]
+    fn test_render_429_and_503() {
+        let html429 = render_429("/dns-query", "203.0.113.5", "iad", "m_429test");
+        assert!(html429.contains("429"));
+        assert!(html429.contains("EDGE_429_TOO_MANY_REQUESTS"));
+
+        let html503 = render_503("/dns-query", "203.0.113.5", "iad", "m_503test");
+        assert!(html503.contains("503"));
+        assert!(html503.contains("EDGE_503_SERVICE_UNAVAILABLE"));
     }
 }

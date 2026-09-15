@@ -31,6 +31,17 @@ pub fn create_doh_router(state: Arc<AppState>) -> Router {
         .route("/", get(root_get_handler).post(doh_post_handler))
         // DoH JSON API (RFC 8427) — browser-testable
         .route("/resolve", get(doh_json_handler))
+        // Public SEO, Sitemap & Manifest routes
+        .route("/robots.txt", get(robots_txt_handler))
+        .route("/sitemap.xml", get(sitemap_xml_handler))
+        .route("/manifest.json", get(manifest_json_handler))
+        .route("/site.webmanifest", get(manifest_json_handler))
+        // Public Documentation & Policy Pages
+        .route("/help", get(help_page_handler))
+        .route("/docs", get(help_page_handler))
+        .route("/security", get(security_page_handler))
+        .route("/privacy", get(privacy_page_handler))
+        .route("/terms", get(terms_page_handler))
         .fallback(fallback_handler)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -38,6 +49,137 @@ pub fn create_doh_router(state: Arc<AppState>) -> Router {
         ))
         .layer(axum::middleware::map_response(add_security_headers))
         .with_state(state)
+}
+
+pub async fn robots_txt_handler(headers: HeaderMap) -> Response {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("amardns.fly.dev");
+    let content = crate::ui::pages::render_robots_txt(host);
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        content,
+    )
+        .into_response()
+}
+
+pub async fn sitemap_xml_handler(headers: HeaderMap) -> Response {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("amardns.fly.dev");
+    let content = crate::ui::pages::render_sitemap_xml(host);
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/xml; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        content,
+    )
+        .into_response()
+}
+
+pub async fn manifest_json_handler() -> Response {
+    let content = crate::ui::pages::render_manifest_json();
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/manifest+json; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        content,
+    )
+        .into_response()
+}
+
+pub async fn help_page_handler(headers: HeaderMap) -> Response {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("amardns.fly.dev");
+    let fly_machine_id = std::env::var("FLY_MACHINE_ID")
+        .or_else(|_| std::env::var("FLY_ALLOC_ID"))
+        .unwrap_or_else(|_| "local".to_string());
+    let fly_region = std::env::var("FLY_REGION").unwrap_or_else(|_| "sin".to_string());
+    let content = crate::ui::pages::render_help_page(host, &fly_region, &fly_machine_id);
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        content,
+    )
+        .into_response()
+}
+
+pub async fn security_page_handler(headers: HeaderMap) -> Response {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("amardns.fly.dev");
+    let fly_machine_id = std::env::var("FLY_MACHINE_ID")
+        .or_else(|_| std::env::var("FLY_ALLOC_ID"))
+        .unwrap_or_else(|_| "local".to_string());
+    let fly_region = std::env::var("FLY_REGION").unwrap_or_else(|_| "sin".to_string());
+    let content = crate::ui::pages::render_security_page(host, &fly_region, &fly_machine_id);
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        content,
+    )
+        .into_response()
+}
+
+pub async fn privacy_page_handler(headers: HeaderMap) -> Response {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("amardns.fly.dev");
+    let fly_machine_id = std::env::var("FLY_MACHINE_ID")
+        .or_else(|_| std::env::var("FLY_ALLOC_ID"))
+        .unwrap_or_else(|_| "local".to_string());
+    let fly_region = std::env::var("FLY_REGION").unwrap_or_else(|_| "sin".to_string());
+    let content = crate::ui::pages::render_privacy_page(host, &fly_region, &fly_machine_id);
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        content,
+    )
+        .into_response()
+}
+
+pub async fn terms_page_handler(headers: HeaderMap) -> Response {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("amardns.fly.dev");
+    let fly_machine_id = std::env::var("FLY_MACHINE_ID")
+        .or_else(|_| std::env::var("FLY_ALLOC_ID"))
+        .unwrap_or_else(|_| "local".to_string());
+    let fly_region = std::env::var("FLY_REGION").unwrap_or_else(|_| "sin".to_string());
+    let content = crate::ui::pages::render_terms_page(host, &fly_region, &fly_machine_id);
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        content,
+    )
+        .into_response()
 }
 
 pub async fn root_get_handler(
