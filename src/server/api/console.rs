@@ -936,7 +936,7 @@ async fn cmd_block(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
         let count = blk.len();
         let page: usize = args.get(1).and_then(|p| p.parse().ok()).unwrap_or(1).max(1);
         let per_page = 20;
-        let total_pages = (count + per_page - 1) / per_page;
+        let total_pages = count.div_ceil(per_page);
 
         let mut out = format!(
             "── [ BLOCKLIST ENTRIES ({}) - PAGE {} OF {} ] ────────────────\n",
@@ -1440,11 +1440,11 @@ mod tests {
         // Test mode & block-mode
         let (_out, status) = execute_command(&state, "mode public").await;
         assert_eq!(status, "ok");
-        assert_eq!(state.is_private_mode.load(Ordering::Relaxed), false);
+        assert!(!state.is_private_mode.load(Ordering::Relaxed));
 
         let (_out, status) = execute_command(&state, "block-mode off").await;
         assert_eq!(status, "ok");
-        assert_eq!(state.blocking_enabled.load(Ordering::Relaxed), false);
+        assert!(!state.blocking_enabled.load(Ordering::Relaxed));
 
         // Test token creation
         let (out, status) = execute_command(&state, "token create phone-device").await;
