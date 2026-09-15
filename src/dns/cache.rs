@@ -299,24 +299,24 @@ impl DnsCache {
         }
     }
 
-    pub async fn get_negative(&self, qname: &str) -> bool {
-        let clean = qname.trim_end_matches('.').to_ascii_lowercase();
-        if let Some((created, ttl)) = self.neg_cache.get(&clean).await {
+    pub async fn get_negative(&self, qname: &str, qtype: u16) -> bool {
+        let key = Self::make_key(qname, qtype);
+        if let Some((created, ttl)) = self.neg_cache.get(&key).await {
             if created.elapsed().as_secs() as u32 <= ttl {
                 self.neg_hits.fetch_add(1, Ordering::Relaxed);
                 return true;
             } else {
-                self.neg_cache.invalidate(&clean).await;
+                self.neg_cache.invalidate(&key).await;
             }
         }
         false
     }
 
-    pub async fn insert_negative(&self, qname: &str, ttl: u32) {
-        let clean = qname.trim_end_matches('.').to_ascii_lowercase();
+    pub async fn insert_negative(&self, qname: &str, qtype: u16, ttl: u32) {
+        let key = Self::make_key(qname, qtype);
         let safe_ttl = ttl.clamp(5, 300);
         self.neg_cache
-            .insert(clean, (Instant::now(), safe_ttl))
+            .insert(key, (Instant::now(), safe_ttl))
             .await;
     }
 
@@ -329,7 +329,15 @@ impl DnsCache {
 
     pub async fn invalidate_negative(&self, qname: &str) {
         let clean = qname.trim_end_matches('.').to_ascii_lowercase();
-        self.neg_cache.invalidate(&clean).await;
+        for qtype in [1, 2, 5, 6, 12, 15, 16, 28, 33, 64, 65, 255, 257] {
+            let key = format!("{}:{}", clean, qtype);
+            self.neg_cache.invalidate(&key).await;
+        }
+    }
+
+    pub async fn invalidate_negative_qtype(&self, qname: &str, qtype: u16) {
+        let key = Self::make_key(qname, qtype);
+        self.neg_cache.invalidate(&key).await;
     }
 
     pub async fn clear(&self) {

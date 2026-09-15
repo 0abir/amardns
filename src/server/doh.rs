@@ -375,6 +375,10 @@ pub async fn add_security_headers(mut response: Response) -> Response {
             "default-src 'self' 'unsafe-inline' data:; connect-src 'self' *; img-src 'self' data: https:;",
         ),
     );
+    headers.insert(
+        header::HeaderName::from_static("alt-svc"),
+        header::HeaderValue::from_static("h3=\":443\"; ma=86400"),
+    );
     response
 }
 
@@ -546,25 +550,21 @@ pub async fn doh_get_handler(
             }
         }
     } else if let Some(domain_name) = params.name.as_deref() {
-        let qtype_num = match params
-            .qtype
-            .as_deref()
-            .unwrap_or("A")
-            .to_uppercase()
-            .as_str()
-        {
-            "A" => 1u16,
-            "NS" => 2,
-            "CNAME" => 5,
-            "SOA" => 6,
-            "PTR" => 12,
-            "MX" => 15,
-            "TXT" => 16,
-            "AAAA" => 28,
-            "SRV" => 33,
-            "ANY" => 255,
-            "CAA" => 257,
-            _ => 1,
+        let qtype_num = match params.qtype.as_deref().unwrap_or("A").trim() {
+            s if s.eq_ignore_ascii_case("A") => 1u16,
+            s if s.eq_ignore_ascii_case("NS") => 2,
+            s if s.eq_ignore_ascii_case("CNAME") => 5,
+            s if s.eq_ignore_ascii_case("SOA") => 6,
+            s if s.eq_ignore_ascii_case("PTR") => 12,
+            s if s.eq_ignore_ascii_case("MX") => 15,
+            s if s.eq_ignore_ascii_case("TXT") => 16,
+            s if s.eq_ignore_ascii_case("AAAA") => 28,
+            s if s.eq_ignore_ascii_case("SRV") => 33,
+            s if s.eq_ignore_ascii_case("SVCB") => 64,
+            s if s.eq_ignore_ascii_case("HTTPS") => 65,
+            s if s.eq_ignore_ascii_case("ANY") => 255,
+            s if s.eq_ignore_ascii_case("CAA") => 257,
+            s => s.parse::<u16>().unwrap_or(1),
         };
         let accept_header = headers
             .get(header::ACCEPT)
@@ -808,7 +808,7 @@ pub async fn process_dns_wire_packet_full(
             &q.name, q.qtype, log_id, proto, "BLOCKED", 3, 0, reason, "Filter", "INSECURE", None,
             None, false,
         );
-        state.cache.insert_negative(&q.name, 60).await;
+        state.cache.insert_negative(&q.name, q.qtype, 60).await;
         let mut resp_bytes = build_blocked_response(query_wire, is_nxdomain);
         crate::dns::parser::append_ede_to_response(&mut resp_bytes, 15, reason);
         state.metrics.record_latency(query_start.elapsed());
@@ -834,7 +834,7 @@ pub async fn process_dns_wire_packet_full(
         });
     }
 
-    if !state.is_exempt(&q.name) && state.cache.get_negative(&q.name).await {
+    if !state.is_exempt(&q.name) && state.cache.get_negative(&q.name, q.qtype).await {
         state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
         let (feats, ent) = state.brain.extract_features(&q.name);
         state.brain.record_decision(
@@ -905,7 +905,7 @@ pub async fn process_dns_wire_packet_full(
                 None,
                 false,
             );
-            state.cache.insert_negative(&q.name, 120).await;
+            state.cache.insert_negative(&q.name, q.qtype, 120).await;
             let mut resp_bytes = build_blocked_response(query_wire, true);
             crate::dns::parser::append_ede_to_response(&mut resp_bytes, 15, "GSB");
             state.metrics.record_latency(query_start.elapsed());
@@ -1036,7 +1036,7 @@ pub async fn process_dns_wire_packet_full(
         // RFC 2308: Use SOA MINIMUM TTL for NXDOMAIN negative caching
         if rcode == 3 {
             let neg_ttl = crate::dns::parser::extract_soa_minimum_ttl(&upstream_resp).unwrap_or(60);
-            state.cache.insert_negative(&q.name, neg_ttl).await;
+            state.cache.insert_negative(&q.name, q.qtype, neg_ttl).await;
         }
 
         // Feature 4: Record passive DNS timeline
@@ -1117,7 +1117,7 @@ pub async fn process_dns_wire_packet_full(
                         None,
                         false,
                     );
-                    state.cache.insert_negative(&q.name, 30).await;
+                    state.cache.insert_negative(&q.name, q.qtype, 30).await;
                     let mut blocked = build_blocked_response(query_wire, false);
                     crate::dns::parser::append_ede_to_response(&mut blocked, 15, "TTL_GUARD");
                     state.metrics.record_latency(query_start.elapsed());
@@ -1170,7 +1170,7 @@ pub async fn process_dns_wire_packet_full(
                     None,
                     false,
                 );
-                state.cache.insert_negative(&q.name, 120).await;
+                state.cache.insert_negative(&q.name, q.qtype, 120).await;
                 let mut blocked = build_blocked_response(query_wire, true);
                 crate::dns::parser::append_ede_to_response(&mut blocked, 15, "REBIND");
                 state.metrics.record_latency(query_start.elapsed());
@@ -1248,6 +1248,10 @@ pub async fn process_dns_wire_packet_full(
             } else {
                 (300, 300)
             };
+
+        if rcode == 0 {
+            state.cache.invalidate_negative_qtype(&q.name, q.qtype).await;
+        }
 
         state
             .cache
@@ -1393,25 +1397,21 @@ pub async fn doh_json_handler(
             .into_response();
     }
 
-    let qtype = match params
-        .qtype
-        .as_deref()
-        .unwrap_or("A")
-        .to_uppercase()
-        .as_str()
-    {
-        "A" => 1u16,
-        "NS" => 2,
-        "CNAME" => 5,
-        "SOA" => 6,
-        "PTR" => 12,
-        "MX" => 15,
-        "TXT" => 16,
-        "AAAA" => 28,
-        "SRV" => 33,
-        "ANY" => 255,
-        "CAA" => 257,
-        _ => 1,
+    let qtype = match params.qtype.as_deref().unwrap_or("A").trim() {
+        s if s.eq_ignore_ascii_case("A") => 1u16,
+        s if s.eq_ignore_ascii_case("NS") => 2,
+        s if s.eq_ignore_ascii_case("CNAME") => 5,
+        s if s.eq_ignore_ascii_case("SOA") => 6,
+        s if s.eq_ignore_ascii_case("PTR") => 12,
+        s if s.eq_ignore_ascii_case("MX") => 15,
+        s if s.eq_ignore_ascii_case("TXT") => 16,
+        s if s.eq_ignore_ascii_case("AAAA") => 28,
+        s if s.eq_ignore_ascii_case("SRV") => 33,
+        s if s.eq_ignore_ascii_case("SVCB") => 64,
+        s if s.eq_ignore_ascii_case("HTTPS") => 65,
+        s if s.eq_ignore_ascii_case("ANY") => 255,
+        s if s.eq_ignore_ascii_case("CAA") => 257,
+        s => s.parse::<u16>().unwrap_or(1),
     };
 
     let clean_domain = raw_name.trim_end_matches('.').to_string();
