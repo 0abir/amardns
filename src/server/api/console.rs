@@ -277,7 +277,7 @@ fn get_command_list() -> Vec<ConsoleCommandInfo> {
         ConsoleCommandInfo {
             name: "sockets".into(),
             syntax: "sockets | net".into(),
-            description: "Inspect listening ports, protocols (UDP, TCP, DoT, DoQ, DoH, DoH3), and socket buffers".into(),
+            description: "Inspect listening ports, protocols (UDP, TCP, DoT, DoH), and socket buffers".into(),
             category: "Network".into(),
         },
         ConsoleCommandInfo {
@@ -412,7 +412,7 @@ r#"
 
  [ AmarDNS Intelligent Edge DNS Engine — Interactive Shell ]
  Node ID:      {} ({})
- Protocols:    Plain UDP/53, TCP/53, DoT/853, DoQ/853, DoH/443, DoH3/443
+ Protocols:    Plain UDP/53, TCP/53, DoT/853, DoH/443
  DNSSEC:       RFC 4035 Section 5.5 Validator Active
  AI Heuristics: Shannon Entropy + Markov DGA + Typo/Homoglyph Detection
  Kernel Tuning: SO_RCVBUF 4MB, SO_SNDBUF 4MB, SO_REUSEPORT, TCP_NODELAY
@@ -431,8 +431,8 @@ r#"AmarDNS Engine Details:
 - Version:       {}
 - Architecture:  {} ({})
 - Runtime:       Tokio Async Multi-Threaded Executor
-- TLS/QUIC:      Rustls + Quinn Native QUIC Engine
-- DNSSEC:        RFC 4035 / RFC 9114 Compliant Trust Anchor Validator
+- TLS:           Rustls + Dynamic In-Memory Certificate Resolver
+- DNSSEC:        RFC 4035 Compliant Trust Anchor Validator
 - Storage:       In-Memory Cache with SQLite WAL Persistence
 - Container:     FROM scratch (Zero external shared libc / static musl)"#,
         version, target, os
@@ -507,8 +507,6 @@ fn cmd_stats(state: &AppState) -> String {
     let cached = state.metrics.cache_hits.load(Ordering::Relaxed);
     let plain = state.metrics.plain_queries.load(Ordering::Relaxed);
     let doh = state.metrics.doh_queries.load(Ordering::Relaxed);
-    let doh3 = state.metrics.doh3_queries.load(Ordering::Relaxed);
-    let doq = state.metrics.doq_queries.load(Ordering::Relaxed);
     let dot = state.metrics.dot_queries.load(Ordering::Relaxed);
     let dnssec_val = state.metrics.dnssec_validations.load(Ordering::Relaxed);
 
@@ -545,8 +543,6 @@ r#"── [ SYSTEM TELEMETRY MATRIX ] ──────────────
 ── [ PROTOCOL DISTRIBUTION ] ─────────────────────────────────────
  Plain DNS (53):  {} queries
  DoH/HTTPS (443): {} queries
- DoH3 (QUIC 443): {} queries
- DoQ (QUIC 853):  {} queries
  DoT (TLS 853):   {} queries
  DNSSEC Validated:{} validations (RFC 4035 Compliant)
 
@@ -559,7 +555,7 @@ r#"── [ SYSTEM TELEMETRY MATRIX ] ──────────────
         total_queries,
         cached, hit_rate, cache_size,
         blocked, block_pct,
-        plain, doh, doh3, doq, dot, dnssec_val,
+        plain, doh, dot, dnssec_val,
         blk_count, wl_count, com_count,
         state.threat_bloom.read().count()
     )
@@ -1207,28 +1203,12 @@ fn cmd_sockets(state: &AppState) -> String {
         dot_addr, dot_cnt
     ));
 
-    // DoQ 853
-    let doq_addr = format!("{}:{}", cfg.udp_host, cfg.doq_port);
-    let doq_cnt = m.doq_queries.load(Ordering::Relaxed);
-    out.push_str(&format!(
-        " [QUIC]  {:<18} DNS-over-QUIC (DoQ) + ALPN doq (RFC 9250) · {} queries\n",
-        doq_addr, doq_cnt
-    ));
-
     // DoH 443 / Port
     let doh_addr = format!("{}:{}", cfg.host, cfg.port);
     let doh_cnt = m.doh_queries.load(Ordering::Relaxed);
     out.push_str(&format!(
         " [HTTPS] {:<18} DNS-over-HTTPS (DoH) + HTTP/2 + HTTP/1.1 · {} queries\n",
         doh_addr, doh_cnt
-    ));
-
-    // DoH3 443
-    let doh3_addr = format!("{}:{}", cfg.udp_host, cfg.doh3_port);
-    let doh3_cnt = m.doh3_queries.load(Ordering::Relaxed);
-    out.push_str(&format!(
-        " [QUIC]  {:<18} DNS-over-HTTP/3 (DoH3) + ALPN h3 (RFC 9114) · {} queries\n",
-        doh3_addr, doh3_cnt
     ));
 
     // Web UI / API
@@ -1316,8 +1296,8 @@ fn cmd_token(state: &AppState, args: &[&str]) -> (String, String) {
         let token = crate::security::auth::generate_hmac_token(&state.config.dns_token_secret, name, 86400 * 365);
         return (
             format!(
-                "Generated Endpoint Token for '{}':\n\nToken: {}\nDoH Path: /dns-query/{}\nDoH3 Path: /dns-query/{}",
-                name, token, token, token
+                "Generated Endpoint Token for '{}':\n\nToken: {}\nDoH Path: /dns-query/{}",
+                name, token, token
             ),
             "ok".into(),
         );
@@ -1416,8 +1396,6 @@ mod tests {
         Config {
             port: 8080,
             dot_port: 853,
-            doq_port: 853,
-            doh3_port: 443,
             host: "127.0.0.1".into(),
             udp_host: "127.0.0.1".into(),
             db_path: ":memory:".into(),

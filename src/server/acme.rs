@@ -1,7 +1,7 @@
 // src/server/acme.rs
 // Automated ACME DNS-01 provisioning and auto-renewal engine for AmarDNS.
 // Supports ZeroSSL (with EAB credentials & ApiKey auth) and Let's Encrypt fallback.
-// Manages genuine TLS certificates for DNS-over-QUIC (DoQ), DoH3, and DoT.
+// Manages genuine TLS certificates for DNS-over-TLS (DoT) and DoH.
 
 use chrono::{DateTime, Utc};
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};

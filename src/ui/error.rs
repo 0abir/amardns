@@ -404,7 +404,7 @@ html, body {{
   </main>
 
   <footer class="footer">
-    AmarDNS v2.0 • Autonomous Zero-GC Edge DNS Gateway
+    AmarDNS v1.0 • Autonomous Zero-GC Edge DNS Gateway
   </footer>
 </div>
 </body>

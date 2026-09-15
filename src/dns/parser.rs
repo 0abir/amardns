@@ -176,7 +176,7 @@ pub fn build_servfail_response(query_buf: &[u8]) -> Vec<u8> {
 }
 
 /// Builds an RFC 9462 Discovery of Designated Resolvers (DDR) SVCB / HTTPS response.
-/// Announces multi-protocol support for DoH3 (h3), DoH (h2), DoQ (doq), and DoT (dot)
+/// Announces multi-protocol support for DoH (h2) and DoT (dot)
 /// on ports 443 & 853 with path /dns-query{?dns}.
 pub fn build_ddr_response(query_buf: &[u8]) -> Option<Vec<u8>> {
     let parsed = parse_dns_query(query_buf)?;
@@ -218,9 +218,9 @@ pub fn build_ddr_response(query_buf: &[u8]) -> Option<Vec<u8>> {
     rdata.extend_from_slice(&1u16.to_be_bytes()); // Priority = 1
     rdata.push(0x00); // Target = "." (root / in-bailiwick)
 
-    // Key 1: ALPN (h3, h2, doq, dot)
+    // Key 1: ALPN (h2, dot)
     rdata.extend_from_slice(&1u16.to_be_bytes());
-    let alpn_val = b"\x02h3\x02h2\x03doq\x03dot";
+    let alpn_val = b"\x02h2\x03dot";
     rdata.extend_from_slice(&(alpn_val.len() as u16).to_be_bytes());
     rdata.extend_from_slice(alpn_val);
 
@@ -704,6 +704,7 @@ fn ede_append_new_opt(wire: &mut Vec<u8>, ede_option: &[u8]) {
 /// seeded from the transaction ID. Hardens against cache poisoning — spoofed answers
 /// that fail to echo the exact casing are trivially detectable.
 /// Reference: draft-vixie-dnsext-dns0x20-00
+#[allow(dead_code)]
 pub fn apply_dns0x20_randomization(wire: &[u8]) -> Vec<u8> {
     if wire.len() < 12 {
         return wire.to_vec();

@@ -505,18 +505,13 @@ pub fn render_help_page(host: &str, region: &str, machine_id: &str) -> String {
 <div class="grid-2">
   <div class="card-box">
     <h4>DNS-over-HTTPS (DoH)</h4>
-    <p>Standard encrypted DNS over HTTPS (Port 443) with HTTP/2 and HTTP/3 support.</p>
+    <p>Standard encrypted DNS over HTTPS (Port 443) with HTTP/2 and TLS 1.3 support.</p>
     <div class="code-block">https://{clean_host}/dns-query</div>
   </div>
   <div class="card-box">
     <h4>DNS-over-TLS (DoT)</h4>
     <p>Dedicated encrypted DNS over TLS on Port 853 with ALPN dot negotiation.</p>
     <div class="code-block">{clean_host}</div>
-  </div>
-  <div class="card-box">
-    <h4>DNS-over-QUIC (DoQ)</h4>
-    <p>RFC 9250 zero round-trip ultra-low latency UDP transport on Port 853.</p>
-    <div class="code-block">{clean_host}:853</div>
   </div>
   <div class="card-box">
     <h4>Plain Standard DNS (UDP/TCP 53)</h4>
@@ -572,7 +567,7 @@ DNSSEC=yes</div>
 
     page_shell(
         "Client Setup & Configuration Guide",
-        "Step-by-step setup guides for configuring DoH, DoT, DoQ, and Plain DNS on Android, iOS, Windows, macOS, Linux, and web browsers.",
+        "Step-by-step setup guides for configuring DoH, DoT, and Plain DNS on Android, iOS, Windows, macOS, Linux, and web browsers.",
         "/help",
         &content,
         host,
@@ -644,7 +639,7 @@ pub fn render_privacy_page(host: &str, region: &str, machine_id: &str) -> String
   <li><strong>No Query IP Logging:</strong> DNS query logs are stored strictly in volatile, ephemeral RAM ring buffers and compressed PulseDB WAL files for real-time live diagnostics.</li>
   <li><strong>No User Profiling:</strong> We do not build advertising profiles, track browsing habits, or fingerprint individuals.</li>
   <li><strong>No Data Monetization:</strong> We never sell, lease, or share resolver telemetry with data brokers, ISPs, or government agencies.</li>
-  <li><strong>Encrypted Transports:</strong> All DoH, DoT, DoQ, and DoH3 queries are encrypted with TLS 1.3 or QUIC, shielding queries from local network eavesdroppers.</li>
+  <li><strong>Encrypted Transports:</strong> All DoH and DoT queries are encrypted with TLS 1.3, shielding queries from local network eavesdroppers.</li>
 </ul>
 
 <h2 class="sec-heading">2. Cache &amp; Ephemeral Memory</h2>

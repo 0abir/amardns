@@ -110,6 +110,60 @@ impl Singleflight {
     }
 }
 
+/// Normalizes any upstream provider name into a single clean word without spaces, hyphens, or parenthetical modifiers.
+pub fn normalize_provider_name(name: &str) -> String {
+    let lower = name.to_lowercase();
+    if lower.contains("mullvad") {
+        "Mullvad".to_string()
+    } else if lower.contains("quad9") {
+        "Quad9".to_string()
+    } else if lower.contains("adguard") {
+        "AdGuard".to_string()
+    } else if lower.contains("cloudflare") {
+        "Cloudflare".to_string()
+    } else if lower.contains("digitale") {
+        "Digitale".to_string()
+    } else if lower.contains("nextdns") {
+        "NextDNS".to_string()
+    } else if lower.contains("control") {
+        "ControlD".to_string()
+    } else if lower.contains("sb") {
+        "DNSSB".to_string()
+    } else if lower.contains("google") {
+        "Google".to_string()
+    } else if lower.contains("opendns") {
+        "OpenDNS".to_string()
+    } else if lower.contains("rethink") {
+        "Rethink".to_string()
+    } else if lower.contains("aerocache") || lower.contains("cache") {
+        "AeroCache".to_string()
+    } else if lower.contains("root") {
+        "Root".to_string()
+    } else if lower.contains("filter") || lower.contains("block") || lower.contains("0.0.0.0") {
+        "Filter".to_string()
+    } else if lower.contains("rebind") {
+        "RebindGuard".to_string()
+    } else if lower.contains("ttl") {
+        "TTLGuard".to_string()
+    } else if lower.contains("dnssec") {
+        "DNSSEC".to_string()
+    } else if lower.contains("amardns") {
+        "AmarDNS".to_string()
+    } else if lower.is_empty() || lower == "none" || lower == "-" {
+        "None".to_string()
+    } else {
+        let first_word = name
+            .split(|c: char| !c.is_alphanumeric())
+            .find(|s| !s.is_empty())
+            .unwrap_or("Upstream");
+        let mut chars = first_word.chars();
+        match chars.next() {
+            None => "Upstream".to_string(),
+            Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UpstreamConfig {
     pub provider: String,
@@ -133,7 +187,7 @@ pub struct UpstreamNode {
 impl UpstreamNode {
     pub fn new(cfg: UpstreamConfig) -> Self {
         Self {
-            provider: cfg.provider,
+            provider: normalize_provider_name(&cfg.provider),
             url: cfg.url,
             aura: cfg.aura,
             latency_ms: AtomicU32::new(0),
@@ -243,7 +297,7 @@ impl UpstreamPool {
     pub fn default_upstreams_config() -> Vec<UpstreamConfig> {
         vec![
             UpstreamConfig {
-                provider: "Mullvad DNS".to_string(),
+                provider: "Mullvad".to_string(),
                 url: "https://doh.mullvad.net/dns-query".to_string(),
                 aura: "high".to_string(),
             },
@@ -253,17 +307,17 @@ impl UpstreamPool {
                 aura: "high".to_string(),
             },
             UpstreamConfig {
-                provider: "AdGuard DNS".to_string(),
+                provider: "AdGuard".to_string(),
                 url: "https://dns.adguard-dns.com/dns-query".to_string(),
                 aura: "high".to_string(),
             },
             UpstreamConfig {
-                provider: "Cloudflare (Security)".to_string(),
+                provider: "Cloudflare".to_string(),
                 url: "https://security.cloudflare-dns.com/dns-query".to_string(),
                 aura: "high".to_string(),
             },
             UpstreamConfig {
-                provider: "Digitale Gesellschaft".to_string(),
+                provider: "Digitale".to_string(),
                 url: "https://dns.digitale-gesellschaft.ch/dns-query".to_string(),
                 aura: "medium".to_string(),
             },
@@ -278,12 +332,12 @@ impl UpstreamPool {
                 aura: "high".to_string(),
             },
             UpstreamConfig {
-                provider: "Control D".to_string(),
+                provider: "ControlD".to_string(),
                 url: "https://freedns.controld.com/p0".to_string(),
                 aura: "medium".to_string(),
             },
             UpstreamConfig {
-                provider: "DNS.SB".to_string(),
+                provider: "DNSSB".to_string(),
                 url: "https://doh.dns.sb/dns-query".to_string(),
                 aura: "medium".to_string(),
             },
@@ -300,7 +354,7 @@ impl UpstreamPool {
             .http2_adaptive_window(true)
             .http2_keep_alive_interval(Some(Duration::from_secs(15)))
             .http2_keep_alive_timeout(Duration::from_secs(5))
-            .user_agent("AmarDNS/2.0")
+            .user_agent("AmarDNS/1.0")
             .build()
             .unwrap_or_default();
 
@@ -604,7 +658,7 @@ impl UpstreamPool {
                             if len >= 12 {
                                 return Some((
                                     buf[..len].to_vec(),
-                                    format!("Root-Hint ({})", hint_str),
+                                    "Root".to_string(),
                                 ));
                             }
                         }
@@ -722,7 +776,7 @@ impl UpstreamPool {
                 }
 
                 let node = UpstreamNode {
-                    provider: cfg.provider,
+                    provider: normalize_provider_name(&cfg.provider),
                     url: cfg.url,
                     aura: cfg.aura,
                     latency_ms: AtomicU32::new(latency),
@@ -1106,9 +1160,10 @@ mod tests {
         assert_eq!(upstreams.len(), 9);
         let providers: Vec<&str> = upstreams.iter().map(|u| u.provider.as_str()).collect();
         assert!(providers.contains(&"Cloudflare"));
-        assert!(providers.contains(&"Mullvad DNS"));
+        assert!(providers.contains(&"Mullvad"));
         assert!(providers.contains(&"Quad9"));
-        assert!(providers.contains(&"AdGuard DNS"));
+        assert!(providers.contains(&"AdGuard"));
+        assert!(providers.contains(&"ControlD"));
     }
 
     #[test]

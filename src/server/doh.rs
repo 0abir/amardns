@@ -377,7 +377,7 @@ pub async fn add_security_headers(mut response: Response) -> Response {
     );
     headers.insert(
         header::HeaderName::from_static("alt-svc"),
-        header::HeaderValue::from_static("h3=\":443\"; ma=86400"),
+        header::HeaderValue::from_static("clear"),
     );
     response
 }
@@ -428,39 +428,8 @@ pub fn extract_client_ip(headers: &HeaderMap, peer_addr: SocketAddr) -> IpAddr {
     peer_ip
 }
 
-fn detect_doh_proto(headers: &HeaderMap, method: &str) -> String {
-    let is_h3 = headers
-        .get("via")
-        .and_then(|h| h.to_str().ok())
-        .map(|v| {
-            v.starts_with('3') || v.contains("http/3") || v.contains("quic") || v.contains("h3")
-        })
-        .unwrap_or(false)
-        || headers
-            .get("fly-client-protocol")
-            .or_else(|| headers.get("x-forwarded-protocol"))
-            .and_then(|h| h.to_str().ok())
-            .map(|p| {
-                p.eq_ignore_ascii_case("http/3")
-                    || p.eq_ignore_ascii_case("quic")
-                    || p.eq_ignore_ascii_case("h3")
-            })
-            .unwrap_or(false)
-        || headers
-            .get("x-forwarded-proto")
-            .and_then(|h| h.to_str().ok())
-            .map(|p| {
-                p.eq_ignore_ascii_case("quic")
-                    || p.eq_ignore_ascii_case("http3")
-                    || p.eq_ignore_ascii_case("h3")
-            })
-            .unwrap_or(false);
-
-    if is_h3 {
-        format!("DoH3 ({})", method)
-    } else {
-        format!("DoH ({})", method)
-    }
+fn detect_doh_proto(_headers: &HeaderMap, method: &str) -> String {
+    format!("DoH ({})", method)
 }
 
 pub async fn doh_post_handler(
@@ -621,7 +590,7 @@ pub async fn process_dns_query(
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-/// Unified DNS wire processing pipeline used across all protocols (DoH, DoH3, DoT, DoQ).
+/// Unified DNS wire processing pipeline used across all protocols (DoH, DoT, Plain).
 /// Returns raw response wire bytes.
 pub async fn process_dns_wire_packet(
     state: Arc<AppState>,
@@ -646,11 +615,7 @@ pub async fn process_dns_wire_packet_full(
     let query_start = std::time::Instant::now();
     let client_str = client_ip.to_string();
     let log_id = dev_tag.unwrap_or(&client_str);
-    let proto_metric = if proto.contains("DoQ") || proto.eq_ignore_ascii_case("doq") {
-        "doq"
-    } else if proto.contains("DoH3") || proto.eq_ignore_ascii_case("doh3") {
-        "doh3"
-    } else if proto.contains("DoT") || proto.eq_ignore_ascii_case("dot") {
+    let proto_metric = if proto.contains("DoT") || proto.eq_ignore_ascii_case("dot") {
         "dot"
     } else if proto.contains("Plain") || proto.eq_ignore_ascii_case("plain") {
         "plain"
@@ -898,7 +863,7 @@ pub async fn process_dns_wire_packet_full(
                 3,
                 0,
                 "GSB",
-                "Google Safe Browsing",
+                "Google",
                 "INSECURE",
                 None,
                 None,
@@ -1132,7 +1097,7 @@ pub async fn process_dns_wire_packet_full(
                         3,
                         lat,
                         "TTL_GUARD",
-                        "TTL Guard",
+                        "TTLGuard",
                         "INSECURE",
                         None,
                         None,
@@ -1185,7 +1150,7 @@ pub async fn process_dns_wire_packet_full(
                     3,
                     lat,
                     "REBIND",
-                    "Rebind Defense",
+                    "RebindGuard",
                     "INSECURE",
                     None,
                     None,
@@ -1227,7 +1192,7 @@ pub async fn process_dns_wire_packet_full(
                     2,
                     lat,
                     "dnssec_bogus",
-                    "DNSSEC Validator",
+                    "DNSSEC",
                     "BOGUS",
                     dnssec_alg_str,
                     dnssec_tag,
@@ -1474,7 +1439,7 @@ pub async fn doh_json_handler(
             if is_nx { 3 } else { 0 },
             0,
             reason,
-            "0.0.0.0",
+            "Filter",
             "INSECURE",
             None,
             None,
@@ -1517,7 +1482,7 @@ pub async fn doh_json_handler(
             rcode as u16,
             0,
             "cache_hit",
-            "cache",
+            "AeroCache",
             &dnssec_res.status.to_string(),
             dnssec_res.algorithm.as_deref(),
             dnssec_res.key_tag,

@@ -301,9 +301,8 @@ select.fld option{background:var(--sur2)}
 .ll-ts{color:#6272a4;white-space:nowrap}
 .ll-proto{font-weight:700;font-size:9px;letter-spacing:.04em;padding:1px 4px;border-radius:3px;text-align:center;display:inline-block;white-space:nowrap}
 .ll-proto-doh{color:#00ffe7;background:rgba(0,255,231,.08);border:1px solid rgba(0,255,231,.2)}
-.ll-proto-doh3{color:#ff79c6;background:rgba(255,121,198,.08);border:1px solid rgba(255,121,198,.25)}
 .ll-proto-dot{color:#50fa7b;background:rgba(80,250,123,.08);border:1px solid rgba(80,250,123,.2)}
-.ll-proto-doq{color:#ffb86c;background:rgba(255,184,108,.08);border:1px solid rgba(255,184,108,.25)}
+.ll-proto-plain{color:#ffb86c;background:rgba(255,184,108,.08);border:1px solid rgba(255,184,108,.25)}
 .ll-dev{color:#8be9fd;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ll-type{color:#bd93f9;font-weight:700;text-align:center;white-space:nowrap}
 .ll-domain{color:#f8f8f2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
@@ -1460,19 +1459,19 @@ function render(d){
   // Protocols & Dedup Panel
   var proto = d.protocols || {};
   var sf = d.singleflight || {};
+  var feat = d.features || {};
   renderDP('dp-protocols', [
     ['DNS-over-HTTPS (DoH)', fmt(proto.doh || 0), 'cv-t'],
-    ['DNS-over-HTTP/3 (DoH3)', fmt(proto.doh3 || 0), 'cv-t'],
     ['DNS-over-TLS (DoT)', fmt(proto.dot || 0), 'cv-t'],
-    ['DNS-over-QUIC (DoQ)', fmt(proto.doq || 0), 'cv-t'],
     ['Plain DNS (UDP/TCP 53)', fmt(proto.plain || 0), 'cv-t'],
     ['Singleflight Dedup Savings', fmt(sf.coalesced || 0) + ' coalesced', 'cv-g'],
     ['Active In-Flight Locks', fmt(sf.inFlight || 0), 'cv-i'],
+    ['CNAME Chain Flattening', fmt((feat.cnameFlattening && feat.cnameFlattening.resolved) || 0) + ' resolved', 'cv-g'],
+    ['Transport ALPN / Wire', 'h2, dot (TLS 1.3)', 'cv-g'],
     ['Kernel UDP SO_REUSEPORT', '4 Zero-GC Workers', 'cv-g']
   ]);
 
   // Threat Intel Summary card
-  var feat=d.features||{};
   var ttlBlocks=(feat.ttlGuard&&feat.ttlGuard.blocks)||ai.ttlGuardBlocks||0;
   var canaryHits=(feat.canary&&feat.canary.hits)||ai.canaryHits||0;
   var raceWins=(feat.upstreamRacing&&feat.upstreamRacing.wins)||ai.raceWins||0;
@@ -1573,21 +1572,49 @@ function formatReasonTag(raw) {
   if (!raw || raw === 'none' || raw === '-') return '';
   var s = String(raw).toLowerCase().trim();
   if (s === 'dga_threat' || s === 'dga_block' || s === 'dga_algorithmic_threat' || s === 'dga') return 'DGA';
-  if (s === 'threat_negative_cache' || s === 'negative_threat_cache' || s.includes('negative_cache') || s.includes('threat_negative') || s === 'neg_hit') return 'THREAT_CACHE';
-  if (s === 'ttl_manipulation_guard' || s === 'ttl_guard_block' || s === 'ttl_guard') return 'TTL_GUARD';
-  if (s === 'dns_rebind_attack' || s === 'rebind_block' || s.includes('rebind')) return 'REBIND';
+  if (s === 'threat_negative_cache' || s === 'negative_threat_cache' || s.includes('negative_cache') || s.includes('threat_negative') || s === 'neg_hit') return 'ThreatCache';
+  if (s === 'ttl_manipulation_guard' || s === 'ttl_guard_block' || s === 'ttl_guard') return 'TTLGuard';
+  if (s === 'dns_rebind_attack' || s === 'rebind_block' || s.includes('rebind')) return 'RebindGuard';
   if (s === 'google_safe_browsing' || s === 'gsb_threat' || s === 'gsb_block' || s.includes('safe_browsing') || s === 'gsb') return 'GSB';
-  if (s === 'lookalike_threat' || s === 'typosquat_lookalike' || s === 'alike_domain_block' || s.includes('lookalike') || s.includes('typosquat')) return 'TYPOSQUAT';
-  if (s === 'neural_brain_block' || s === 'neural_zero_day' || s.includes('neural') || s.includes('brain')) return 'AI_BRAIN';
-  if (s === 'threat_feed_abir' || s === 'threat_feed' || s === 'feed_block' || s.includes('threat_feed') || s === 'threat') return 'FEED';
-  if (s === 'schedule_block' || s.includes('schedule')) return 'SCHEDULE';
-  if (s === 'swr_serve_stale' || s === 'serve_stale') return 'STALE';
+  if (s === 'lookalike_threat' || s === 'typosquat_lookalike' || s === 'alike_domain_block' || s.includes('lookalike') || s.includes('typosquat')) return 'Typosquat';
+  if (s === 'neural_brain_block' || s === 'neural_zero_day' || s.includes('neural') || s.includes('brain')) return 'AIBrain';
+  if (s === 'threat_feed_abir' || s === 'threat_feed' || s === 'feed_block' || s.includes('threat_feed') || s === 'threat') return 'ThreatFeed';
+  if (s === 'schedule_block' || s.includes('schedule')) return 'Schedule';
+  if (s === 'swr_serve_stale' || s === 'serve_stale') return 'Stale';
   if (s === 'ddr_discovery' || s === 'ddr_svcb') return 'DDR';
-  if (s === 'custom_block') return 'CUSTOM';
-  if (s === 'whitelist_feed' || s === 'whitelisted' || s.includes('whitelist')) return 'WHITELIST';
-  if (s === 'cache_hit') return 'CACHE';
-  if (s === 'servfail') return 'SERVFAIL';
-  return String(raw).toUpperCase().replace(/_+/g, '_');
+  if (s === 'custom_block') return 'Custom';
+  if (s === 'whitelist_feed' || s === 'whitelisted' || s.includes('whitelist')) return 'Whitelist';
+  if (s === 'cache_hit') return 'AeroCache';
+  if (s === 'servfail') return 'Servfail';
+  var m = String(raw).replace(/[^a-zA-Z0-9]/g, ' ').trim().split(/\s+/)[0];
+  if (!m) return 'Filter';
+  return m.charAt(0).toUpperCase() + m.slice(1);
+}
+
+function formatResolverName(raw) {
+  if (!raw || raw === 'none' || raw === '-') return 'None';
+  var s = String(raw).toLowerCase().trim();
+  if (s.includes('mullvad')) return 'Mullvad';
+  if (s.includes('quad9')) return 'Quad9';
+  if (s.includes('adguard')) return 'AdGuard';
+  if (s.includes('cloudflare')) return 'Cloudflare';
+  if (s.includes('digitale')) return 'Digitale';
+  if (s.includes('nextdns')) return 'NextDNS';
+  if (s.includes('controld') || s.includes('control d') || s.includes('control')) return 'ControlD';
+  if (s.includes('dnssb') || s.includes('dns.sb') || s.includes('sb')) return 'DNSSB';
+  if (s.includes('google')) return 'Google';
+  if (s.includes('opendns')) return 'OpenDNS';
+  if (s.includes('rethink')) return 'Rethink';
+  if (s.includes('aerocache') || s.includes('cache')) return 'AeroCache';
+  if (s.includes('root')) return 'Root';
+  if (s.includes('filter') || s.includes('block') || s.includes('0.0.0.0')) return 'Filter';
+  if (s.includes('rebind')) return 'RebindGuard';
+  if (s.includes('ttl')) return 'TTLGuard';
+  if (s.includes('dnssec')) return 'DNSSEC';
+  if (s.includes('amardns')) return 'AmarDNS';
+  var m = String(raw).replace(/[^a-zA-Z0-9]/g, ' ').trim().split(/\s+/)[0];
+  if (!m) return 'Upstream';
+  return m.charAt(0).toUpperCase() + m.slice(1);
 }
 
 function renderLogs(d) {
@@ -1599,38 +1626,64 @@ function renderLogs(d) {
   var box = document.getElementById('log-console-box');
   var countBadge = document.getElementById('log-count-badge');
   var speedStat = document.getElementById('log-speed-stat');
-  if (countBadge) countBadge.textContent = _logs.length + ' QUERIES';
-  if (speedStat) {
-    var rps = d.ai && d.ai.rps ? d.ai.rps.toFixed(1) : '0.0';
-    var avgLat = d.avgLatency != null ? d.avgLatency : 0;
-    speedStat.textContent = rps + ' R/s · ' + avgLat + 'ms avg';
-  }
   
   if (!box) return;
 
-  var filtered = _logs;
-  if (_logFilter) {
-    var q = _logFilter.toLowerCase();
-    filtered = filtered.filter(function(l) {
-      return (l.domain && l.domain.toLowerCase().includes(q)) ||
-             (l.client && l.client.toLowerCase().includes(q)) ||
-             (l.proto && l.proto.toLowerCase().includes(q)) ||
-             (l.status && l.status.toLowerCase().includes(q)) ||
-             (l.qtype && l.qtype.toLowerCase().includes(q)) ||
-             (l.reason && l.reason.toLowerCase().includes(q)) ||
-             (l.dnssec && l.dnssec.toLowerCase().includes(q)) ||
-             (l.dnssec_alg && l.dnssec_alg.toLowerCase().includes(q)) ||
-             (l.upstream && l.upstream.toLowerCase().includes(q));
-    });
+  var currentQueries = d.totalQueries != null ? d.totalQueries : (d.stats ? d.stats.totalQueries : 0);
+  var currentBlocked = d.blockedQueries != null ? d.blockedQueries : (d.stats ? d.stats.blockedQueries : 0);
+  var now = Date.now();
+  if (_lastTotalQueries > 0 && now > _lastLogTime) {
+    var deltaQ = Math.max(0, currentQueries - _lastTotalQueries);
+    var deltaSec = (now - _lastLogTime) / 1000.0;
+    var speed = deltaSec > 0 ? (deltaQ / deltaSec).toFixed(1) : '0.0';
+    var avgL = (d.avgLatency != null ? d.avgLatency : 0) + 'ms avg';
+    if (speedStat) speedStat.textContent = speed + ' R/s · ' + avgL;
+  }
+  _lastTotalQueries = currentQueries;
+  _lastLogTime = now;
+
+  if (countBadge) {
+    countBadge.textContent = _logs.length + ' logged';
   }
 
-  if (filtered.length === 0) {
-    if (_logs.length === 0) {
-      box.innerHTML = '<div style="color:var(--sub);font-size:11px;padding:10px 0;font-family:monospace">Waiting for incoming queries...</div>';
-    } else {
-      var filterDesc = _logFilter ? '"' + escHtml(_logFilter) + '"' : '';
-      box.innerHTML = '<div style="color:var(--sub);font-size:11px;padding:10px 0;font-family:monospace">No queries match filter ' + filterDesc + '</div>';
+  // Preserve user scroll position if they manually scrolled up
+  var isScrolledToBottom = box.scrollHeight - box.clientHeight <= box.scrollTop + 30;
+  if (!isScrolledToBottom) {
+    _userScrolledLogs = true;
+  } else {
+    _userScrolledLogs = false;
+  }
+
+  var filtered = _logs.filter(function(l) {
+    if (_filterStatus === 'BLOCKED') {
+      var s = (l.status || '').toUpperCase();
+      if (!s.includes('BLOCK') && !s.includes('REBIND') && !s.includes('GSB') && !s.includes('TTL') && s !== 'NEG_HIT') return false;
+    } else if (_filterStatus === 'CACHE') {
+      var s = (l.status || '').toUpperCase();
+      if (s !== 'HIT' && s !== 'STALE_HIT') return false;
+    } else if (_filterStatus === 'RESOLVED') {
+      var s = (l.status || '').toUpperCase();
+      if (s !== 'RESOLVED' && s !== 'ALLOW') return false;
     }
+
+    if (_filterProto !== 'ALL') {
+      var p = (l.proto || '').toUpperCase();
+      if (!p.includes(_filterProto)) return false;
+    }
+
+    if (_filterSearch) {
+      var q = _filterSearch.toLowerCase();
+      var dom = (l.domain || '').toLowerCase();
+      var cl = (l.client || '').toLowerCase();
+      var rea = (l.reason || '').toLowerCase();
+      var ups = (l.upstream || '').toLowerCase();
+      if (!dom.includes(q) && !cl.includes(q) && !rea.includes(q) && !ups.includes(q)) return false;
+    }
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    box.innerHTML = '<div style="color:var(--sub);font-size:11px;padding:12px 0;font-family:monospace;text-align:center">No matching queries found</div>';
     updateParamInspector(null);
     return;
   }
@@ -1638,69 +1691,48 @@ function renderLogs(d) {
   var inspected = null;
   if (_selectedLogId != null) {
     inspected = filtered.find(function(l) { return l.id === _selectedLogId; });
-    if (!inspected && _logs.length > 0) {
-      inspected = _logs.find(function(l) { return l.id === _selectedLogId; });
-    }
   }
   if (!inspected && filtered.length > 0) {
-    inspected = filtered[0];
+    inspected = filtered[filtered.length - 1];
   }
 
-  var latestLogId = filtered.length ? filtered[0].id : 0;
-  var logFp = latestLogId + '_' + filtered.length + '_' + (_logFilter || '') + '_' + (inspected ? inspected.id : 0);
-  if (box.dataset.fp === logFp) {
-    updateParamInspector(inspected);
-    return;
-  }
-  box.dataset.fp = logFp;
-
-  var chronological = filtered.slice().reverse();
-
-  var linesHtml = chronological.map(function(l) {
+  var linesHtml = filtered.map(function(l) {
     var isSel = inspected && inspected.id === l.id;
-    var dObj = new Date(l.t);
-    var timeStr = dObj.toTimeString().split(' ')[0] + '.' + String(dObj.getMilliseconds()).padStart(3, '0');
+    var d = new Date(l.t);
+    var timeStr = String(d.getHours()).padStart(2, '0') + ':' +
+                  String(d.getMinutes()).padStart(2, '0') + ':' +
+                  String(d.getSeconds()).padStart(2, '0') + '.' +
+                  String(d.getMilliseconds()).padStart(3, '0');
     
-    var rawProto = (l.proto || 'DoH').toUpperCase();
-    var protoLabel = 'DoH';
-    var protoClass = 'll-proto-doh';
-    if (rawProto.includes('DOH3') || rawProto.includes('H3')) {
-      protoLabel = 'DoH3';
-      protoClass = 'll-proto-doh3';
-    } else if (rawProto.includes('DOQ') || rawProto.includes('QUIC')) {
-      protoLabel = 'DoQ';
-      protoClass = 'll-proto-doq';
-    } else if (rawProto.includes('DOT') || rawProto.includes('TLS')) {
-      protoLabel = 'DoT';
-      protoClass = 'll-proto-dot';
-    } else {
-      protoLabel = 'DoH';
-      protoClass = 'll-proto-doh';
+    var proto = (l.proto || 'DoH').toUpperCase();
+    var protoClass = 'll-p-doh';
+    var protoLabel = 'DOH';
+    if (proto.includes('DOT') || proto.includes('TLS')) {
+      protoClass = 'll-p-dot';
+      protoLabel = 'DOT';
+    } else if (proto.includes('UDP')) {
+      protoClass = 'll-p-udp';
+      protoLabel = 'UDP';
+    } else if (proto.includes('TCP')) {
+      protoClass = 'll-p-tcp';
+      protoLabel = 'TCP';
+    } else if (proto.includes('JSON')) {
+      protoClass = 'll-p-json';
+      protoLabel = 'JSON';
     }
 
-    var devStr = '[' + (l.client || 'unknown') + ']';
-    var typeStr = l.qtype || 'A';
-    var domainStr = l.domain || '';
+    var devStr = l.client || '127.0.0.1';
+    if (devStr.length > 14) devStr = devStr.substring(0, 13) + '…';
     
+    var typeStr = (l.qtype || 'A').toUpperCase();
+    var domainStr = l.domain || '—';
+    if (domainStr.length > 28) domainStr = domainStr.substring(0, 27) + '…';
+
+    var statusStr = l.status || 'RESOLVED';
+    var statusClass = 'll-status-ok';
     var stUpper = (l.status || '').toUpperCase();
-    var secVal = l.dnssec || 'INSECURE';
-    
-    var statusStr = '-> ' + (l.status || 'RESOLVED');
-    var statusClass = 'll-status-res';
-    
-    if (stUpper === 'RESOLVED' || !l.status || stUpper === 'SUCCESS') {
-      if (secVal === 'SECURE') {
-        statusStr = '-> VALIDATED';
-        statusClass = 'll-status-val';
-      } else if (secVal === 'BOGUS') {
-        statusStr = '-> BOGUS';
-        statusClass = 'll-status-bog';
-      } else {
-        statusStr = '-> UNSIGNED';
-        statusClass = 'll-status-ins';
-      }
-    } else if (stUpper === 'HIT') {
-      statusStr = '-> HIT';
+    if (stUpper === 'HIT') {
+      statusStr = '-> CACHE_HIT';
       statusClass = 'll-status-hit';
     } else if (stUpper === 'STALE_HIT') {
       statusStr = '-> STALE_HIT';
@@ -1720,24 +1752,36 @@ function renderLogs(d) {
     } else if (stUpper.includes('FAIL')) {
       statusStr = '-> SERVFAIL';
       statusClass = 'll-status-fail';
+    } else {
+      var secVal = l.dnssec || 'INSECURE';
+      if (secVal === 'SECURE') {
+        statusStr = '-> VALIDATED';
+        statusClass = 'll-status-val';
+      } else if (secVal === 'BOGUS') {
+        statusStr = '-> BOGUS';
+        statusClass = 'll-status-bog';
+      } else {
+        statusStr = '-> UNSIGNED';
+        statusClass = 'll-status-ins';
+      }
     }
 
     var latStr = '(' + (l.lat != null ? l.lat : 0) + 'ms, ' + (l.rcode === 0 ? 'NOERROR' : (l.rcode === 3 ? 'NXDOMAIN' : (l.rcode === 2 ? 'SERVFAIL' : 'RCODE:' + l.rcode))) + ')';
     
     var isBlocked = stUpper.includes('BLOCK') || stUpper.includes('REBIND') || stUpper.includes('GSB') || stUpper.includes('TTL') || stUpper === 'NEG_HIT';
     var rawMeta = isBlocked ? (l.reason || 'Filter') : (l.upstream || 'AeroCache');
-    var metaTag = isBlocked ? formatReasonTag(rawMeta) : rawMeta;
-    var metaText = metaTag || rawMeta;
-    var metaLower = rawMeta.toLowerCase();
+    var metaText = isBlocked ? formatReasonTag(rawMeta) : formatResolverName(rawMeta);
+    if (!metaText) metaText = isBlocked ? 'Filter' : 'AeroCache';
+    var metaLower = metaText.toLowerCase();
     
     var metaColor = '#8ba2b5';
-    if (metaLower.includes('aerocache') || metaLower === 'cache' || metaTag === 'CACHE') {
+    if (metaLower.includes('aerocache') || metaLower === 'cache') {
       metaColor = '#8be9fd'; // Cyan for AeroCache
-    } else if (metaLower.includes('google safe browsing') || metaLower.includes('safe_browsing') || metaTag === 'GSB') {
-      metaColor = '#ff79c6'; // Hot Pink for Google Safe Browsing
-    } else if (metaLower.includes('rebind') || metaLower.includes('ttl') || metaLower.includes('threat') || metaLower.includes('filter') || metaLower.includes('block') || metaTag === 'DGA' || metaTag === 'THREAT_CACHE' || metaTag === 'TYPOSQUAT' || metaTag === 'AI_BRAIN' || metaTag === 'REBIND' || metaTag === 'TTL_GUARD' || metaTag === 'FEED' || metaTag === 'SCHEDULE' || isBlocked) {
+    } else if (metaLower === 'gsb') {
+      metaColor = '#ff79c6'; // Hot Pink for GSB
+    } else if (isBlocked || metaLower.includes('guard') || metaLower.includes('threat') || metaLower.includes('filter') || metaLower.includes('dga') || metaLower.includes('typosquat') || metaLower.includes('brain') || metaLower.includes('schedule') || metaLower.includes('feed')) {
       metaColor = '#ff5555'; // Red for Security Blocks & Defense Rules
-    } else if (metaLower.includes('whitelist') || metaTag === 'WHITELIST') {
+    } else if (metaLower.includes('whitelist')) {
       metaColor = '#50fa7b'; // Green for Whitelist
     } else if (metaLower.includes('mullvad')) {
       metaColor = '#ffbd2e'; // Gold for Mullvad
@@ -1751,12 +1795,16 @@ function renderLogs(d) {
       metaColor = '#4ade80'; // Green for AdGuard
     } else if (metaLower.includes('nextdns')) {
       metaColor = '#38bdf8'; // Sky for NextDNS
-    } else if (metaLower.includes('control d') || metaLower.includes('controld')) {
+    } else if (metaLower.includes('controld') || metaLower.includes('control')) {
       metaColor = '#2dd4bf'; // Teal for Control D
     } else if (metaLower.includes('opendns')) {
       metaColor = '#f472b6'; // Pink for OpenDNS
     } else if (metaLower.includes('rethink')) {
       metaColor = '#facc15'; // Yellow for RethinkDNS
+    } else if (metaLower.includes('digitale')) {
+      metaColor = '#a78bfa'; // Violet for Digitale
+    } else if (metaLower.includes('dnssb') || metaLower.includes('sb')) {
+      metaColor = '#34d399'; // Mint for DNSSB
     } else {
       metaColor = '#00ffe7'; // Bright Teal for Upstreams
     }
@@ -1773,7 +1821,7 @@ function renderLogs(d) {
       '</div>';
   }).join('');
 
-  var shouldScroll = _logAutoScroll && !_userScrolledLogs;
+  var shouldScroll = !_userScrolledLogs;
   box.innerHTML = linesHtml;
   if (shouldScroll) {
     box.scrollTop = box.scrollHeight;
@@ -1841,8 +1889,8 @@ function updateParamInspector(l) {
   var reasonText = reasonTag || 'No threat detected';
   var reasonColor = rawReason ? 'var(--bad)' : 'var(--good)';
   st('pv-reason', '<span style="color:' + reasonColor + '">' + escHtml(reasonText) + '</span>');
-  var verdictText = l.status.includes('BLOCK') ? 'Blocked by Security Filter' : ('Resolver: ' + escHtml(l.upstream || 'AeroCache'));
-  st('pv-verdict', verdictText);
+  var verdictText = l.status.includes('BLOCK') ? ('Blocked by ' + (reasonTag || 'Filter')) : ('Resolver: ' + formatResolverName(l.upstream || 'AeroCache'));
+  st('pv-verdict', escHtml(verdictText));
 
   var dObj = new Date(l.t);
   var timeFmt = dObj.toLocaleTimeString() + '.' + String(dObj.getMilliseconds()).padStart(3, '0');
@@ -3835,7 +3883,7 @@ function formatConsoleOutput(text){
   escaped=escaped.replace(/(\b(?:ALLOW|HEALTHY|ACTIVE|YES|NOERROR|VALID|SECURE|PASSED|PASS)\b)/g,'<span style="color:#39ff14;font-weight:700">$1</span>');
   escaped=escaped.replace(/(\b(?:BLOCKED|BLOCK|OFFLINE|SERVFAIL|DEGRADED|ERROR|THREAT DETECTED|BOGUS|FAIL)\b)/g,'<span style="color:#ff2d6b;font-weight:700">$1</span>');
   escaped=escaped.replace(/(\b(?:ANOMALOUS|SUSPICIOUS|NXDOMAIN|DEGRADED|WARN)\b)/g,'<span style="color:#ffaa00;font-weight:700">$1</span>');
-  escaped=escaped.replace(/(\b(?:DoH|DoH3|DoQ|DoT|UDP|TCP|DNSSEC)\b)/g,'<span style="color:#c084fc;font-weight:700">$1</span>');
+  escaped=escaped.replace(/(\b(?:DoH|DoT|UDP|TCP|DNSSEC)\b)/g,'<span style="color:#c084fc;font-weight:700">$1</span>');
   escaped=escaped.replace(/(\[\d+\/\d+\])/g,'<span style="color:var(--acc2);font-weight:700">$1</span>');
   return escaped;
 }

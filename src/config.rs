@@ -5,8 +5,6 @@ use std::env;
 pub struct Config {
     pub port: u16,
     pub dot_port: u16,
-    pub doq_port: u16,
-    pub doh3_port: u16,
     pub host: String,
     pub udp_host: String,
     pub db_path: String,
@@ -178,8 +176,6 @@ impl Config {
         Self {
             port: parse_port("PORT", 443),
             dot_port: parse_port("DOT_PORT", 853),
-            doq_port: parse_port("DOQ_PORT", 853),
-            doh3_port: parse_port("DOH3_PORT", 443),
             host,
             udp_host,
             db_path: env::var("DB_PATH").unwrap_or_else(|_| "/data/amardns.wal".to_string()),
@@ -235,28 +231,6 @@ impl Config {
             if trimmed.parse::<u16>().map_or(true, |p| p == 0) {
                 issues.push(format!(
                     "ERROR: DOT_PORT value '{}' is not in the valid range 1-65535; using default 853.",
-                    raw
-                ));
-            }
-        }
-
-        // ── DOQ_PORT ────────────────────────────────────────────────────────
-        if let Ok(raw) = env::var("DOQ_PORT") {
-            let trimmed = raw.trim();
-            if trimmed.parse::<u16>().map_or(true, |p| p == 0) {
-                issues.push(format!(
-                    "ERROR: DOQ_PORT value '{}' is not in the valid range 1-65535; using default 853.",
-                    raw
-                ));
-            }
-        }
-
-        // ── DOH3_PORT ───────────────────────────────────────────────────────
-        if let Ok(raw) = env::var("DOH3_PORT") {
-            let trimmed = raw.trim();
-            if trimmed.parse::<u16>().map_or(true, |p| p == 0) {
-                issues.push(format!(
-                    "ERROR: DOH3_PORT value '{}' is not in the valid range 1-65535; using default 443.",
                     raw
                 ));
             }
@@ -483,8 +457,6 @@ mod tests {
         let cfg = Config::from_env();
         assert_eq!(cfg.port, 443);
         assert_eq!(cfg.dot_port, 853);
-        assert_eq!(cfg.doq_port, 853);
-        assert_eq!(cfg.doh3_port, 443);
         assert!(!cfg.udp_host.is_empty());
     }
 }

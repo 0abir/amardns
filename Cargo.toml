@@ -3,7 +3,7 @@ name = "amardns"
 version = "1.0.0"
 edition = "2024"
 authors = ["0abir <abir@amardns.local>"]
-description = "Ultra-lightweight, zero-GC, Z+ security DNS resolver (DoH, DoT, DoH3, DoQ, Plain 53) with AI threat intelligence."
+description = "Ultra-lightweight, zero-GC, Z+ security DNS resolver (DoH, DoT, Plain 53) with AI threat intelligence."
 
 [lib]
 name = "amardns"
@@ -38,7 +38,6 @@ ring = "0.17"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 rustls-pemfile = "2.1"
 rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
-quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 
 # Compression (Response Compression Cache — Feature 11)
 zstd = { version = "0.13", default-features = false }

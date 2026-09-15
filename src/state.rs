@@ -404,6 +404,7 @@ impl AppState {
         let id = self.next_log_id.fetch_add(1, Ordering::Relaxed);
         let qtype_str = crate::dns::parser::qtype_to_str(qtype).to_string();
         let qtype_str_sse = qtype_str.clone(); // keep a copy for SSE broadcast
+        let norm_upstream = crate::dns::upstream::normalize_provider_name(upstream);
         let mut guard = self.recent_queries.write();
         guard.push(QueryLog {
             id,
@@ -416,7 +417,7 @@ impl AppState {
             rcode,
             lat: lat_ms,
             reason: reason.to_string(),
-            upstream: upstream.to_string(),
+            upstream: norm_upstream.clone(),
             dnssec: dnssec_status.to_string(),
             dnssec_alg: dnssec_alg.map(|s| s.to_string()),
             dnssec_key_tag,
@@ -438,7 +439,7 @@ impl AppState {
                 let log_json = serde_json::json!({
                     "id": id, "t": now, "domain": domain, "qtype": qtype_str_sse,
                     "client": client, "proto": proto, "status": status,
-                    "rcode": rcode, "lat": lat_ms, "reason": reason, "upstream": upstream,
+                    "rcode": rcode, "lat": lat_ms, "reason": reason, "upstream": norm_upstream,
                     "dnssec": dnssec_status,
                     "dnssec_alg": dnssec_alg,
                     "dnssec_key_tag": dnssec_key_tag,

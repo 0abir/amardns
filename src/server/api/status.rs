@@ -103,7 +103,6 @@ pub async fn prometheus_metrics_handler(
     let swarm = m.swarm_alarms.load(Ordering::Relaxed);
     let dot_q = m.dot_queries.load(Ordering::Relaxed);
     let doh_q = m.doh_queries.load(Ordering::Relaxed);
-    let doq_q = m.doq_queries.load(Ordering::Relaxed);
     let lat_us = m.total_lat_micros.load(Ordering::Relaxed);
     let lat_s1 = m.lat_sub_1ms.load(Ordering::Relaxed);
     let lat_1_5 = m.lat_1_to_5ms.load(Ordering::Relaxed);
@@ -205,11 +204,6 @@ pub async fn prometheus_metrics_handler(
         "amardns_doh_queries",
         "DNS-over-HTTPS queries received",
         doh_q
-    );
-    counter!(
-        "amardns_doq_queries",
-        "DNS-over-QUIC queries received",
-        doq_q
     );
     counter!(
         "amardns_plain_queries",
@@ -986,9 +980,7 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
         },
         "protocols": {
             "doh": state.metrics.doh_queries.load(Ordering::Relaxed),
-            "doh3": state.metrics.doh3_queries.load(Ordering::Relaxed),
             "dot": state.metrics.dot_queries.load(Ordering::Relaxed),
-            "doq": state.metrics.doq_queries.load(Ordering::Relaxed),
             "plain": state.metrics.plain_queries.load(Ordering::Relaxed)
         },
         "singleflight": {

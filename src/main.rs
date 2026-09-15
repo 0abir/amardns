@@ -143,7 +143,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
 
-    info!("Starting AmarDNS v2.0 (Rust Zero-GC High-Performance Edition)...");
+    info!("Starting AmarDNS v1.0 (Rust Zero-GC High-Performance Edition)...");
 
     // 2b. Run structured config validation and surface every issue.
     //     ERRORs cause a hard abort; WARNINGs are logged but allow startup.
@@ -458,18 +458,18 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // 6h. Initialize Hot-Reloadable Dynamic TLS Resolver for QUIC / DoQ / DoH3
-    let quic_cert_resolver = match config.get_effective_tls_paths() {
+    // 6h. Initialize Hot-Reloadable Dynamic TLS Resolver for DoT
+    let cert_resolver = match config.get_effective_tls_paths() {
         Some((cert_path, key_path)) => {
             info!(
-                "[doq] Loading genuine TLS certificate from '{}' and '{}'",
+                "[tls] Loading genuine TLS certificate from '{}' and '{}'",
                 cert_path, key_path
             );
             match server::tls::DynamicCertResolver::from_pem(&cert_path, &key_path) {
                 Ok(r) => Arc::new(r),
                 Err(e) => {
                     warn!(
-                        "[doq] Failed to parse certificates from '{}': {}. Generating fallback resolver...",
+                        "[tls] Failed to parse certificates from '{}': {}. Generating fallback resolver...",
                         cert_path, e
                     );
                     let fallback =
@@ -481,7 +481,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         }
         None => {
             info!(
-                "[doq] No certificate files found on disk. Generating ephemeral self-signed fallback resolver..."
+                "[tls] No certificate files found on disk. Generating ephemeral self-signed fallback resolver..."
             );
             let fallback =
                 server::tls::DynamicCertResolver::from_self_signed(&config.custom_domains)
@@ -490,24 +490,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let doq_tls_config = match server::tls::create_dynamic_quic_server_config(
-        quic_cert_resolver.clone(),
-        vec![
-            b"doq".to_vec(),
-            b"doq-i00".to_vec(),
-            b"doq-i02".to_vec(),
-            b"doq-i03".to_vec(),
-            b"h3".to_vec(),
-        ],
-    ) {
-        Ok(cfg) => Some(cfg),
-        Err(e) => {
-            warn!("[doq] Failed to create dynamic QUIC TLS config: {}", e);
-            None
-        }
-    };
-
-    // 6h. Automated ACME DNS-01 Provisioning & Renewal Supervisor
+    // 6i. Automated ACME DNS-01 Provisioning & Renewal Supervisor
     if config.acme_enabled {
         let (cert_dest, key_dest) =
             if let (Some(c), Some(k)) = (&config.tls_cert_path, &config.tls_key_path) {
@@ -541,7 +524,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             domains: acme_domains,
             cert_path: cert_dest,
             key_path: key_dest,
-            cert_resolver: Some(quic_cert_resolver.clone()),
+            cert_resolver: Some(cert_resolver.clone()),
         };
         server::acme::spawn_acme_supervisor(acme_cfg, Some(config.dns_master_key.clone()));
     }
@@ -568,7 +551,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 7b. Dynamic Hot-Reloadable TLS configuration for DoT (DNS-over-TLS)
     let dot_tls_config = match server::tls::create_dynamic_dot_server_config(
-        quic_cert_resolver.clone(),
+        cert_resolver.clone(),
     ) {
         Ok(cfg) => {
             info!(
@@ -584,7 +567,6 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 8. Shutdown coordination channels (derived from centralized AppState watch channel)
     let shutdown_rx_dot = state.shutdown_rx.clone();
-    let shutdown_rx_doq = state.shutdown_rx.clone();
 
     // 9a. Start DoT Server (DNS-over-TLS, RFC 7858)
     let dot_state = state.clone();
@@ -604,52 +586,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // 9b. Start DoQ Server (DNS-over-QUIC, RFC 9250)
-    let doq_state = state.clone();
-    let doq_host = config.udp_host.clone();
-    let doq_port = config.doq_port;
-    let doq_tls = doq_tls_config.clone();
-    let doq_handle = tokio::spawn(async move {
-        if let Err(e) = server::doq::start_doq_server(
-            doq_state,
-            &doq_host,
-            doq_port,
-            doq_tls,
-            shutdown_rx_doq,
-            "DoQ",
-        )
-        .await
-        {
-            error!("[doq] Server error: {}", e);
-        }
-    });
-
-    // 9c. Start DoH3 Server (DNS-over-HTTP/3 / QUIC, RFC 9114)
-    let doh3_handle = if config.doh3_port != config.doq_port {
-        let doh3_state = state.clone();
-        let doh3_host = config.udp_host.clone();
-        let doh3_port = config.doh3_port;
-        let doh3_tls = doq_tls_config.clone();
-        let shutdown_rx_doh3 = state.shutdown_rx.clone();
-        Some(tokio::spawn(async move {
-            if let Err(e) = server::doq::start_doq_server(
-                doh3_state,
-                &doh3_host,
-                doh3_port,
-                doh3_tls,
-                shutdown_rx_doh3,
-                "DoH3",
-            )
-            .await
-            {
-                error!("[doh3] Server error: {}", e);
-            }
-        }))
-    } else {
-        None
-    };
-
-    // 9d. Start Plain DNS UDP+TCP on port 53 (optional, for LAN/router deployments)
+    // 9b. Start Plain DNS UDP+TCP on port 53 (optional, for LAN/router deployments)
     if config.plain53_enabled {
         let plain53_state_udp = state.clone();
         let plain53_host_udp = config.plain53_udp_host.clone();
@@ -710,10 +647,6 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Give in-flight queries and background drain tasks a short grace period
     let _ = tokio::time::timeout(std::time::Duration::from_millis(1000), dot_handle).await;
-    let _ = tokio::time::timeout(std::time::Duration::from_millis(1000), doq_handle).await;
-    if let Some(h) = doh3_handle {
-        let _ = tokio::time::timeout(std::time::Duration::from_millis(1000), h).await;
-    }
 
     info!("[system] AmarDNS shutdown cleanly.");
     Ok(())
@@ -742,6 +675,6 @@ async fn shutdown_signal(state: Arc<AppState>) {
         _ = terminate => info!("[system] SIGTERM received, shutting down gracefully..."),
     }
 
-    // Immediately trigger graceful shutdown across all SSE streams, DoT, DoQ, and DoH3 listeners
+    // Immediately trigger graceful shutdown across all SSE streams and DoT listeners
     state.trigger_shutdown();
 }

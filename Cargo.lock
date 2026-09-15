@@ -24,7 +24,6 @@ dependencies = [
  "hyper-util",
  "moka",
  "parking_lot",
- "quinn",
  "rcgen",
  "reqwest",
  "ring",

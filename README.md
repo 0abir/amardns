@@ -1,4 +1,4 @@
-# AmarDNS v2.0
+# AmarDNS v1.0
 
 **Autonomous Zero-GC Edge DNS Security Gateway & Threat Intelligence Engine in Rust**
 
@@ -13,7 +13,7 @@
 
 ## Overview
 
-**AmarDNS v2.0** is an enterprise-grade, asynchronous recursive DNS security resolver written in pure **Rust** (Edition 2024). It delivers high-throughput **DNS-over-HTTPS (DoH, RFC 8484)**, **DNS-over-TLS (DoT, RFC 7858)**, **DNS-over-HTTP/3 (DoH3, RFC 9114)**, **DNS-over-QUIC (DoQ, RFC 9250)**, and standard **UDP/TCP Port 53 (RFC 1035)** endpoints.
+**AmarDNS v1.0** is an enterprise-grade, asynchronous recursive DNS security resolver written in pure **Rust** (Edition 2024). It delivers high-throughput **DNS-over-HTTPS (DoH, RFC 8484)**, **DNS-over-TLS (DoT, RFC 7858)**, and standard **UDP/TCP Port 53 (RFC 1035)** endpoints.
 
 Engineered with a **zero garbage-collection architecture**, AmarDNS indexes over **900,000 malicious domains in just 4 MB of RAM** and delivers sub-millisecond in-memory cache resolutions with automatic upstream hedging, cryptographic DNSSEC validation, singleflight deduplication, and an 8D online neural threat engine.
 
@@ -28,8 +28,6 @@ AmarDNS is deployed across Anycast edge nodes with low-latency DNS resolution an
 | **DNS-over-HTTPS (DoH)** | `https://amardns.dedyn.io/dns-query` | `443` | Browsers, iOS/macOS Encrypted DNS profiles, `cloudflared`, `dnscrypt-proxy` |
 | **DoH JSON REST API** | `https://amardns.dedyn.io/resolve` | `443` | Web inspector, command-line scripts (`curl "https://amardns.dedyn.io/resolve?name=google.com&type=A"`) |
 | **DNS-over-TLS (DoT)** | `amardns.dedyn.io` | `853` | Android Private DNS, stubby, systemd-resolved |
-| **DNS-over-QUIC (DoQ)** | `quic://amardns.dedyn.io:853` | `853/udp` | AdGuard Home, NextDNS CLI, `q`, `doggo` |
-| **DNS-over-HTTP/3 (DoH3)** | `https://amardns.dedyn.io/dns-query` | `443/udp` | Automatic HTTP/3 upgrade via `Alt-Svc` header |
 | **Plain DNS (IPv4)** | `66.241.124.24` | `53/udp`, `53/tcp` | Standard universal recursive DNS |
 | **Plain DNS (IPv6)** | `2a09:8280:1::18e:50e2:0` | `53/udp`, `53/tcp` | Standard IPv6 recursive DNS |
 | **Edge Dashboard & Console** | `https://amardns.dedyn.io/` | `443` | Live telemetry matrix, neural brain inspector, threat feeds |
@@ -39,7 +37,7 @@ AmarDNS is deployed across Anycast edge nodes with low-latency DNS resolution an
 ## System Architecture
 
 ```
-Incoming Query (DoH / DoT / DoH3 / DoQ / Plain 53)
+Incoming Query (DoH / DoT / Plain 53)
        │
        ▼
  ┌───────────────────────────────────────────────────────────┐
@@ -102,8 +100,6 @@ Incoming Query (DoH / DoT / DoH3 / DoQ / Plain 53)
 - **DNS-over-HTTPS (DoH, RFC 8484)**: Binary wireformat queries over HTTP/2 and HTTP/1.1 via `POST /dns-query` and `GET /dns-query?dns=...`.
 - **DoH JSON REST API (RFC 8427)**: Browser-testable JSON endpoint via `GET /resolve?name=example.com&type=A`.
 - **DNS-over-TLS (DoT, RFC 7858)**: Strict TLS on port `853` with ALPN `dot` negotiation and PROXY protocol v2 support.
-- **DNS-over-QUIC (DoQ, RFC 9250)**: Ultra-low-latency UDP multiplexing on port `853` with 0-RTT connection resumption.
-- **DNS-over-HTTP/3 (DoH3, RFC 9114)**: Native HTTP/3 over QUIC on UDP port `443` with automatic `Alt-Svc` browser promotion.
 - **Plain UDP/TCP Port 53 (RFC 1035)**: Standard recursive forwarding with EDNS(0) Cookie (RFC 7873) spoof protection and seamless TCP fallback for oversized responses.
 
 ### 2. Zero-Allocation Memory Architecture
@@ -170,12 +166,10 @@ cargo run --release
 Local default listener endpoints:
 - **DoH Wire & JSON**: `http://127.0.0.1:443/dns-query` and `http://127.0.0.1:443/resolve`
 - **DoT (DNS-over-TLS)**: `127.0.0.1:853`
-- **DoQ (DNS-over-QUIC)**: `127.0.0.1:853/udp`
-- **DoH3 (DNS-over-HTTP/3)**: `127.0.0.1:443/udp`
 - **Plain DNS (UDP/TCP)**: `127.0.0.1:53`
 - **Dashboard & Management Console**: `http://127.0.0.1:443/`
 
-*(Note: If running unprivileged locally without root capabilities, customize ports via environment variables: `PORT=8443 DOT_PORT=8853 DOQ_PORT=8853 PLAIN_DNS_PORT=5053 cargo run --release`)*
+*(Note: If running unprivileged locally without root capabilities, customize ports via environment variables: `PORT=8443 DOT_PORT=8853 PLAIN_DNS_PORT=5053 cargo run --release`)*
 
 ---
 
@@ -230,12 +224,10 @@ All settings are configured via environment variables matching `src/config.rs` a
 | :--- | :--- | :--- |
 | `PORT` | `443` | Local HTTP / DoH listening port. |
 | `DOT_PORT` | `853` | Local DoT (DNS-over-TLS) TCP listening port. |
-| `DOQ_PORT` | `853` | Local DoQ (DNS-over-QUIC) UDP listening port. |
-| `DOH3_PORT` | `443` | Local DoH3 (DNS-over-HTTP/3) UDP listening port. |
 | `PLAIN_DNS_PORT` | `53` | Local plain UDP/TCP DNS listening port. |
 | `PLAIN53_ENABLED` | `true` | Enables/disables port 53 plain UDP/TCP DNS listener. |
 | `HOST` | `::` | Network binding interface (`::` for dual-stack IPv4/IPv6). |
-| `UDP_HOST` | `fly-global-services` | Binding interface for UDP QUIC/DoQ/DoH3 services (`fly-global-services` or `::`). |
+| `UDP_HOST` | `fly-global-services` | Binding interface for UDP Plain 53 service (`fly-global-services` or `::`). |
 | `DB_PATH` | `/data/amardns.wal` | Filesystem path to the persistent Write-Ahead Log. |
 | `LOG_LEVEL` | `info` | Logging verbosity (`error`, `warn`, `info`, `debug`, `trace`). |
 | `DNS_MASTER_KEY` | *(empty)* | Master administrative API key for authentication and management. |
@@ -348,7 +340,7 @@ AmarDNS manages the full lifecycle of your SSL/TLS certificates with zero downti
 2. **Zero-Downtime Hot Reload (How)**:
    - The ACME coordinator generates a fresh ECDSA P-256 key pair, publishes `_acme-challenge` TXT records to deSEC, DuckDNS, and Dynu, verifies propagation via DoH, and submits the finalized CSR to ZeroSSL.
    - The renewed certificate chain is saved atomically to `/data/cert.pem` and `/data/key.pem`.
-   - The `DynamicCertResolver` immediately reloads the new certificate into active TLS, DoT, DoQ, and DoH3 listeners in RAM **with zero process restarts and zero dropped connections**.
+   - The `DynamicCertResolver` immediately reloads the new certificate into active TLS and DoT listeners in RAM **with zero process restarts and zero dropped connections**.
 3. **Multi-Region Synchronization**:
    - The primary region node (`sin`) acts as the ACME leader.
    - Secondary region replica nodes (e.g., `fra`) automatically sync the renewed certificate bundle from the leader over internal encrypted Anycast mesh (`http://sin.amardns.internal:443/internal/tls/bundle/{master_key}`) and update their local resolvers in-memory.

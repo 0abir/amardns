@@ -75,25 +75,6 @@ pub fn create_dot_tls_config(
     load_tls_config(cert_path, key_path, vec![b"dot".to_vec()])
 }
 
-/// Creates TLS configuration optimized for DoQ (RFC 9250) and DoH3 (RFC 9114).
-#[allow(dead_code)]
-pub fn create_doq_tls_config(
-    cert_path: &str,
-    key_path: &str,
-) -> Result<Arc<rustls::ServerConfig>, Box<dyn std::error::Error>> {
-    load_tls_config(
-        cert_path,
-        key_path,
-        vec![
-            b"doq".to_vec(),
-            b"doq-i00".to_vec(),
-            b"doq-i02".to_vec(),
-            b"doq-i03".to_vec(),
-            b"h3".to_vec(),
-        ],
-    )
-}
-
 use tokio_rustls::rustls::server::{ClientHello, ResolvesServerCert};
 use tokio_rustls::rustls::sign::CertifiedKey;
 
@@ -206,27 +187,16 @@ impl ResolvesServerCert for DynamicCertResolver {
 }
 
 /// Creates a dynamic rustls ServerConfig backed by a hot-reloadable certificate resolver.
-pub fn create_dynamic_quic_server_config(
-    resolver: Arc<DynamicCertResolver>,
-    alpn_protocols: Vec<Vec<u8>>,
-) -> Result<Arc<rustls::ServerConfig>, Box<dyn std::error::Error + Send + Sync>> {
-    let mut config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_cert_resolver(resolver);
-
-    if !alpn_protocols.is_empty() {
-        config.alpn_protocols = alpn_protocols;
-    }
-
-    Ok(Arc::new(config))
-}
-
 /// Creates a dynamic rustls ServerConfig for DoT backed by a hot-reloadable certificate resolver.
 /// Uses flexible ALPN (accepts both ALPN "dot" and clients with no ALPN like Android/doggo).
 pub fn create_dynamic_dot_server_config(
     resolver: Arc<DynamicCertResolver>,
 ) -> Result<Arc<rustls::ServerConfig>, Box<dyn std::error::Error + Send + Sync>> {
-    create_dynamic_quic_server_config(resolver, vec![])
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_cert_resolver(resolver);
+
+    Ok(Arc::new(config))
 }
 
 /// Serves Axum Router over native TLS using tokio-rustls and hyper-util with graceful shutdown.
@@ -309,12 +279,6 @@ mod tests {
     #[test]
     fn test_create_dot_tls_config_missing_files() {
         let res = create_dot_tls_config("/nonexistent/cert.pem", "/nonexistent/key.pem");
-        assert!(res.is_err());
-    }
-
-    #[test]
-    fn test_create_doq_tls_config_missing_files() {
-        let res = create_doq_tls_config("/nonexistent/cert.pem", "/nonexistent/key.pem");
         assert!(res.is_err());
     }
 
