@@ -345,7 +345,7 @@ impl RateLimiter {
 ///   - IPv6 Unique Local (fc00::/7 — covers fd00::/8 and Fly.io fdaa::/16)
 ///   - IPv6 link-local  (fe80::/10)
 #[inline]
-fn is_exempt(ip: IpAddr) -> bool {
+pub fn is_exempt(ip: IpAddr) -> bool {
     let ip = ip.to_canonical();
     match ip {
         IpAddr::V4(v4) => {

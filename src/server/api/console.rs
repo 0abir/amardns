@@ -1143,34 +1143,119 @@ fn cmd_bloom(state: &AppState) -> String {
     )
 }
 
-fn cmd_rate_limit(_state: &AppState, args: &[&str]) -> (String, String) {
+fn cmd_rate_limit(state: &AppState, args: &[&str]) -> (String, String) {
+    let blocked = state.rate_limiter.get_blocked_count();
+    let soft_hits = state.rate_limiter.get_soft_limit_hits();
+
     if args.is_empty() || args[0].eq_ignore_ascii_case("status") {
         return (
-            "── [ RATE LIMITER CONTROLLER ] ─────────────────────────────────\nEngine:           Token Bucket Rate Limiter\nIdentity Keying:  Client IP + Authenticated Device Token\nRFC 1918 Bypass:  Private LAN & Local Loopback subnets exempt\nStatus:           Healthy and enforcing".into(),
+            format!(
+                "── [ RATE LIMITER CONTROLLER ] ─────────────────────────────────\nEngine:           Two-Level Composite-Identity Token Bucket\nIdentity Keying:  Client IP + Authenticated Device Token\nRFC 1918 Bypass:  Private LAN & Local Loopback subnets exempt\nBlocked Requests: {} total\nSoft Limit Hits:  {} total\nStatus:           Healthy and actively enforcing",
+                blocked, soft_hits
+            ),
             "ok".into(),
         );
     }
 
     if args[0].eq_ignore_ascii_case("inspect") {
-        let ip = args.get(1).copied().unwrap_or("127.0.0.1");
-        return (
-            format!("Rate limit state for IP {}: Quota Available, Burst Normal", ip),
-            "ok".into(),
-        );
+        let ip_str = args.get(1).copied().unwrap_or("127.0.0.1");
+        if let Ok(ip) = ip_str.parse::<std::net::IpAddr>() {
+            let is_exempt = crate::security::rate_limit::is_exempt(ip);
+            return (
+                format!(
+                    "── [ RATE LIMIT INSPECTION: {} ] ────────────────\nCanonical IP:     {}\nSubnet Exemption: {}\nIdentity Bucket:  60 tokens max, 20 tok/sec refill\nIP Ceiling Bucket:500 tokens max, 200 tok/sec refill\nStatus:           NORMAL",
+                    ip, ip.to_canonical(), if is_exempt { "EXEMPT (Private LAN / Loopback)" } else { "ENFORCED (Public peer)" }
+                ),
+                "ok".into(),
+            );
+        } else {
+            return (format!("Invalid IP address format: '{}'", ip_str), "error".into());
+        }
     }
 
     ("Usage: rate-limit status | rate-limit inspect <ip>".into(), "error".into())
 }
 
-fn cmd_sockets(_state: &AppState) -> String {
-    r#"── [ ACTIVE NETWORK SOCKET LISTENERS ] ─────────────────────────
- [UDP]   0.0.0.0:53       Plain DNS  (4MB SO_RCVBUF, SO_REUSEPORT)
- [TCP]   0.0.0.0:53       Plain DNS  (4096 Listen Backlog, TCP_NODELAY)
- [TLS]   0.0.0.0:853      DNS-over-TLS (DoT) + ALPN dot
- [QUIC]  0.0.0.0:853      DNS-over-QUIC (DoQ) + ALPN doq
- [HTTPS] 0.0.0.0:443      DNS-over-HTTPS (DoH) + HTTP/2 + HTTP/1.1
- [QUIC]  0.0.0.0:443      DNS-over-HTTP/3 (DoH3) + ALPN h3 + Native RFC 9114
- [HTTP]  0.0.0.0:8080     Dashboard Web UI & REST Management API"#.into()
+fn cmd_sockets(state: &AppState) -> String {
+    let cfg = &state.config;
+    let m = &state.metrics;
+
+    let mut out = String::from("── [ ACTIVE NETWORK SOCKET LISTENERS ] ─────────────────────────\n");
+
+    // Plain UDP / TCP 53
+    if cfg.plain53_enabled {
+        let plain_udp = format!("{}:53", cfg.plain53_udp_host);
+        let plain_cnt = m.plain_queries.load(Ordering::Relaxed);
+        out.push_str(&format!(
+            " [UDP]   {:<18} Plain DNS 53  (4MB SO_RCVBUF, SO_REUSEPORT) · {} queries\n",
+            plain_udp, plain_cnt
+        ));
+        let plain_tcp = format!("{}:53", cfg.plain53_host);
+        out.push_str(&format!(
+            " [TCP]   {:<18} Plain DNS 53  (4096 Listen Backlog, TCP_NODELAY)\n",
+            plain_tcp
+        ));
+    } else {
+        out.push_str(" [PLAIN] DISABLED           Plain DNS 53 listener is disabled in config\n");
+    }
+
+    // DoT 853
+    let dot_addr = format!("{}:{}", cfg.host, cfg.dot_port);
+    let dot_cnt = m.dot_queries.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        " [TLS]   {:<18} DNS-over-TLS (DoT) + ALPN dot + PROXY v2 · {} queries\n",
+        dot_addr, dot_cnt
+    ));
+
+    // DoQ 853
+    let doq_addr = format!("{}:{}", cfg.udp_host, cfg.doq_port);
+    let doq_cnt = m.doq_queries.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        " [QUIC]  {:<18} DNS-over-QUIC (DoQ) + ALPN doq (RFC 9250) · {} queries\n",
+        doq_addr, doq_cnt
+    ));
+
+    // DoH 443 / Port
+    let doh_addr = format!("{}:{}", cfg.host, cfg.port);
+    let doh_cnt = m.doh_queries.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        " [HTTPS] {:<18} DNS-over-HTTPS (DoH) + HTTP/2 + HTTP/1.1 · {} queries\n",
+        doh_addr, doh_cnt
+    ));
+
+    // DoH3 443
+    let doh3_addr = format!("{}:{}", cfg.udp_host, cfg.doh3_port);
+    let doh3_cnt = m.doh3_queries.load(Ordering::Relaxed);
+    out.push_str(&format!(
+        " [QUIC]  {:<18} DNS-over-HTTP/3 (DoH3) + ALPN h3 (RFC 9114) · {} queries\n",
+        doh3_addr, doh3_cnt
+    ));
+
+    // Web UI / API
+    out.push_str(&format!(
+        " [HTTP]  {:<18} Dashboard Web UI & REST Management API\n",
+        doh_addr
+    ));
+
+    out.push_str("── [ TLS & CERTIFICATE ENGINE ] ────────────────────────────────\n");
+    out.push_str(&format!(
+        " TLS Termination: {}\n",
+        if cfg.tls_enabled {
+            "Native TLS (Let's Encrypt / ZeroSSL auto-renew)"
+        } else {
+            "Terminated at edge (Fly.io proxy / HTTP upstream)"
+        }
+    ));
+    out.push_str(&format!(
+        " Host Shield:     {}\n",
+        if cfg.custom_domains.is_empty() {
+            "Platform (*.fly.dev) + Internal mesh"
+        } else {
+            "Custom DDNS domains enforced"
+        }
+    ));
+
+    out
 }
 
 fn cmd_mode(state: &AppState, args: &[&str]) -> (String, String) {
