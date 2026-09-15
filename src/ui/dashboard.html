@@ -1739,8 +1739,26 @@ function renderLogs(d) {
       metaColor = '#ff5555'; // Red for Security Blocks & Defense Rules
     } else if (metaLower.includes('whitelist') || metaTag === 'WHITELIST') {
       metaColor = '#50fa7b'; // Green for Whitelist
+    } else if (metaLower.includes('mullvad')) {
+      metaColor = '#ffbd2e'; // Gold for Mullvad
+    } else if (metaLower.includes('quad9')) {
+      metaColor = '#c084fc'; // Purple for Quad9
+    } else if (metaLower.includes('cloudflare')) {
+      metaColor = '#fb923c'; // Orange for Cloudflare
+    } else if (metaLower.includes('google')) {
+      metaColor = '#60a5fa'; // Blue for Google
+    } else if (metaLower.includes('adguard')) {
+      metaColor = '#4ade80'; // Green for AdGuard
+    } else if (metaLower.includes('nextdns')) {
+      metaColor = '#38bdf8'; // Sky for NextDNS
+    } else if (metaLower.includes('control d') || metaLower.includes('controld')) {
+      metaColor = '#2dd4bf'; // Teal for Control D
+    } else if (metaLower.includes('opendns')) {
+      metaColor = '#f472b6'; // Pink for OpenDNS
+    } else if (metaLower.includes('rethink')) {
+      metaColor = '#facc15'; // Yellow for RethinkDNS
     } else {
-      metaColor = '#8ba2b5'; // Standard color for all upstreams
+      metaColor = '#00ffe7'; // Bright Teal for Upstreams
     }
 
     return '<div class="log-line' + (isSel ? ' active' : '') + '" data-log-id="' + l.id + '">' +
@@ -1823,7 +1841,8 @@ function updateParamInspector(l) {
   var reasonText = reasonTag || 'No threat detected';
   var reasonColor = rawReason ? 'var(--bad)' : 'var(--good)';
   st('pv-reason', '<span style="color:' + reasonColor + '">' + escHtml(reasonText) + '</span>');
-  st('pv-verdict', l.status.includes('BLOCK') ? 'Blocked by Security Filter' : 'Resolution Allowed');
+  var verdictText = l.status.includes('BLOCK') ? 'Blocked by Security Filter' : ('Resolver: ' + escHtml(l.upstream || 'AeroCache'));
+  st('pv-verdict', verdictText);
 
   var dObj = new Date(l.t);
   var timeFmt = dObj.toLocaleTimeString() + '.' + String(dObj.getMilliseconds()).padStart(3, '0');

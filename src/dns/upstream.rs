@@ -29,17 +29,17 @@ pub const IANA_ROOT_HINTS: &[&str] = &[
 
 pub struct Singleflight {
     in_flight: parking_lot::Mutex<
-        std::collections::HashMap<String, tokio::sync::broadcast::Sender<Vec<u8>>>,
+        std::collections::HashMap<String, tokio::sync::broadcast::Sender<(Vec<u8>, String)>>,
     >,
     pub coalesced: std::sync::atomic::AtomicU64,
 }
 
 struct SingleflightGuard<'a> {
     in_flight: &'a parking_lot::Mutex<
-        std::collections::HashMap<String, tokio::sync::broadcast::Sender<Vec<u8>>>,
+        std::collections::HashMap<String, tokio::sync::broadcast::Sender<(Vec<u8>, String)>>,
     >,
     key: &'a str,
-    result: Option<Vec<u8>>,
+    result: Option<(Vec<u8>, String)>,
     completed: bool,
 }
 
@@ -48,8 +48,8 @@ impl<'a> Drop for SingleflightGuard<'a> {
         let mut map = self.in_flight.lock();
         if let Some(tx) = map.remove(self.key) {
             if self.completed {
-                if let Some(ref wire) = self.result {
-                    let _ = tx.send(wire.clone());
+                if let Some(ref res) = self.result {
+                    let _ = tx.send(res.clone());
                 }
             }
         }
@@ -68,10 +68,10 @@ impl Singleflight {
         self.in_flight.lock().len()
     }
 
-    pub async fn do_call<F, Fut>(&self, key: &str, upstream_fn: F) -> Option<Vec<u8>>
+    pub async fn do_call<F, Fut>(&self, key: &str, upstream_fn: F) -> Option<(Vec<u8>, String)>
     where
         F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Option<Vec<u8>>>,
+        Fut: std::future::Future<Output = Option<(Vec<u8>, String)>>,
     {
         let mut rx = {
             let mut map = self.in_flight.lock();
@@ -86,10 +86,10 @@ impl Singleflight {
 
         if let Some(ref mut receiver) = rx {
             match receiver.recv().await {
-                Ok(wire) => {
+                Ok(res) => {
                     self.coalesced
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    return Some(wire);
+                    return Some(res);
                 }
                 Err(_) => return None,
             }
@@ -413,7 +413,7 @@ impl UpstreamPool {
             }
         };
 
-        let sf_result = self.singleflight.do_call(&key, || async {
+        self.singleflight.do_call(&key, || async {
             let nodes = self.ranked_nodes();
             if nodes.is_empty() {
                 return None;
@@ -495,7 +495,7 @@ impl UpstreamPool {
                     if let Some(bytes) = resolved {
                         let elapsed = start.elapsed().as_millis() as u32;
                         node.record_success(elapsed);
-                        Some(bytes)
+                        Some((bytes, node.provider.clone()))
                     } else {
                         node.record_error();
                         None
@@ -578,9 +578,7 @@ impl UpstreamPool {
             } else {
                 fut1.await
             }
-        }).await;
-
-        sf_result.map(|wire| (wire, "Upstream".to_string()))
+        }).await
     }
 
     /// Autonomous IANA Root Server Hints Fallback (Zero-Upstream Recursion).
@@ -1010,7 +1008,7 @@ mod tests {
                     async move {
                         cc.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                        Some(vec![0u8; 12])
+                        Some((vec![0u8; 12], "Mock Provider".to_string()))
                     }
                 })
                 .await
@@ -1045,7 +1043,7 @@ mod tests {
             sf_clone
                 .do_call("cancelled.com:1", || async {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    Some(vec![1u8, 2, 3])
+                    Some((vec![1u8, 2, 3], "Mock Provider".to_string()))
                 })
                 .await
         });
@@ -1058,10 +1056,12 @@ mod tests {
 
         // 2. Subsequent query for the same key must NOT deadlock or hang on a dead channel
         let result = sf
-            .do_call("cancelled.com:1", || async { Some(vec![4u8, 5, 6]) })
+            .do_call("cancelled.com:1", || async {
+                Some((vec![4u8, 5, 6], "Mock Provider".to_string()))
+            })
             .await;
 
-        assert_eq!(result, Some(vec![4u8, 5, 6]));
+        assert_eq!(result, Some((vec![4u8, 5, 6], "Mock Provider".to_string())));
     }
 
     use super::*;
