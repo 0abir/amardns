@@ -947,6 +947,17 @@ pub async fn process_dns_wire_packet_full(
                 is_ad,
             );
             state.metrics.record_latency(query_start.elapsed());
+            let mut cached_wire = cached_wire;
+            if cached_wire.len() >= 2 {
+                cached_wire[0..2].copy_from_slice(&parsed.tx_id.to_be_bytes());
+            }
+            if parsed.question_bytes_len > 0
+                && cached_wire.len() >= 12 + parsed.question_bytes_len
+                && query_wire.len() >= 12 + parsed.question_bytes_len
+            {
+                cached_wire[12..12 + parsed.question_bytes_len]
+                    .copy_from_slice(&query_wire[12..12 + parsed.question_bytes_len]);
+            }
             return (cached_wire, "HIT", dnssec_str, None);
         }
         crate::dns::cache::CacheLookupResult::Stale(cached_wire) => {
@@ -1001,6 +1012,17 @@ pub async fn process_dns_wire_packet_full(
             });
 
             state.metrics.record_latency(query_start.elapsed());
+            let mut cached_wire = cached_wire;
+            if cached_wire.len() >= 2 {
+                cached_wire[0..2].copy_from_slice(&parsed.tx_id.to_be_bytes());
+            }
+            if parsed.question_bytes_len > 0
+                && cached_wire.len() >= 12 + parsed.question_bytes_len
+                && query_wire.len() >= 12 + parsed.question_bytes_len
+            {
+                cached_wire[12..12 + parsed.question_bytes_len]
+                    .copy_from_slice(&query_wire[12..12 + parsed.question_bytes_len]);
+            }
             return (cached_wire, "STALE_HIT", dnssec_str, None);
         }
         crate::dns::cache::CacheLookupResult::Miss => {}
@@ -1288,6 +1310,13 @@ pub async fn process_dns_wire_packet_full(
 
         if upstream_resp.len() >= 2 {
             upstream_resp[0..2].copy_from_slice(&parsed.tx_id.to_be_bytes());
+        }
+        if parsed.question_bytes_len > 0
+            && upstream_resp.len() >= 12 + parsed.question_bytes_len
+            && query_wire.len() >= 12 + parsed.question_bytes_len
+        {
+            upstream_resp[12..12 + parsed.question_bytes_len]
+                .copy_from_slice(&query_wire[12..12 + parsed.question_bytes_len]);
         }
 
         (upstream_resp, "MISS", dnssec_str, None)

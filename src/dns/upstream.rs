@@ -437,8 +437,6 @@ impl UpstreamPool {
                 &wire,
                 crate::dns::parser::EcsMode::Strip,
             );
-            // DNS 0x20: randomize QNAME casing to harden against cache poisoning
-            let wire = crate::dns::parser::apply_dns0x20_randomization(&wire);
 
             let execute_query = |node: Arc<UpstreamNode>, wire: Vec<u8>| {
                 let client = client.clone();
@@ -587,7 +585,6 @@ impl UpstreamPool {
         let wire = crate::dns::parser::ensure_edns0_do_bit(query_wire);
         let wire =
             crate::dns::parser::process_ecs_option(&wire, crate::dns::parser::EcsMode::Strip);
-        let wire = crate::dns::parser::apply_dns0x20_randomization(&wire);
 
         let mut tasks = Vec::with_capacity(3);
         for &hint in IANA_ROOT_HINTS.iter().take(3) {

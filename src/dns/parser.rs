@@ -218,9 +218,9 @@ pub fn build_ddr_response(query_buf: &[u8]) -> Option<Vec<u8>> {
     rdata.extend_from_slice(&1u16.to_be_bytes()); // Priority = 1
     rdata.push(0x00); // Target = "." (root / in-bailiwick)
 
-    // Key 1: ALPN (h3, h2, doq, dot)
+    // Key 1: ALPN (h2)
     rdata.extend_from_slice(&1u16.to_be_bytes());
-    let alpn_val = b"\x02h3\x02h2\x03doq\x03dot";
+    let alpn_val = b"\x02h2";
     rdata.extend_from_slice(&(alpn_val.len() as u16).to_be_bytes());
     rdata.extend_from_slice(alpn_val);
 
