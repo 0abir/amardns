@@ -512,7 +512,6 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
 
 <div class="tabs">
   <div class="tab on" data-tab="overview" >Overview</div>
-  <div class="tab" data-tab="console" style="color:var(--acc);font-weight:700">>_ CONSOLE</div>
   <div class="tab" data-tab="logs" >LOGS</div>
   <div class="tab" data-tab="brain" >BRAIN</div>
   <div class="tab" data-tab="upstreams" >Upstreams</div>
@@ -520,6 +519,7 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
   <div class="tab" data-tab="intelligence" >Intelligence</div>
   <div class="tab" data-tab="security" >Security</div>
   <div class="tab" data-tab="admin" >Settings</div>
+  <div class="tab" data-tab="console" style="color:var(--acc);font-weight:700">>_ CONSOLE</div>
 </div>
 
 <!-- OVERVIEW -->
@@ -541,55 +541,6 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
     <div class="ap"><div class="aph">Anomaly Log <span id="ano-cnt" style="color:var(--warn)">0</span></div><div class="apb"><div class="loglist" id="log-ano"></div></div></div>
   </div>
   <div class="sh">Active Incident</div><div id="inc-ov"></div>
-</div>
-
-<!-- CONSOLE -->
-<div class="tc" id="tc-console">
-  <div class="terminal-card" style="background:#090d16;border:1px solid var(--brd2);border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,0.6);display:flex;flex-direction:column;height:calc(100vh - 240px);min-height:540px;max-height:850px;overflow:hidden;position:relative">
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:rgba(15,23,42,0.85);border-bottom:1px solid rgba(255,255,255,0.08);backdrop-filter:blur(10px);user-select:none;flex-wrap:wrap;gap:8px">
-      <div style="display:flex;align-items:center;gap:8px">
-        <div style="display:flex;gap:6px">
-          <span style="width:11px;height:11px;border-radius:50%;background:#ff5f56;display:inline-block;box-shadow:0 0 6px rgba(255,95,86,0.5)"></span>
-          <span style="width:11px;height:11px;border-radius:50%;background:#ffbd2e;display:inline-block;box-shadow:0 0 6px rgba(255,189,46,0.5)"></span>
-          <span style="width:11px;height:11px;border-radius:50%;background:#27c93f;display:inline-block;box-shadow:0 0 6px rgba(39,201,63,0.5)"></span>
-        </div>
-        <span style="font-family:var(--fm);font-size:11px;font-weight:700;color:var(--txt);margin-left:6px;letter-spacing:0.04em">AMARDNS ENGINE TERMINAL</span>
-        <span style="font-size:9px;background:rgba(0,255,231,0.15);color:var(--acc);padding:2px 6px;border-radius:4px;border:1px solid rgba(0,255,231,0.3);font-family:var(--fm)">SESSION ACTIVE</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px">
-        <button class="btn btn-sm" id="btn-console-copy" style="font-size:10px;padding:3px 9px" title="Copy output text">Copy Output</button>
-        <button class="btn btn-sm btn-d" id="btn-console-clear" style="font-size:10px;padding:3px 9px" title="Clear console buffer">Clear Buffer</button>
-      </div>
-    </div>
-
-    <div style="display:flex;align-items:center;gap:6px;padding:8px 14px;background:rgba(10,15,28,0.7);border-bottom:1px solid rgba(255,255,255,0.04);overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch" id="console-chips">
-      <span style="font-size:10px;color:var(--mut);font-family:var(--fm);margin-right:4px">PRESETS:</span>
-      <button class="chip-cmd" data-cmd="motd">motd</button>
-      <button class="chip-cmd" data-cmd="stats">stats</button>
-      <button class="chip-cmd" data-cmd="bench">bench</button>
-      <button class="chip-cmd" data-cmd="upstreams">upstreams</button>
-      <button class="chip-cmd" data-cmd="trace github.com">trace github.com</button>
-      <button class="chip-cmd" data-cmd="resolve cloudflare.com A">resolve cloudflare.com</button>
-      <button class="chip-cmd" data-cmd="ai test bad-phish-domain.xyz">ai test</button>
-      <button class="chip-cmd" data-cmd="dnssec status">dnssec status</button>
-      <button class="chip-cmd" data-cmd="cache stats">cache stats</button>
-      <button class="chip-cmd" data-cmd="feed status">feed status</button>
-      <button class="chip-cmd" data-cmd="sockets">sockets</button>
-      <button class="chip-cmd" data-cmd="help">help</button>
-    </div>
-
-    <div id="console-output" style="flex:1;overflow-y:auto;overflow-x:auto;padding:14px 18px;font-family:var(--fm);font-size:11px;line-height:1.55;color:#e2e8f0;background:#050811;-webkit-overflow-scrolling:touch;white-space:pre-wrap;word-break:break-word"></div>
-
-    <div style="display:flex;align-items:center;background:#0b1120;border-top:1px solid rgba(255,255,255,0.08);padding:8px 14px;position:relative">
-      <span style="font-family:var(--fm);font-size:12px;font-weight:700;color:var(--acc);margin-right:8px;user-select:none;display:flex;align-items:center;gap:4px">
-        <span>amardns</span><span style="color:var(--mut)">»</span>
-      </span>
-      <input type="text" id="console-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Type a command (e.g. 'help', 'trace github.com', 'bench')..." style="flex:1;background:transparent;border:none;outline:none;color:#ffffff;font-family:var(--fm);font-size:12px;caret-color:var(--acc)">
-      <button class="btn btn-g btn-sm" id="btn-console-send" style="padding:4px 12px;font-size:11px;margin-left:8px;font-weight:700">Run ↵</button>
-    </div>
-
-    <div id="console-autocomplete" style="display:none;position:absolute;bottom:52px;left:14px;right:14px;background:#0f172a;border:1px solid var(--acc);border-radius:6px;box-shadow:0 12px 36px rgba(0,0,0,0.8);max-height:220px;overflow-y:auto;z-index:100;font-family:var(--fm);font-size:11px"></div>
-  </div>
 </div>
 
 <!-- LOGS -->
@@ -1195,6 +1146,55 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
 
   <div class="sh">Storage Engine &amp; PulseDB Stats</div>
   <div class="dp" id="dp-storage" style="margin-bottom:20px"></div>
+</div>
+
+<!-- CONSOLE -->
+<div class="tc" id="tc-console">
+  <div class="terminal-card" style="background:#090d16;border:1px solid var(--brd2);border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,0.6);display:flex;flex-direction:column;height:calc(100vh - 240px);min-height:540px;max-height:850px;overflow:hidden;position:relative">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:rgba(15,23,42,0.85);border-bottom:1px solid rgba(255,255,255,0.08);backdrop-filter:blur(10px);user-select:none;flex-wrap:wrap;gap:8px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="display:flex;gap:6px">
+          <span style="width:11px;height:11px;border-radius:50%;background:#ff5f56;display:inline-block;box-shadow:0 0 6px rgba(255,95,86,0.5)"></span>
+          <span style="width:11px;height:11px;border-radius:50%;background:#ffbd2e;display:inline-block;box-shadow:0 0 6px rgba(255,189,46,0.5)"></span>
+          <span style="width:11px;height:11px;border-radius:50%;background:#27c93f;display:inline-block;box-shadow:0 0 6px rgba(39,201,63,0.5)"></span>
+        </div>
+        <span style="font-family:var(--fm);font-size:11px;font-weight:700;color:var(--txt);margin-left:6px;letter-spacing:0.04em">AMARDNS ENGINE TERMINAL</span>
+        <span style="font-size:9px;background:rgba(0,255,231,0.15);color:var(--acc);padding:2px 6px;border-radius:4px;border:1px solid rgba(0,255,231,0.3);font-family:var(--fm)">SESSION ACTIVE</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button class="btn btn-sm" id="btn-console-copy" style="font-size:10px;padding:3px 9px" title="Copy output text">Copy Output</button>
+        <button class="btn btn-sm btn-d" id="btn-console-clear" style="font-size:10px;padding:3px 9px" title="Clear console buffer">Clear Buffer</button>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:6px;padding:8px 14px;background:rgba(10,15,28,0.7);border-bottom:1px solid rgba(255,255,255,0.04);overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch" id="console-chips">
+      <span style="font-size:10px;color:var(--mut);font-family:var(--fm);margin-right:4px">PRESETS:</span>
+      <button class="chip-cmd" data-cmd="motd">motd</button>
+      <button class="chip-cmd" data-cmd="stats">stats</button>
+      <button class="chip-cmd" data-cmd="bench">bench</button>
+      <button class="chip-cmd" data-cmd="upstreams">upstreams</button>
+      <button class="chip-cmd" data-cmd="trace github.com">trace github.com</button>
+      <button class="chip-cmd" data-cmd="resolve cloudflare.com A">resolve cloudflare.com</button>
+      <button class="chip-cmd" data-cmd="ai test bad-phish-domain.xyz">ai test</button>
+      <button class="chip-cmd" data-cmd="dnssec status">dnssec status</button>
+      <button class="chip-cmd" data-cmd="cache stats">cache stats</button>
+      <button class="chip-cmd" data-cmd="feed status">feed status</button>
+      <button class="chip-cmd" data-cmd="sockets">sockets</button>
+      <button class="chip-cmd" data-cmd="help">help</button>
+    </div>
+
+    <div id="console-output" style="flex:1;overflow-y:auto;overflow-x:auto;padding:14px 18px;font-family:var(--fm);font-size:11px;line-height:1.55;color:#e2e8f0;background:#050811;-webkit-overflow-scrolling:touch;white-space:pre-wrap;word-break:break-word"></div>
+
+    <div style="display:flex;align-items:center;background:#0b1120;border-top:1px solid rgba(255,255,255,0.08);padding:8px 14px;position:relative">
+      <span style="font-family:var(--fm);font-size:12px;font-weight:700;color:var(--acc);margin-right:8px;user-select:none;display:flex;align-items:center;gap:4px">
+        <span>amardns</span><span style="color:var(--mut)">»</span>
+      </span>
+      <input type="text" id="console-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Type a command (e.g. 'help', 'trace github.com', 'bench')..." style="flex:1;background:transparent;border:none;outline:none;color:#ffffff;font-family:var(--fm);font-size:12px;caret-color:var(--acc)">
+      <button class="btn btn-g btn-sm" id="btn-console-send" style="padding:4px 12px;font-size:11px;margin-left:8px;font-weight:700">Run ↵</button>
+    </div>
+
+    <div id="console-autocomplete" style="display:none;position:absolute;bottom:52px;left:14px;right:14px;background:#0f172a;border:1px solid var(--acc);border-radius:6px;box-shadow:0 12px 36px rgba(0,0,0,0.8);max-height:220px;overflow-y:auto;z-index:100;font-family:var(--fm);font-size:11px"></div>
+  </div>
 </div>
 
 </div>
@@ -3612,6 +3612,7 @@ $('comtags').addEventListener('click',function(e){
     toggleDomainGroup(hdr);
   }
 });
+}());
 
 // Feature: Interactive Engine Console
 var _consoleInitialized=false;
@@ -3922,7 +3923,11 @@ function initSSE(){
   }catch(e){}
 }
 initSSE();
-}());
+if(typeof window!=='undefined'){
+  window.initConsole=initConsole;
+  window.runConsoleCommand=runConsoleCommand;
+  window.clearConsoleBuffer=clearConsoleBuffer;
+}
 </script>
 </body>
 </html>
