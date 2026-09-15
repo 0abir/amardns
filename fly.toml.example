@@ -118,6 +118,18 @@ kill_timeout = 10
   [[services.ports]]
     port = 853
 
+# ── 3b. DoH3 (DNS-over-HTTP/3) ────────────────────────────────────────────────
+# UDP port 443 (RFC 9114). Native HTTP/3 over QUIC listener.
+[[services]]
+  internal_port = 443
+  protocol = "udp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 2
+
+  [[services.ports]]
+    port = 443
+
 # ── 4. Plain DNS (UDP) ───────────────────────────────────────────────────────
 # UDP port 53. Standard high-speed recursive forwarding.
 [[services]]

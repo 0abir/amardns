@@ -254,6 +254,8 @@ pub async fn start_doq_server(
         let _ = sock.set_reuse_address(true);
         #[cfg(unix)]
         let _ = sock.set_reuse_port(true);
+        let _ = sock.set_recv_buffer_size(4 * 1024 * 1024);
+        let _ = sock.set_send_buffer_size(4 * 1024 * 1024);
         sock.bind(&addr.into())?;
         sock
     } else {
@@ -266,6 +268,8 @@ pub async fn start_doq_server(
         let _ = sock.set_reuse_address(true);
         #[cfg(unix)]
         let _ = sock.set_reuse_port(true);
+        let _ = sock.set_recv_buffer_size(4 * 1024 * 1024);
+        let _ = sock.set_send_buffer_size(4 * 1024 * 1024);
         sock.bind(&addr.into())?;
         sock
     };
