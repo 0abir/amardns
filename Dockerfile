@@ -7,7 +7,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 
 # Dummy build to cache dependencies layer
-RUN mkdir -p src && echo "fn main() {}" > src/main.rs && cargo build --release && rm -rf src
+RUN mkdir -p src && touch src/lib.rs && echo "fn main() {}" > src/main.rs && cargo build --release && rm -rf src
 
 # Copy real source code and rebuild only the app binary
 COPY src ./src
