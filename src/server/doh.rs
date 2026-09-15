@@ -537,15 +537,9 @@ pub async fn doh_get_handler(
     }
 
     let wire_bytes = if let Some(base64_dns) = params.dns {
-        let clean = base64_dns.replace('-', "+").replace('_', "/");
-        let padded = match clean.len() % 4 {
-            2 => format!("{}==", clean),
-            3 => format!("{}=", clean),
-            _ => clean,
-        };
-        match base64_decode(&padded) {
-            Ok(b) => b,
-            Err(_) => {
+        match crate::server::acme::b64url_decode(&base64_dns) {
+            Ok(b) if b.len() >= 12 => b,
+            _ => {
                 return (StatusCode::BAD_REQUEST, "Invalid base64url dns query").into_response();
             }
         }
@@ -1312,30 +1306,7 @@ pub async fn process_dns_wire_packet_full(
     }
 }
 
-// Minimal zero-dependency base64 decoder
-fn base64_decode(input: &str) -> Result<Vec<u8>, ()> {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = Vec::new();
-    let mut buf = 0u32;
-    let mut bits = 0;
 
-    for &b in input.as_bytes() {
-        if b == b'=' {
-            break;
-        }
-        let val = match TABLE.iter().position(|&c| c == b) {
-            Some(idx) => idx as u32,
-            None => return Err(()),
-        };
-        buf = (buf << 6) | val;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((buf >> bits) as u8);
-        }
-    }
-    Ok(out)
-}
 
 // ── DoH JSON API (RFC 8427) Handler ──────────────────────────────────────────
 
