@@ -58,21 +58,25 @@ pub struct WalStorage {
 
 impl WalStorage {
     pub fn new(path: &str) -> Self {
-        let parent = Path::new(path).parent();
-        if let Some(p) = parent {
-            let _ = std::fs::create_dir_all(p);
-        }
+        let file = if path == ":memory:" || path.is_empty() {
+            None
+        } else {
+            let parent = Path::new(path).parent();
+            if let Some(p) = parent {
+                let _ = std::fs::create_dir_all(p);
+            }
 
-        let file = match OpenOptions::new()
-            .create(true)
-            .append(true)
-            .read(true)
-            .open(path)
-        {
-            Ok(f) => Some(f),
-            Err(e) => {
-                tracing::error!("[wal] Failed to open WAL file at {}: {}", path, e);
-                None
+            match OpenOptions::new()
+                .create(true)
+                .append(true)
+                .read(true)
+                .open(path)
+            {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    tracing::error!("[wal] Failed to open WAL file at {}: {}", path, e);
+                    None
+                }
             }
         };
 
@@ -347,52 +351,54 @@ impl WalStorage {
         let mut custom_common = HashSet::new();
         let mut lines_count = 0u64;
 
-        if let Ok(file) = File::open(self.file_path.as_str()) {
-            let reader = BufReader::new(file);
-            for line in reader.lines().map_while(Result::ok) {
-                let trimmed_raw = line.trim_matches(|c: char| c == '\0' || c.is_whitespace());
-                if trimmed_raw.is_empty() {
-                    continue;
-                }
-                lines_count += 1;
-                // Strip and verify checksum if present
-                let (payload, crc_ok) = if let Some(idx) = trimmed_raw.rfind(" #crc=") {
-                    let (body, crc_part) = trimmed_raw.split_at(idx);
-                    let body_clean = body.trim_matches(|c: char| c == '\0' || c.is_whitespace());
-                    if body_clean.is_empty() {
+        if self.file_path.as_str() != ":memory:" && !self.file_path.is_empty() {
+            if let Ok(file) = File::open(self.file_path.as_str()) {
+                let reader = BufReader::new(file);
+                for line in reader.lines().map_while(Result::ok) {
+                    let trimmed_raw = line.trim_matches(|c: char| c == '\0' || c.is_whitespace());
+                    if trimmed_raw.is_empty() {
                         continue;
                     }
-                    let stored_crc =
-                        u32::from_str_radix(crc_part.trim_start_matches(" #crc="), 16).unwrap_or(0);
-                    let computed = line_checksum(body);
-                    if stored_crc != computed {
-                        tracing::warn!(
-                            "[wal] Skipping corrupt record (CRC mismatch): {:?}",
-                            &trimmed_raw[..trimmed_raw.len().min(60)]
-                        );
-                        continue;
+                    lines_count += 1;
+                    // Strip and verify checksum if present
+                    let (payload, crc_ok) = if let Some(idx) = trimmed_raw.rfind(" #crc=") {
+                        let (body, crc_part) = trimmed_raw.split_at(idx);
+                        let body_clean = body.trim_matches(|c: char| c == '\0' || c.is_whitespace());
+                        if body_clean.is_empty() {
+                            continue;
+                        }
+                        let stored_crc =
+                            u32::from_str_radix(crc_part.trim_start_matches(" #crc="), 16).unwrap_or(0);
+                        let computed = line_checksum(body);
+                        if stored_crc != computed {
+                            tracing::warn!(
+                                "[wal] Skipping corrupt record (CRC mismatch): {:?}",
+                                &trimmed_raw[..trimmed_raw.len().min(60)]
+                            );
+                            continue;
+                        }
+                        (body, true)
+                    } else {
+                        // Legacy lines without CRC — accept as-is
+                        (trimmed_raw, false)
+                    };
+                    let _ = crc_ok; // suppress unused warning
+                    let trimmed = payload.trim();
+                    if let Some(domain) = trimmed.strip_prefix("+B:") {
+                        custom_blocks.insert(domain.to_string());
+                    } else if let Some(domain) = trimmed.strip_prefix("-B:") {
+                        custom_blocks.remove(domain);
+                    } else if let Some(domain) = trimmed.strip_prefix("+W:") {
+                        custom_whitelists.insert(domain.to_string());
+                    } else if let Some(domain) = trimmed.strip_prefix("-W:") {
+                        custom_whitelists.remove(domain);
+                    } else if let Some(domain) = trimmed.strip_prefix("+C:") {
+                        custom_common.insert(domain.to_string());
+                        custom_whitelists.insert(domain.to_string());
+                    } else if let Some(domain) = trimmed.strip_prefix("-C:") {
+                        custom_common.remove(domain);
+                        custom_whitelists.remove(domain);
                     }
-                    (body, true)
-                } else {
-                    // Legacy lines without CRC — accept as-is
-                    (trimmed_raw, false)
-                };
-                let _ = crc_ok; // suppress unused warning
-                let trimmed = payload.trim();
-                if let Some(domain) = trimmed.strip_prefix("+B:") {
-                    custom_blocks.insert(domain.to_string());
-                } else if let Some(domain) = trimmed.strip_prefix("-B:") {
-                    custom_blocks.remove(domain);
-                } else if let Some(domain) = trimmed.strip_prefix("+W:") {
-                    custom_whitelists.insert(domain.to_string());
-                } else if let Some(domain) = trimmed.strip_prefix("-W:") {
-                    custom_whitelists.remove(domain);
-                } else if let Some(domain) = trimmed.strip_prefix("+C:") {
-                    custom_common.insert(domain.to_string());
-                    custom_whitelists.insert(domain.to_string());
-                } else if let Some(domain) = trimmed.strip_prefix("-C:") {
-                    custom_common.remove(domain);
-                    custom_whitelists.remove(domain);
                 }
             }
         }
@@ -402,6 +408,9 @@ impl WalStorage {
     }
 
     pub fn get_stats(&self) -> (u64, f64) {
+        if self.file_path.as_str() == ":memory:" || self.file_path.is_empty() {
+            return (0, 0.0);
+        }
         if let Ok(meta) = std::fs::metadata(self.file_path.as_str()) {
             let bytes = meta.len();
             let mb = (bytes as f64 / (1024.0 * 1024.0) * 1000.0).round() / 1000.0;
@@ -412,6 +421,9 @@ impl WalStorage {
     }
 
     pub fn maybe_compact(&self) {
+        if self.file_path.as_str() == ":memory:" || self.file_path.is_empty() {
+            return;
+        }
         let (bytes, _) = self.get_stats();
         if bytes > 15 * 1024 * 1024 || self.total_records.load(Ordering::Relaxed) > 50_000 {
             self.compact();
@@ -419,6 +431,9 @@ impl WalStorage {
     }
 
     pub fn compact(&self) {
+        if self.file_path.as_str() == ":memory:" || self.file_path.is_empty() {
+            return;
+        }
         // ── Step 1: Signal the background writer to back off ──────────────────
         //
         // Setting this flag *before* acquiring the lock means the background
