@@ -590,13 +590,17 @@ pub fn append_ede_to_response(wire: &mut Vec<u8>, ede_code: u16, extra_text: &st
         return;
     }
     let raw_text = extra_text.as_bytes();
-    let text_bytes = if raw_text.len() > 256 { &raw_text[..256] } else { raw_text };
+    let text_bytes = if raw_text.len() > 256 {
+        &raw_text[..256]
+    } else {
+        raw_text
+    };
     let opt_data_len = 2u16 + text_bytes.len() as u16;
     let mut ede_option: Vec<u8> = Vec::with_capacity(4 + text_bytes.len());
-    ede_option.extend_from_slice(&15u16.to_be_bytes());         // OPTION-CODE = 15
-    ede_option.extend_from_slice(&opt_data_len.to_be_bytes());  // OPTION-LENGTH
-    ede_option.extend_from_slice(&ede_code.to_be_bytes());      // INFO-CODE
-    ede_option.extend_from_slice(text_bytes);                   // EXTRA-TEXT
+    ede_option.extend_from_slice(&15u16.to_be_bytes()); // OPTION-CODE = 15
+    ede_option.extend_from_slice(&opt_data_len.to_be_bytes()); // OPTION-LENGTH
+    ede_option.extend_from_slice(&ede_code.to_be_bytes()); // INFO-CODE
+    ede_option.extend_from_slice(text_bytes); // EXTRA-TEXT
 
     let qdcount = u16::from_be_bytes([wire[4], wire[5]]) as usize;
     let ancount = u16::from_be_bytes([wire[6], wire[7]]) as usize;
@@ -606,37 +610,64 @@ pub fn append_ede_to_response(wire: &mut Vec<u8>, ede_code: u16, extra_text: &st
     let mut pos = 12;
     for _ in 0..qdcount {
         match skip_dns_name(wire, pos) {
-            Some(p) => { pos = p + 4; }
-            None => { ede_append_new_opt(wire, &ede_option); return; }
+            Some(p) => {
+                pos = p + 4;
+            }
+            None => {
+                ede_append_new_opt(wire, &ede_option);
+                return;
+            }
         }
-        if pos > wire.len() { ede_append_new_opt(wire, &ede_option); return; }
+        if pos > wire.len() {
+            ede_append_new_opt(wire, &ede_option);
+            return;
+        }
     }
     for _ in 0..(ancount + nscount) {
         match skip_dns_name(wire, pos) {
-            Some(p) => { pos = p; }
-            None => { ede_append_new_opt(wire, &ede_option); return; }
+            Some(p) => {
+                pos = p;
+            }
+            None => {
+                ede_append_new_opt(wire, &ede_option);
+                return;
+            }
         }
-        if pos + 10 > wire.len() { ede_append_new_opt(wire, &ede_option); return; }
+        if pos + 10 > wire.len() {
+            ede_append_new_opt(wire, &ede_option);
+            return;
+        }
         let rdlen = u16::from_be_bytes([wire[pos + 8], wire[pos + 9]]) as usize;
         pos += 10 + rdlen;
-        if pos > wire.len() { ede_append_new_opt(wire, &ede_option); return; }
+        if pos > wire.len() {
+            ede_append_new_opt(wire, &ede_option);
+            return;
+        }
     }
 
     let mut ar_pos = pos;
     for _ in 0..arcount {
-        if ar_pos >= wire.len() { break; }
+        if ar_pos >= wire.len() {
+            break;
+        }
         let name_end = match skip_dns_name(wire, ar_pos) {
             Some(p) => p,
             None => break,
         };
-        if name_end + 10 > wire.len() { break; }
+        if name_end + 10 > wire.len() {
+            break;
+        }
         let rtype = u16::from_be_bytes([wire[name_end], wire[name_end + 1]]);
         let rdlen = u16::from_be_bytes([wire[name_end + 8], wire[name_end + 9]]) as usize;
         let rdata_end = name_end + 10 + rdlen;
         if rtype == 41 {
-            if rdata_end > wire.len() { return; }
+            if rdata_end > wire.len() {
+                return;
+            }
             let new_rdlen = rdlen.saturating_add(ede_option.len());
-            if new_rdlen > 65535 { return; }
+            if new_rdlen > 65535 {
+                return;
+            }
             wire[name_end + 8..name_end + 10].copy_from_slice(&(new_rdlen as u16).to_be_bytes());
             for (i, &b) in ede_option.iter().enumerate() {
                 wire.insert(rdata_end + i, b);
@@ -644,22 +675,26 @@ pub fn append_ede_to_response(wire: &mut Vec<u8>, ede_code: u16, extra_text: &st
             return;
         }
         ar_pos = rdata_end;
-        if ar_pos > wire.len() { break; }
+        if ar_pos > wire.len() {
+            break;
+        }
     }
 
     ede_append_new_opt(wire, &ede_option);
 }
 
 fn ede_append_new_opt(wire: &mut Vec<u8>, ede_option: &[u8]) {
-    if wire.len() < 12 { return; }
+    if wire.len() < 12 {
+        return;
+    }
     let arcount = u16::from_be_bytes([wire[10], wire[11]]);
     wire[10..12].copy_from_slice(&arcount.saturating_add(1).to_be_bytes());
     let rdlen = ede_option.len() as u16;
-    wire.push(0x00);                                    // NAME = root
-    wire.extend_from_slice(&41u16.to_be_bytes());       // TYPE = OPT (41)
-    wire.extend_from_slice(&4096u16.to_be_bytes());     // CLASS = UDP payload 4096
+    wire.push(0x00); // NAME = root
+    wire.extend_from_slice(&41u16.to_be_bytes()); // TYPE = OPT (41)
+    wire.extend_from_slice(&4096u16.to_be_bytes()); // CLASS = UDP payload 4096
     wire.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // TTL = ext-rcode=0, ver=0
-    wire.extend_from_slice(&rdlen.to_be_bytes());       // RDLEN
+    wire.extend_from_slice(&rdlen.to_be_bytes()); // RDLEN
     wire.extend_from_slice(ede_option);
 }
 
@@ -684,11 +719,19 @@ pub fn apply_dns0x20_randomization(wire: &[u8]) -> Vec<u8> {
         .wrapping_mul(6_364_136_223_846_793_005)
         .wrapping_add(1_442_695_040_888_963_407);
     loop {
-        if pos >= out.len() { break; }
+        if pos >= out.len() {
+            break;
+        }
         let len = out[pos] as usize;
-        if len == 0 { break; }
-        if len & 0xc0 == 0xc0 { break; }
-        if len > 63 || pos + 1 + len > out.len() { break; }
+        if len == 0 {
+            break;
+        }
+        if len & 0xc0 == 0xc0 {
+            break;
+        }
+        if len > 63 || pos + 1 + len > out.len() {
+            break;
+        }
         pos += 1;
         for i in 0..len {
             let b = out[pos + i];
@@ -701,7 +744,9 @@ pub fn apply_dns0x20_randomization(wire: &[u8]) -> Vec<u8> {
             }
         }
         pos += len;
-        if pos >= out.len() { break; }
+        if pos >= out.len() {
+            break;
+        }
     }
     out
 }
@@ -726,12 +771,14 @@ pub fn build_any_minimal_response(query_buf: &[u8]) -> Option<Vec<u8>> {
     resp.extend_from_slice(&0u16.to_be_bytes()); // NSCOUNT = 0
     resp.extend_from_slice(&0u16.to_be_bytes()); // ARCOUNT = 0
     let q_end = 12 + parsed.question_bytes_len;
-    if q_end > query_buf.len() { return None; }
+    if q_end > query_buf.len() {
+        return None;
+    }
     resp.extend_from_slice(&query_buf[12..q_end]);
-    resp.extend_from_slice(&[0xC0, 0x0C]);           // Pointer to QNAME at offset 12
-    resp.extend_from_slice(&13u16.to_be_bytes());    // TYPE = HINFO (13)
-    resp.extend_from_slice(&1u16.to_be_bytes());     // CLASS = IN
-    resp.extend_from_slice(&3600u32.to_be_bytes());  // TTL = 3600
+    resp.extend_from_slice(&[0xC0, 0x0C]); // Pointer to QNAME at offset 12
+    resp.extend_from_slice(&13u16.to_be_bytes()); // TYPE = HINFO (13)
+    resp.extend_from_slice(&1u16.to_be_bytes()); // CLASS = IN
+    resp.extend_from_slice(&3600u32.to_be_bytes()); // TTL = 3600
     let cpu = b"RFC8482";
     let rdlen = (1 + cpu.len() + 1) as u16;
     resp.extend_from_slice(&rdlen.to_be_bytes());
@@ -758,13 +805,17 @@ pub fn truncate_response_properly(wire: &[u8], max_bytes: usize) -> Vec<u8> {
             Some(p) => p + 4,
             None => {
                 let mut fallback = wire[..12.min(wire.len())].to_vec();
-                if fallback.len() >= 3 { fallback[2] |= 0x02; }
+                if fallback.len() >= 3 {
+                    fallback[2] |= 0x02;
+                }
                 return fallback;
             }
         };
         if pos > wire.len() {
             let mut fallback = wire[..12.min(wire.len())].to_vec();
-            if fallback.len() >= 3 { fallback[2] |= 0x02; }
+            if fallback.len() >= 3 {
+                fallback[2] |= 0x02;
+            }
             return fallback;
         }
     }
@@ -784,10 +835,14 @@ pub fn truncate_response_properly(wire: &[u8], max_bytes: usize) -> Vec<u8> {
             Some(p) => p,
             None => break,
         };
-        if name_end + 10 > wire.len() { break; }
+        if name_end + 10 > wire.len() {
+            break;
+        }
         let rdlen = u16::from_be_bytes([wire[name_end + 8], wire[name_end + 9]]) as usize;
         let rr_end = name_end + 10 + rdlen;
-        if rr_end > wire.len() { break; }
+        if rr_end > wire.len() {
+            break;
+        }
         let rr_len = rr_end - pos;
         if out.len() + rr_len <= max_bytes {
             out.extend_from_slice(&wire[pos..rr_end]);
@@ -842,7 +897,9 @@ pub fn process_ecs_option(wire: &[u8], mode: EcsMode) -> Vec<u8> {
             Some(p) => p + 4,
             None => return wire.to_vec(),
         };
-        if pos > wire.len() { return wire.to_vec(); }
+        if pos > wire.len() {
+            return wire.to_vec();
+        }
     }
     // Skip answer + authority
     for _ in 0..(ancount + nscount) {
@@ -850,7 +907,9 @@ pub fn process_ecs_option(wire: &[u8], mode: EcsMode) -> Vec<u8> {
             Some(p) => p,
             None => return wire.to_vec(),
         };
-        if pos + 10 > wire.len() { return wire.to_vec(); }
+        if pos + 10 > wire.len() {
+            return wire.to_vec();
+        }
         let rdlen = u16::from_be_bytes([wire[pos + 8], wire[pos + 9]]) as usize;
         pos += 10 + rdlen;
     }
@@ -859,12 +918,16 @@ pub fn process_ecs_option(wire: &[u8], mode: EcsMode) -> Vec<u8> {
     let mut out = wire.to_vec();
     let mut ar_pos = pos;
     for _ in 0..arcount {
-        if ar_pos >= out.len() { break; }
+        if ar_pos >= out.len() {
+            break;
+        }
         let name_end = match skip_dns_name(&out, ar_pos) {
             Some(p) => p,
             None => break,
         };
-        if name_end + 10 > out.len() { break; }
+        if name_end + 10 > out.len() {
+            break;
+        }
         let rtype = u16::from_be_bytes([out[name_end], out[name_end + 1]]);
         let rdlen = u16::from_be_bytes([out[name_end + 8], out[name_end + 9]]) as usize;
         let rdata_start = name_end + 10;
@@ -883,7 +946,8 @@ pub fn process_ecs_option(wire: &[u8], mode: EcsMode) -> Vec<u8> {
                     new_out.extend_from_slice(&new_rdata);
                     new_out.extend_from_slice(&out[rdata_end..]);
                     // Update RDLEN at name_end+8
-                    new_out[name_end + 8..name_end + 10].copy_from_slice(&(new_rdlen as u16).to_be_bytes());
+                    new_out[name_end + 8..name_end + 10]
+                        .copy_from_slice(&(new_rdlen as u16).to_be_bytes());
                     return new_out;
                 }
                 EcsMode::Anonymize => {
@@ -895,7 +959,9 @@ pub fn process_ecs_option(wire: &[u8], mode: EcsMode) -> Vec<u8> {
             }
         }
         ar_pos = rdata_end;
-        if ar_pos > out.len() { break; }
+        if ar_pos > out.len() {
+            break;
+        }
     }
     out
 }
@@ -907,7 +973,9 @@ fn strip_ecs_from_rdata(rdata: &[u8]) -> Vec<u8> {
         let opt_code = u16::from_be_bytes([rdata[pos], rdata[pos + 1]]);
         let opt_len = u16::from_be_bytes([rdata[pos + 2], rdata[pos + 3]]) as usize;
         let opt_end = pos + 4 + opt_len;
-        if opt_end > rdata.len() { break; }
+        if opt_end > rdata.len() {
+            break;
+        }
         if opt_code != ECS_OPTION_CODE {
             out.extend_from_slice(&rdata[pos..opt_end]);
         }
@@ -923,7 +991,9 @@ fn anonymize_ecs_in_rdata(rdata: &mut [u8]) {
         let opt_code = u16::from_be_bytes([rdata[pos], rdata[pos + 1]]);
         let opt_len = u16::from_be_bytes([rdata[pos + 2], rdata[pos + 3]]) as usize;
         let opt_end = pos + 4 + opt_len;
-        if opt_end > rdata.len() { break; }
+        if opt_end > rdata.len() {
+            break;
+        }
         if opt_code == ECS_OPTION_CODE && opt_len >= 4 {
             // ECS RDATA: FAMILY(2) + SOURCE PREFIX-LEN(1) + SCOPE PREFIX-LEN(1) + ADDRESS
             let family = u16::from_be_bytes([rdata[pos + 4], rdata[pos + 5]]);
@@ -965,20 +1035,30 @@ pub fn parse_dns_cookie(wire: &[u8]) -> Option<(Vec<u8>, Option<Vec<u8>>)> {
     let mut pos = 12;
     for _ in 0..qdcount {
         pos = skip_dns_name(wire, pos)? + 4;
-        if pos > wire.len() { return None; }
+        if pos > wire.len() {
+            return None;
+        }
     }
     for _ in 0..(ancount + nscount) {
         pos = skip_dns_name(wire, pos)?;
-        if pos + 10 > wire.len() { return None; }
+        if pos + 10 > wire.len() {
+            return None;
+        }
         let rdlen = u16::from_be_bytes([wire[pos + 8], wire[pos + 9]]) as usize;
         pos += 10 + rdlen;
-        if pos > wire.len() { return None; }
+        if pos > wire.len() {
+            return None;
+        }
     }
 
     for _ in 0..arcount {
-        if pos >= wire.len() { break; }
+        if pos >= wire.len() {
+            break;
+        }
         let name_end = skip_dns_name(wire, pos)?;
-        if name_end + 10 > wire.len() { break; }
+        if name_end + 10 > wire.len() {
+            break;
+        }
         let rtype = u16::from_be_bytes([wire[name_end], wire[name_end + 1]]);
         let rdlen = u16::from_be_bytes([wire[name_end + 8], wire[name_end + 9]]) as usize;
         let rdata_start = name_end + 10;
@@ -990,7 +1070,9 @@ pub fn parse_dns_cookie(wire: &[u8]) -> Option<(Vec<u8>, Option<Vec<u8>>)> {
                 let opt_code = u16::from_be_bytes([wire[opt_pos], wire[opt_pos + 1]]);
                 let opt_len = u16::from_be_bytes([wire[opt_pos + 2], wire[opt_pos + 3]]) as usize;
                 let opt_data_end = opt_pos + 4 + opt_len;
-                if opt_data_end > rdata_end { break; }
+                if opt_data_end > rdata_end {
+                    break;
+                }
 
                 if opt_code == COOKIE_OPTION_CODE && opt_len >= 8 {
                     let client_cookie = wire[opt_pos + 4..opt_pos + 12].to_vec();
@@ -1092,37 +1174,64 @@ pub fn append_cookie_to_response(wire: &mut Vec<u8>, client_cookie: &[u8], serve
     let mut pos = 12;
     for _ in 0..qdcount {
         match skip_dns_name(wire, pos) {
-            Some(p) => { pos = p + 4; }
-            None => { ede_append_new_opt(wire, &cookie_opt); return; }
+            Some(p) => {
+                pos = p + 4;
+            }
+            None => {
+                ede_append_new_opt(wire, &cookie_opt);
+                return;
+            }
         }
-        if pos > wire.len() { ede_append_new_opt(wire, &cookie_opt); return; }
+        if pos > wire.len() {
+            ede_append_new_opt(wire, &cookie_opt);
+            return;
+        }
     }
     for _ in 0..(ancount + nscount) {
         match skip_dns_name(wire, pos) {
-            Some(p) => { pos = p; }
-            None => { ede_append_new_opt(wire, &cookie_opt); return; }
+            Some(p) => {
+                pos = p;
+            }
+            None => {
+                ede_append_new_opt(wire, &cookie_opt);
+                return;
+            }
         }
-        if pos + 10 > wire.len() { ede_append_new_opt(wire, &cookie_opt); return; }
+        if pos + 10 > wire.len() {
+            ede_append_new_opt(wire, &cookie_opt);
+            return;
+        }
         let rdlen = u16::from_be_bytes([wire[pos + 8], wire[pos + 9]]) as usize;
         pos += 10 + rdlen;
-        if pos > wire.len() { ede_append_new_opt(wire, &cookie_opt); return; }
+        if pos > wire.len() {
+            ede_append_new_opt(wire, &cookie_opt);
+            return;
+        }
     }
 
     let mut ar_pos = pos;
     for _ in 0..arcount {
-        if ar_pos >= wire.len() { break; }
+        if ar_pos >= wire.len() {
+            break;
+        }
         let name_end = match skip_dns_name(wire, ar_pos) {
             Some(p) => p,
             None => break,
         };
-        if name_end + 10 > wire.len() { break; }
+        if name_end + 10 > wire.len() {
+            break;
+        }
         let rtype = u16::from_be_bytes([wire[name_end], wire[name_end + 1]]);
         let rdlen = u16::from_be_bytes([wire[name_end + 8], wire[name_end + 9]]) as usize;
         let rdata_end = name_end + 10 + rdlen;
         if rtype == 41 {
-            if rdata_end > wire.len() { return; }
+            if rdata_end > wire.len() {
+                return;
+            }
             let new_rdlen = rdlen.saturating_add(cookie_opt.len());
-            if new_rdlen > 65535 { return; }
+            if new_rdlen > 65535 {
+                return;
+            }
             wire[name_end + 8..name_end + 10].copy_from_slice(&(new_rdlen as u16).to_be_bytes());
             for (i, &b) in cookie_opt.iter().enumerate() {
                 wire.insert(rdata_end + i, b);
@@ -1130,20 +1239,22 @@ pub fn append_cookie_to_response(wire: &mut Vec<u8>, client_cookie: &[u8], serve
             return;
         }
         ar_pos = rdata_end;
-        if ar_pos > wire.len() { break; }
+        if ar_pos > wire.len() {
+            break;
+        }
     }
 
     ede_append_new_opt(wire, &cookie_opt);
 }
-
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn build_query_wire(name: &str, qtype: u16) -> Vec<u8> {
-        let mut wire = vec![0xAB, 0xCD, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let mut wire = vec![
+            0xAB, 0xCD, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
         for label in name.split('.') {
             wire.push(label.len() as u8);
             wire.extend_from_slice(label.as_bytes());
@@ -1221,7 +1332,7 @@ mod tests {
         let with_do = ensure_edns0_do_bit(&plain_query);
         assert_eq!(with_do.len(), plain_query.len() + 11);
         assert_eq!(with_do[10..12], [0x00, 0x01]); // ARCOUNT = 1
-                                                   // Check OPT record: root name 0, type 41, DO bit set (0x80)
+        // Check OPT record: root name 0, type 41, DO bit set (0x80)
         let opt_slice = &with_do[plain_query.len()..];
         assert_eq!(opt_slice[0], 0x00); // Root name
         assert_eq!(&opt_slice[1..3], &[0x00, 0x29]); // Type OPT (41)
@@ -1331,7 +1442,7 @@ mod tests {
         resp[3] = (resp[3] | 0x80) & 0xF0; // RA = 1
         resp[6] = 0x00;
         resp[7] = 0x01; // ANCOUNT = 1
-                        // Answer record: pointer 0xC00C, type A (1), class IN (1), TTL 300, len 4, IP 93.184.216.34
+        // Answer record: pointer 0xC00C, type A (1), class IN (1), TTL 300, len 4, IP 93.184.216.34
         resp.extend_from_slice(&[0xC0, 0x0C]);
         resp.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
         resp.extend_from_slice(&[0x00, 0x00, 0x01, 0x2C]);
@@ -1557,21 +1668,31 @@ pub fn extract_soa_minimum_ttl(wire: &[u8]) -> Option<u32> {
     for _ in 0..qdcount {
         pos = skip_dns_name(wire, pos)?;
         pos += 4;
-        if pos > wire.len() { return None; }
+        if pos > wire.len() {
+            return None;
+        }
     }
     // Skip answer section
     for _ in 0..ancount {
         pos = skip_dns_name(wire, pos)?;
-        if pos + 10 > wire.len() { return None; }
+        if pos + 10 > wire.len() {
+            return None;
+        }
         let rdlen = u16::from_be_bytes([wire[pos + 8], wire[pos + 9]]) as usize;
         pos += 10 + rdlen;
-        if pos > wire.len() { return None; }
+        if pos > wire.len() {
+            return None;
+        }
     }
     // Parse authority section looking for SOA (type 6)
     for _ in 0..nscount {
-        if pos >= wire.len() { return None; }
+        if pos >= wire.len() {
+            return None;
+        }
         let name_end = skip_dns_name(wire, pos)?;
-        if name_end + 10 > wire.len() { return None; }
+        if name_end + 10 > wire.len() {
+            return None;
+        }
         let rtype = u16::from_be_bytes([wire[name_end], wire[name_end + 1]]);
         let rdlen = u16::from_be_bytes([wire[name_end + 8], wire[name_end + 9]]) as usize;
         let rdata_start = name_end + 10;
@@ -1592,7 +1713,9 @@ pub fn extract_soa_minimum_ttl(wire: &[u8]) -> Option<u32> {
             }
         }
         pos = rdata_start + rdlen;
-        if pos > wire.len() { return None; }
+        if pos > wire.len() {
+            return None;
+        }
     }
     None
 }
@@ -1648,7 +1771,7 @@ pub fn build_query_wire(domain: &str, qtype: u16) -> Vec<u8> {
         }
     }
     buf.push(0x00); // root label
-                    // QTYPE & QCLASS: IN (1)
+    // QTYPE & QCLASS: IN (1)
     buf.extend_from_slice(&qtype.to_be_bytes());
     buf.extend_from_slice(&[0x00, 0x01]);
     buf
@@ -1769,8 +1892,6 @@ pub fn parse_answers_for_doh_json(buf: &[u8], query_domain: &str) -> (u8, Vec<Do
     (rcode, answers)
 }
 
-
-
 #[cfg(test)]
 mod extra_tests {
     use super::*;
@@ -1778,9 +1899,14 @@ mod extra_tests {
     #[test]
     fn test_append_ede_to_response_no_opt() {
         // Simple response without OPT RR
-        let mut wire = build_blocked_response(&[0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x07, 0x65, 0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x03, 0x63, 0x6f, 0x6d, 0x00,
-            0x00, 0x01, 0x00, 0x01], true);
+        let mut wire = build_blocked_response(
+            &[
+                0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x65,
+                0x78, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x03, 0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00,
+                0x01,
+            ],
+            true,
+        );
         let orig_len = wire.len();
         append_ede_to_response(&mut wire, 15, "Blocked");
         // Should be longer now (OPT RR added)
@@ -1854,14 +1980,32 @@ mod extra_tests {
         assert_eq!(server_cookie[0], 0x01);
 
         // Verification success with matching parameters
-        assert!(verify_server_cookie(secret, client_ip, &client_cookie, &server_cookie, now + 60));
+        assert!(verify_server_cookie(
+            secret,
+            client_ip,
+            &client_cookie,
+            &server_cookie,
+            now + 60
+        ));
 
         // Verification failure with different client IP
         let diff_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 99));
-        assert!(!verify_server_cookie(secret, diff_ip, &client_cookie, &server_cookie, now + 60));
+        assert!(!verify_server_cookie(
+            secret,
+            diff_ip,
+            &client_cookie,
+            &server_cookie,
+            now + 60
+        ));
 
         // Verification failure when expired (>3600s)
-        assert!(!verify_server_cookie(secret, client_ip, &client_cookie, &server_cookie, now + 7200));
+        assert!(!verify_server_cookie(
+            secret,
+            client_ip,
+            &client_cookie,
+            &server_cookie,
+            now + 7200
+        ));
 
         // Append cookie to wire test
         let mut wire = build_query_wire("example.com", 1);
@@ -1890,5 +2034,3 @@ mod extra_tests {
         assert_ne!(res_trunc[2] & 0x02, 0);
     }
 }
-
-

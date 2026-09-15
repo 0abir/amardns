@@ -21,9 +21,7 @@ pub fn calculate_entropy(domain: &str) -> f64 {
     let remainder = len % 8;
     let ptr = bytes.as_ptr();
     for i in 0..chunks {
-        let chunk: u64 = unsafe {
-            std::ptr::read_unaligned(ptr.add(i * 8) as *const u64)
-        };
+        let chunk: u64 = unsafe { std::ptr::read_unaligned(ptr.add(i * 8) as *const u64) };
         // Process each byte in the u64 word
         // Lower-case normalization: ASCII uppercase A-Z (0x41-0x5A) -> a-z (0x61-0x7A)
         // Bit 5 toggle for ASCII letters: b | 0x20 lowercases letters, leaves others unchanged
@@ -539,9 +537,13 @@ mod tests {
 
     // Naive entropy for testing
     fn calculate_entropy_naive(s: &str) -> f64 {
-        if s.is_empty() { return 0.0; }
+        if s.is_empty() {
+            return 0.0;
+        }
         let mut freq = [0usize; 256];
-        for &b in s.as_bytes() { freq[b as usize] += 1; }
+        for &b in s.as_bytes() {
+            freq[b as usize] += 1;
+        }
         let len_f = s.len() as f64;
         let mut entropy = 0.0;
         for &c in &freq {
@@ -561,7 +563,13 @@ mod tests {
             let naive = calculate_entropy_naive(s);
             let fast = calculate_entropy(s);
             let diff = (naive - fast).abs();
-            assert!(diff < 0.001, "Entropy mismatch for '{}': naive={:.4} fast={:.4}", s, naive, fast);
+            assert!(
+                diff < 0.001,
+                "Entropy mismatch for '{}': naive={:.4} fast={:.4}",
+                s,
+                naive,
+                fast
+            );
         }
     }
 

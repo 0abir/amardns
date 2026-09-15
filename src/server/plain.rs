@@ -28,7 +28,11 @@ fn resolve_socket_addr(host: &str, port: u16) -> SocketAddr {
 
 /// Creates a high-performance SO_REUSEPORT UDP socket bound to `addr` with 4MB buffers.
 fn create_reuseport_udp(addr: SocketAddr) -> std::io::Result<std::net::UdpSocket> {
-    let domain = if addr.is_ipv6() { Domain::IPV6 } else { Domain::IPV4 };
+    let domain = if addr.is_ipv6() {
+        Domain::IPV6
+    } else {
+        Domain::IPV4
+    };
     let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
     let _ = socket.set_reuse_address(true);
     let _ = socket.set_reuse_port(true); // Kernel-level multi-worker distribution
@@ -44,7 +48,11 @@ fn create_reuseport_udp(addr: SocketAddr) -> std::io::Result<std::net::UdpSocket
 
 /// Creates a SO_REUSEPORT TCP listener socket bound to `addr`.
 fn create_reuseport_tcp(addr: SocketAddr) -> std::io::Result<std::net::TcpListener> {
-    let domain = if addr.is_ipv6() { Domain::IPV6 } else { Domain::IPV4 };
+    let domain = if addr.is_ipv6() {
+        Domain::IPV6
+    } else {
+        Domain::IPV4
+    };
     let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
     let _ = socket.set_reuse_address(true);
     let _ = socket.set_reuse_port(true);
@@ -66,13 +74,19 @@ pub async fn start_plain_udp(
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) {
     let addr = resolve_socket_addr(host, port);
-    info!("[plain53] Spawning {} UDP SO_REUSEPORT workers on {}", NUM_UDP_WORKERS, addr);
+    info!(
+        "[plain53] Spawning {} UDP SO_REUSEPORT workers on {}",
+        NUM_UDP_WORKERS, addr
+    );
 
     for worker_id in 0..NUM_UDP_WORKERS {
         let std_sock = match create_reuseport_udp(addr) {
             Ok(s) => s,
             Err(e) => {
-                warn!("[plain53] Worker {} UDP bind on {} failed: {}. Skipping worker.", worker_id, addr, e);
+                warn!(
+                    "[plain53] Worker {} UDP bind on {} failed: {}. Skipping worker.",
+                    worker_id, addr, e
+                );
                 return;
             }
         };
@@ -80,7 +94,10 @@ pub async fn start_plain_udp(
         let sock = match UdpSocket::from_std(std_sock) {
             Ok(s) => Arc::new(s),
             Err(e) => {
-                error!("[plain53] Worker {} failed to create async UDP socket: {}", worker_id, e);
+                error!(
+                    "[plain53] Worker {} failed to create async UDP socket: {}",
+                    worker_id, e
+                );
                 return;
             }
         };
@@ -183,7 +200,10 @@ pub async fn start_plain_tcp(
     let std_listener = match create_reuseport_tcp(addr) {
         Ok(l) => l,
         Err(e) => {
-            warn!("[plain53] TCP bind on {} failed: {}. Skipping plain DNS TCP.", addr, e);
+            warn!(
+                "[plain53] TCP bind on {} failed: {}. Skipping plain DNS TCP.",
+                addr, e
+            );
             return;
         }
     };
@@ -233,7 +253,8 @@ async fn handle_plain_tcp_conn(
     let writer_task = tokio::spawn(async move {
         while let Some(resp) = rx.recv().await {
             let resp_len = (resp.len() as u16).to_be_bytes();
-            if writer.write_all(&resp_len).await.is_err() || writer.write_all(&resp).await.is_err() {
+            if writer.write_all(&resp_len).await.is_err() || writer.write_all(&resp).await.is_err()
+            {
                 break;
             }
         }
@@ -242,9 +263,10 @@ async fn handle_plain_tcp_conn(
 
     loop {
         let mut len_buf = [0u8; 2];
-        let read_res = tokio::time::timeout(Duration::from_secs(10), reader.read_exact(&mut len_buf)).await;
+        let read_res =
+            tokio::time::timeout(Duration::from_secs(10), reader.read_exact(&mut len_buf)).await;
         match read_res {
-            Ok(Ok(_)) => {},
+            Ok(Ok(_)) => {}
             _ => break,
         }
         let msg_len = u16::from_be_bytes(len_buf) as usize;
@@ -252,7 +274,10 @@ async fn handle_plain_tcp_conn(
             break;
         }
         let mut query = vec![0u8; msg_len];
-        if tokio::time::timeout(Duration::from_secs(5), reader.read_exact(&mut query)).await.map_or(true, |r| r.is_err()) {
+        if tokio::time::timeout(Duration::from_secs(5), reader.read_exact(&mut query))
+            .await
+            .map_or(true, |r| r.is_err())
+        {
             break;
         }
         let state_c = state.clone();
@@ -264,7 +289,8 @@ async fn handle_plain_tcp_conn(
                 peer.ip(),
                 None,
                 "Plain53-TCP",
-            ).await;
+            )
+            .await;
             let _ = tx_c.send(resp).await;
         });
     }

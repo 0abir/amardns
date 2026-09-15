@@ -1,15 +1,15 @@
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::get,
-    Json, Router,
 };
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use super::DnsQueryParam;
-use crate::security::auth::{check_auth, AuthRole};
+use crate::security::auth::{AuthRole, check_auth};
 use crate::state::AppState;
 use crate::ui::dashboard::render_dashboard;
 use crate::ui::gateway::GATEWAY_HTML;

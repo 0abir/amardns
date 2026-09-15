@@ -2,9 +2,9 @@ use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::mpsc;
 
 // ─── Record-integrity checksum ────────────────────────────────────────────────
@@ -537,7 +537,8 @@ impl WalStorage {
                     .read(true)
                     .open(self.file_path.as_str())
                     .ok();
-                let new_count = (custom_blocks.len() + custom_whitelists.len() + recent_events.len()) as u64;
+                let new_count =
+                    (custom_blocks.len() + custom_whitelists.len() + recent_events.len()) as u64;
                 self.total_records.store(new_count, Ordering::Relaxed);
             }
             Err(e) => {

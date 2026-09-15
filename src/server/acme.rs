@@ -4,9 +4,9 @@
 // Manages genuine TLS certificates for DNS-over-QUIC (DoQ), DoH3, and DoT.
 
 use chrono::{DateTime, Utc};
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use ring::rand::SystemRandom;
-use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
+use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
 use serde::Deserialize;
 use std::fs;
 use std::path::Path;
@@ -112,14 +112,20 @@ impl AcmeClient {
 
         let rng = SystemRandom::new();
         let key_pair = if let Ok(bytes) = fs::read(account_key_path) {
-            if let Ok(kp) = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &bytes, &rng) {
+            if let Ok(kp) = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &bytes, &rng)
+            {
                 kp
             } else {
-                let pkcs8_bytes = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng)
-                    .map_err(|e| format!("generate_pkcs8 error: {:?}", e))?;
+                let pkcs8_bytes =
+                    EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng)
+                        .map_err(|e| format!("generate_pkcs8 error: {:?}", e))?;
                 let _ = fs::write(account_key_path, pkcs8_bytes.as_ref());
-                EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8_bytes.as_ref(), &rng)
-                    .map_err(|e| format!("from_pkcs8 error: {:?}", e))?
+                EcdsaKeyPair::from_pkcs8(
+                    &ECDSA_P256_SHA256_FIXED_SIGNING,
+                    pkcs8_bytes.as_ref(),
+                    &rng,
+                )
+                .map_err(|e| format!("from_pkcs8 error: {:?}", e))?
             }
         } else {
             let pkcs8_bytes = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng)
@@ -239,7 +245,11 @@ impl AcmeClient {
             .await?;
 
         // Cache new nonce if returned in response headers
-        if let Some(new_nonce) = resp.headers().get("replay-nonce").and_then(|h| h.to_str().ok()) {
+        if let Some(new_nonce) = resp
+            .headers()
+            .get("replay-nonce")
+            .and_then(|h| h.to_str().ok())
+        {
             let mut lock = self.next_nonce.lock().await;
             *lock = Some(new_nonce.to_string());
         }
@@ -258,7 +268,9 @@ impl AcmeClient {
                     return Box::pin(self.post_jws_internal(url, payload_json, true)).await;
                 }
 
-                return Err(format!("ACME API error ({} - {}): {}", status, err_type, detail).into());
+                return Err(
+                    format!("ACME API error ({} - {}): {}", status, err_type, detail).into(),
+                );
             } else {
                 return Err(format!("ACME API error (status {}): {}", status, body_text).into());
             }
@@ -475,7 +487,9 @@ async fn set_dynu_txt(
     let mut existing_record_id: Option<u64> = None;
     if rec_resp.status().is_success() {
         if let Ok(rec_json) = rec_resp.json::<serde_json::Value>().await {
-            let records = rec_json["dnsRecords"].as_array().or_else(|| rec_json.as_array());
+            let records = rec_json["dnsRecords"]
+                .as_array()
+                .or_else(|| rec_json.as_array());
             if let Some(arr) = records {
                 for r in arr {
                     let rec_type = r["recordType"].as_str().unwrap_or("");
@@ -522,7 +536,10 @@ async fn set_dynu_txt(
     };
 
     if resp.status().is_success() {
-        info!("[acme/dynu] TXT record published successfully for {}", domain);
+        info!(
+            "[acme/dynu] TXT record published successfully for {}",
+            domain
+        );
         Ok(())
     } else {
         let err_text = resp.text().await.unwrap_or_default();
@@ -547,7 +564,9 @@ async fn clear_dynu_txt(
         {
             if rec_resp.status().is_success() {
                 if let Ok(rec_json) = rec_resp.json::<serde_json::Value>().await {
-                    let records = rec_json["dnsRecords"].as_array().or_else(|| rec_json.as_array());
+                    let records = rec_json["dnsRecords"]
+                        .as_array()
+                        .or_else(|| rec_json.as_array());
                     if let Some(arr) = records {
                         for r in arr {
                             let rec_type = r["recordType"].as_str().unwrap_or("");
@@ -560,7 +579,11 @@ async fn clear_dynu_txt(
                                         "https://api.dynu.com/v2/dns/{}/record/{}",
                                         domain_id, rec_id
                                     );
-                                    let _ = http.delete(&del_url).header("API-Key", api_key).send().await;
+                                    let _ = http
+                                        .delete(&del_url)
+                                        .header("API-Key", api_key)
+                                        .send()
+                                        .await;
                                 }
                             }
                         }
@@ -693,7 +716,9 @@ pub fn extract_cert_sans_der(der_bytes: &[u8]) -> Vec<String> {
                         }
                     }
                     if tag == 0x82 && val_start + len <= san_slice.len() {
-                        if let Ok(name) = std::str::from_utf8(&san_slice[val_start..val_start + len]) {
+                        if let Ok(name) =
+                            std::str::from_utf8(&san_slice[val_start..val_start + len])
+                        {
                             let n = name.trim().to_ascii_lowercase();
                             if !sans.contains(&n) {
                                 sans.push(n);
@@ -791,7 +816,11 @@ pub async fn provision_acme_certificate(
     }
 
     let is_zerossl = config.zerossl_api_key.is_some();
-    let ca_name = if is_zerossl { "ZeroSSL" } else { "Let's Encrypt" };
+    let ca_name = if is_zerossl {
+        "ZeroSSL"
+    } else {
+        "Let's Encrypt"
+    };
     let dir_url = if is_zerossl {
         ZEROSSL_ACME_DIR
     } else {
@@ -918,7 +947,10 @@ pub async fn provision_acme_certificate(
         let authz_status = authz_data["status"].as_str().unwrap_or("pending");
 
         if authz_status == "valid" {
-            info!("[acme] Domain '{}' is already valid (cached authorization)", domain);
+            info!(
+                "[acme] Domain '{}' is already valid (cached authorization)",
+                domain
+            );
             continue;
         }
 
@@ -954,14 +986,14 @@ pub async fn provision_acme_certificate(
                     domain
                 );
             }
-        } else if config.dynu_domains.contains(&domain) || is_dynu_domain(&domain) || config.dynu_api_key.is_some() {
+        } else if config.dynu_domains.contains(&domain)
+            || is_dynu_domain(&domain)
+            || config.dynu_api_key.is_some()
+        {
             if let Some(ref dkey) = config.dynu_api_key {
                 set_dynu_txt(&http, dkey, &domain, &digest_b64).await?;
             } else {
-                warn!(
-                    "[acme] DYNU_API_KEY not configured for domain '{}'",
-                    domain
-                );
+                warn!("[acme] DYNU_API_KEY not configured for domain '{}'", domain);
             }
         }
     }
@@ -999,9 +1031,15 @@ pub async fn provision_acme_certificate(
         info!("[acme] Replication delay complete");
 
         // 4. Trigger validation and poll
-        info!("[acme] [4/5] Triggering {} challenge verification...", ca_name);
+        info!(
+            "[acme] [4/5] Triggering {} challenge verification...",
+            ca_name
+        );
         for (domain, challenge_url) in &challenge_triggers {
-            info!("[acme] Notifying ACME server for challenge on '{}'...", domain);
+            info!(
+                "[acme] Notifying ACME server for challenge on '{}'...",
+                domain
+            );
             let _ = client
                 .post_jws(challenge_url, &serde_json::json!({}))
                 .await?;
@@ -1022,14 +1060,18 @@ pub async fn provision_acme_certificate(
                 .await?
                 .json()
                 .await?;
-            let domain = authz_data["identifier"]["value"].as_str().unwrap_or("unknown");
+            let domain = authz_data["identifier"]["value"]
+                .as_str()
+                .unwrap_or("unknown");
             let status = authz_data["status"].as_str().unwrap_or("unknown");
             info!(
                 "[acme] Verification status for '{}': {} (attempt {})",
                 domain, status, attempt
             );
             if status == "invalid" {
-                return Err(format!("Domain '{}' validation failed: {:?}", domain, authz_data).into());
+                return Err(
+                    format!("Domain '{}' validation failed: {:?}", domain, authz_data).into(),
+                );
             }
             if status != "valid" {
                 all_valid = false;
@@ -1053,7 +1095,10 @@ pub async fn provision_acme_certificate(
             .json()
             .await?;
         let order_status = order_check["status"].as_str().unwrap_or("unknown");
-        info!("[acme] Certificate order status: {} (attempt {})", order_status, attempt);
+        info!(
+            "[acme] Certificate order status: {} (attempt {})",
+            order_status, attempt
+        );
 
         if order_status == "ready" || all_valid {
             order_ready = true;
@@ -1148,9 +1193,7 @@ pub async fn provision_acme_certificate(
         if let Err(e) = resolver.update_from_pem(&config.cert_path, &config.key_path) {
             warn!("[acme] Failed to hot-reload live TLS resolver: {}", e);
         } else {
-            info!(
-                "[acme] Live TLS certificate resolver updated in-memory. Zero restart needed."
-            );
+            info!("[acme] Live TLS certificate resolver updated in-memory. Zero restart needed.");
         }
     }
 
@@ -1164,7 +1207,10 @@ pub async fn provision_acme_certificate(
             if let Some(ref dtoken) = config.duckdns_token {
                 let _ = clear_duckdns_txt(&http, dtoken).await;
             }
-        } else if config.dynu_domains.contains(domain) || is_dynu_domain(domain) || config.dynu_api_key.is_some() {
+        } else if config.dynu_domains.contains(domain)
+            || is_dynu_domain(domain)
+            || config.dynu_api_key.is_some()
+        {
             if let Some(ref dkey) = config.dynu_api_key {
                 let _ = clear_dynu_txt(&http, dkey, domain).await;
             }
@@ -1172,7 +1218,10 @@ pub async fn provision_acme_certificate(
     }
 
     info!("============================================================");
-    info!("[acme] {} CERTIFICATE PROVISIONED SUCCESSFULLY!", ca_name.to_uppercase());
+    info!(
+        "[acme] {} CERTIFICATE PROVISIONED SUCCESSFULLY!",
+        ca_name.to_uppercase()
+    );
     info!("============================================================");
 
     Ok(())
@@ -1270,12 +1319,21 @@ async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -> bo
         .unwrap_or_else(|_| "sin".to_string());
 
     let peer_urls = [
-        format!("http://{}.amardns.internal:443/internal/tls/bundle/{}", primary_region, key),
-        format!("http://{}.amardns.internal:443/internal/tls/bundle", primary_region),
+        format!(
+            "http://{}.amardns.internal:443/internal/tls/bundle/{}",
+            primary_region, key
+        ),
+        format!(
+            "http://{}.amardns.internal:443/internal/tls/bundle",
+            primary_region
+        ),
         format!("http://amardns.internal:443/internal/tls/bundle/{}", key),
         "http://amardns.internal:443/internal/tls/bundle".to_string(),
         format!("http://_apps.internal:443/internal/tls/bundle/{}", key),
-        format!("http://top1.nearest.of.amardns.internal:443/internal/tls/bundle/{}", key),
+        format!(
+            "http://top1.nearest.of.amardns.internal:443/internal/tls/bundle/{}",
+            key
+        ),
     ];
 
     for url in &peer_urls {
@@ -1307,13 +1365,23 @@ async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -> bo
                                         let _ = fs::write("key.pem", key_pem);
                                     }
                                     if let Some(ref resolver) = config.cert_resolver {
-                                        if let Err(e) = resolver.update_from_pem(&config.cert_path, &config.key_path) {
-                                            warn!("[acme-peer-sync] Failed to hot-reload live TLS resolver: {}", e);
+                                        if let Err(e) = resolver
+                                            .update_from_pem(&config.cert_path, &config.key_path)
+                                        {
+                                            warn!(
+                                                "[acme-peer-sync] Failed to hot-reload live TLS resolver: {}",
+                                                e
+                                            );
                                         } else {
-                                            info!("[acme-peer-sync] Live TLS certificate resolver updated in-memory after peer sync.");
+                                            info!(
+                                                "[acme-peer-sync] Live TLS certificate resolver updated in-memory after peer sync."
+                                            );
                                         }
                                     }
-                                    info!("[acme-peer-sync] Successfully synced and applied TLS certificate bundle ({} days remaining) from peer ({})", days, url);
+                                    info!(
+                                        "[acme-peer-sync] Successfully synced and applied TLS certificate bundle ({} days remaining) from peer ({})",
+                                        days, url
+                                    );
                                     return true;
                                 }
                             }
@@ -1337,7 +1405,11 @@ pub fn spawn_acme_supervisor(config: AcmeConfig, master_key: Option<String>) {
 
         info!(
             "[acme-supervisor] Initializing ACME coordinator (Region: '{}', Leader: {}, Primary: '{}')",
-            if current_region.is_empty() { "local" } else { &current_region },
+            if current_region.is_empty() {
+                "local"
+            } else {
+                &current_region
+            },
             is_leader,
             primary_region
         );
@@ -1380,7 +1452,9 @@ pub fn spawn_acme_supervisor(config: AcmeConfig, master_key: Option<String>) {
                     // LEADER NODE FLOW (e.g. Singapore / primary region)
                     // First, check if peer already has a valid bundle (e.g. after container restart)
                     if try_sync_from_peer(&config, master_key.as_deref()).await {
-                        info!("[acme-supervisor] Leader synced valid TLS certificate bundle from peer machine");
+                        info!(
+                            "[acme-supervisor] Leader synced valid TLS certificate bundle from peer machine"
+                        );
                         tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
                         continue;
                     }
@@ -1397,7 +1471,10 @@ pub fn spawn_acme_supervisor(config: AcmeConfig, master_key: Option<String>) {
                     );
                     match provision_acme_certificate(&config).await {
                         Ok(_) => {
-                            info!("[acme-supervisor] {} provisioning succeeded. Next check in 24 hours.", ca_name);
+                            info!(
+                                "[acme-supervisor] {} provisioning succeeded. Next check in 24 hours.",
+                                ca_name
+                            );
                             tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
                         }
                         Err(e) => {
@@ -1446,7 +1523,9 @@ pub fn spawn_acme_supervisor(config: AcmeConfig, master_key: Option<String>) {
                         );
                         match provision_acme_certificate(&config).await {
                             Ok(_) => {
-                                info!("[acme-replica] Fail-safe ACME provisioning succeeded. Next check in 24 hours.");
+                                info!(
+                                    "[acme-replica] Fail-safe ACME provisioning succeeded. Next check in 24 hours."
+                                );
                                 tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
                             }
                             Err(e) => {
@@ -1509,7 +1588,12 @@ mod tests {
 
     #[test]
     fn test_validate_existing_cert_and_key_nonexistent() {
-        let res = validate_existing_cert_and_key("/nonexistent/cert.pem", "/nonexistent/key.pem", &[], 30);
+        let res = validate_existing_cert_and_key(
+            "/nonexistent/cert.pem",
+            "/nonexistent/key.pem",
+            &[],
+            30,
+        );
         assert!(res.is_none());
     }
 
@@ -1524,8 +1608,14 @@ mod tests {
 
     #[test]
     fn test_compute_dynu_node_name() {
-        assert_eq!(compute_dynu_node_name("amardns.dynu.net", "amardns.dynu.net"), "_acme-challenge");
-        assert_eq!(compute_dynu_node_name("sub.amardns.dynu.net", "amardns.dynu.net"), "_acme-challenge.sub");
+        assert_eq!(
+            compute_dynu_node_name("amardns.dynu.net", "amardns.dynu.net"),
+            "_acme-challenge"
+        );
+        assert_eq!(
+            compute_dynu_node_name("sub.amardns.dynu.net", "amardns.dynu.net"),
+            "_acme-challenge.sub"
+        );
     }
 
     #[test]

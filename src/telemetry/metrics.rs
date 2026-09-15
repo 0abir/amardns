@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -165,9 +165,11 @@ impl Metrics {
             crate::dns::dnssec::DnssecStatus::Bogus => {
                 self.dnssec_bogus.fetch_add(1, Ordering::Relaxed);
             }
-            crate::dns::dnssec::DnssecStatus::Insecure | crate::dns::dnssec::DnssecStatus::Indeterminate => {
+            crate::dns::dnssec::DnssecStatus::Insecure
+            | crate::dns::dnssec::DnssecStatus::Indeterminate => {
                 if details.is_denial_of_existence() {
-                    self.dnssec_denial_of_existence.fetch_add(1, Ordering::Relaxed);
+                    self.dnssec_denial_of_existence
+                        .fetch_add(1, Ordering::Relaxed);
                 } else {
                     self.dnssec_insecure.fetch_add(1, Ordering::Relaxed);
                 }
@@ -398,7 +400,7 @@ impl Metrics {
             queue.push_back(now_ms);
             *ip_count = ip_count.saturating_add(1).min(queue.len() as u32);
             let _ = client_ip; // IP used for future dedup improvements
-                               // Alarm at 5+ requests to the same domain in 10s from multiple clients
+            // Alarm at 5+ requests to the same domain in 10s from multiple clients
             queue.len() >= 5
         } else {
             false
@@ -594,74 +596,176 @@ impl Metrics {
             };
         }
 
-        counter!("amardns_queries_total", "Total DNS queries processed",
-            self.requests.load(Ordering::Relaxed));
-        counter!("amardns_cache_hits_total", "Total cache hits",
-            self.cache_hits.load(Ordering::Relaxed));
-        counter!("amardns_cache_misses_total", "Total cache misses",
-            self.cache_misses.load(Ordering::Relaxed));
-        counter!("amardns_threat_blocks_total", "Total threat blocks",
-            self.threat_blocks.load(Ordering::Relaxed));
-        counter!("amardns_dga_blocks_total", "DGA-detected domain blocks",
-            self.dga_blocks.load(Ordering::Relaxed));
-        counter!("amardns_gsb_blocks_total", "Google Safe Browsing blocks",
-            self.gsb_blocks.load(Ordering::Relaxed));
-        counter!("amardns_rebind_blocks_total", "DNS rebinding attack blocks",
-            self.rebind_blocks.load(Ordering::Relaxed));
-        counter!("amardns_burst_events_total", "Rate limit burst events",
-            self.burst_events.load(Ordering::Relaxed));
-        counter!("amardns_nx_alarms_total", "NXDOMAIN burst alarm events",
-            self.nx_alarms.load(Ordering::Relaxed));
-        counter!("amardns_answer_drifts_total", "Passive DNS answer drift detections",
-            self.answer_drifts.load(Ordering::Relaxed));
-        counter!("amardns_swr_serves_total", "Stale-While-Revalidate cache serves",
-            self.swr_serves.load(Ordering::Relaxed));
-        counter!("amardns_prefetch_hits_total", "AI predictive prefetch hits",
-            self.prefetch_hits.load(Ordering::Relaxed));
-        counter!("amardns_auth_fails_total", "Authentication failures",
-            self.auth_fails.load(Ordering::Relaxed));
-        counter!("amardns_singleflight_coalesced_total", "Queries deduplicated by singleflight (reused in-flight result)",
-            coalesced);
-        counter!("amardns_dot_queries_total", "DNS-over-TLS queries",
-            self.dot_queries.load(Ordering::Relaxed));
-        counter!("amardns_doh_queries_total", "DNS-over-HTTPS queries",
-            self.doh_queries.load(Ordering::Relaxed));
-        counter!("amardns_doh3_queries_total", "DNS-over-HTTP/3 queries",
-            self.doh3_queries.load(Ordering::Relaxed));
-        counter!("amardns_doq_queries_total", "DNS-over-QUIC queries",
-            self.doq_queries.load(Ordering::Relaxed));
-        counter!("amardns_plain_queries_total", "Plain DNS UDP/TCP port 53 queries",
-            self.plain_queries.load(Ordering::Relaxed));
+        counter!(
+            "amardns_queries_total",
+            "Total DNS queries processed",
+            self.requests.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_cache_hits_total",
+            "Total cache hits",
+            self.cache_hits.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_cache_misses_total",
+            "Total cache misses",
+            self.cache_misses.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_threat_blocks_total",
+            "Total threat blocks",
+            self.threat_blocks.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_dga_blocks_total",
+            "DGA-detected domain blocks",
+            self.dga_blocks.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_gsb_blocks_total",
+            "Google Safe Browsing blocks",
+            self.gsb_blocks.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_rebind_blocks_total",
+            "DNS rebinding attack blocks",
+            self.rebind_blocks.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_burst_events_total",
+            "Rate limit burst events",
+            self.burst_events.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_nx_alarms_total",
+            "NXDOMAIN burst alarm events",
+            self.nx_alarms.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_answer_drifts_total",
+            "Passive DNS answer drift detections",
+            self.answer_drifts.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_swr_serves_total",
+            "Stale-While-Revalidate cache serves",
+            self.swr_serves.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_prefetch_hits_total",
+            "AI predictive prefetch hits",
+            self.prefetch_hits.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_auth_fails_total",
+            "Authentication failures",
+            self.auth_fails.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_singleflight_coalesced_total",
+            "Queries deduplicated by singleflight (reused in-flight result)",
+            coalesced
+        );
+        counter!(
+            "amardns_dot_queries_total",
+            "DNS-over-TLS queries",
+            self.dot_queries.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_doh_queries_total",
+            "DNS-over-HTTPS queries",
+            self.doh_queries.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_doh3_queries_total",
+            "DNS-over-HTTP/3 queries",
+            self.doh3_queries.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_doq_queries_total",
+            "DNS-over-QUIC queries",
+            self.doq_queries.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_plain_queries_total",
+            "Plain DNS UDP/TCP port 53 queries",
+            self.plain_queries.load(Ordering::Relaxed)
+        );
         // DNSSEC cryptographic counters
-        counter!("amardns_dnssec_validations_total", "DNSSEC validations evaluated",
-            self.dnssec_validations.load(Ordering::Relaxed));
-        counter!("amardns_dnssec_secure_total", "DNSSEC cryptographically secure positive validations",
-            self.dnssec_secure.load(Ordering::Relaxed));
-        counter!("amardns_dnssec_bogus_total", "DNSSEC bogus/tampered validations rejected",
-            self.dnssec_bogus.load(Ordering::Relaxed));
-        counter!("amardns_dnssec_insecure_total", "DNSSEC unsigned/insecure validations",
-            self.dnssec_insecure.load(Ordering::Relaxed));
-        counter!("amardns_dnssec_denial_of_existence_total", "DNSSEC NSEC/NSEC3 cryptographic denial-of-existence proofs verified",
-            self.dnssec_denial_of_existence.load(Ordering::Relaxed));
+        counter!(
+            "amardns_dnssec_validations_total",
+            "DNSSEC validations evaluated",
+            self.dnssec_validations.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_dnssec_secure_total",
+            "DNSSEC cryptographically secure positive validations",
+            self.dnssec_secure.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_dnssec_bogus_total",
+            "DNSSEC bogus/tampered validations rejected",
+            self.dnssec_bogus.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_dnssec_insecure_total",
+            "DNSSEC unsigned/insecure validations",
+            self.dnssec_insecure.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_dnssec_denial_of_existence_total",
+            "DNSSEC NSEC/NSEC3 cryptographic denial-of-existence proofs verified",
+            self.dnssec_denial_of_existence.load(Ordering::Relaxed)
+        );
         // Latency histogram buckets
-        counter!("amardns_latency_sub1ms_total", "Queries completed in <1ms",
-            self.lat_sub_1ms.load(Ordering::Relaxed));
-        counter!("amardns_latency_1to5ms_total", "Queries completed in 1-5ms",
-            self.lat_1_to_5ms.load(Ordering::Relaxed));
-        counter!("amardns_latency_5to15ms_total", "Queries completed in 5-15ms",
-            self.lat_5_to_15ms.load(Ordering::Relaxed));
-        counter!("amardns_latency_15to50ms_total", "Queries completed in 15-50ms",
-            self.lat_15_to_50ms.load(Ordering::Relaxed));
-        counter!("amardns_latency_above50ms_total", "Queries completed in >50ms",
-            self.lat_above_50ms.load(Ordering::Relaxed));
+        counter!(
+            "amardns_latency_sub1ms_total",
+            "Queries completed in <1ms",
+            self.lat_sub_1ms.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_latency_1to5ms_total",
+            "Queries completed in 1-5ms",
+            self.lat_1_to_5ms.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_latency_5to15ms_total",
+            "Queries completed in 5-15ms",
+            self.lat_5_to_15ms.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_latency_15to50ms_total",
+            "Queries completed in 15-50ms",
+            self.lat_15_to_50ms.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_latency_above50ms_total",
+            "Queries completed in >50ms",
+            self.lat_above_50ms.load(Ordering::Relaxed)
+        );
         // Gauges
-        gauge!("amardns_cache_entries", "Current DNS cache entry count", cache_entries);
-        gauge!("amardns_cache_mb", "Current DNS cache memory in megabytes", format!("{:.2}", cache_mb));
-        gauge!("amardns_uptime_seconds", "Process uptime in seconds", uptime_secs);
+        gauge!(
+            "amardns_cache_entries",
+            "Current DNS cache entry count",
+            cache_entries
+        );
+        gauge!(
+            "amardns_cache_mb",
+            "Current DNS cache memory in megabytes",
+            format!("{:.2}", cache_mb)
+        );
+        gauge!(
+            "amardns_uptime_seconds",
+            "Process uptime in seconds",
+            uptime_secs
+        );
 
         // Upstream sync timestamp
-        gauge!("amardns_upstream_last_sync_timestamp", "Unix timestamp of last upstream sync",
-            self.upstream_last_sync.load(Ordering::Relaxed));
+        gauge!(
+            "amardns_upstream_last_sync_timestamp",
+            "Unix timestamp of last upstream sync",
+            self.upstream_last_sync.load(Ordering::Relaxed)
+        );
 
         out
     }
@@ -762,7 +866,8 @@ mod tests {
         assert_eq!(m.dnssec_validations.load(Ordering::Relaxed), 1);
         assert_eq!(m.dnssec_secure.load(Ordering::Relaxed), 1);
 
-        let bogus_details = crate::dns::dnssec::DnssecValidationDetails::bogus("Signature mismatch", None, None);
+        let bogus_details =
+            crate::dns::dnssec::DnssecValidationDetails::bogus("Signature mismatch", None, None);
         m.record_dnssec(&bogus_details);
         assert_eq!(m.dnssec_validations.load(Ordering::Relaxed), 2);
         assert_eq!(m.dnssec_bogus.load(Ordering::Relaxed), 1);

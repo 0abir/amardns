@@ -283,7 +283,8 @@ impl DnsCache {
             }
             let rtype = u16::from_be_bytes([wire[pos], wire[pos + 1]]);
             let ttl_offset = pos + 4; // TYPE(2) + CLASS(2)
-            if rtype != 41 { // Do not decrement OPT RR (type 41) pseudo-TTL
+            if rtype != 41 {
+                // Do not decrement OPT RR (type 41) pseudo-TTL
                 let curr_ttl = u32::from_be_bytes([
                     wire[ttl_offset],
                     wire[ttl_offset + 1],

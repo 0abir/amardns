@@ -1,16 +1,16 @@
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
-    Json, Router,
 };
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use super::{broadcast_peer_sync, DomainReq};
-use crate::security::auth::{check_auth, AuthRole};
+use super::{DomainReq, broadcast_peer_sync};
+use crate::security::auth::{AuthRole, check_auth};
 use crate::state::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -1140,7 +1140,10 @@ fn handle_dga_test(state: &AppState, payload: DomainReq) -> Json<serde_json::Val
     } else if is_alike {
         "Brand impersonation lookalike detected; credential theft averted".to_string()
     } else if neural_score > 0.85 {
-        format!("Neural network pattern matched threat (Probability {:.1}%); blocked before static feed", neural_score * 100.0)
+        format!(
+            "Neural network pattern matched threat (Probability {:.1}%); blocked before static feed",
+            neural_score * 100.0
+        )
     } else {
         "Safe domain reputation verified; 0ms local resolution allowed".to_string()
     };

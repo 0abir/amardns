@@ -1,14 +1,14 @@
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
-    Json, Router,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use super::{BoolSetting, ModeSetting, NuclearWipeReq};
 use crate::security::auth::{check_auth, generate_hmac_token};

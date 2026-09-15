@@ -45,8 +45,8 @@ pub fn read_varint(buf: &[u8]) -> Option<(u64, usize)> {
                 return None;
             }
             let mut val = (first & 0x3f) as u64;
-            for i in 1..8 {
-                val = (val << 8) | (buf[i] as u64);
+            for &b in &buf[1..8] {
+                val = (val << 8) | (b as u64);
             }
             Some((val, 8))
         }
@@ -84,7 +84,7 @@ pub fn extract_dns_query_from_h3_headers(headers: &[u8]) -> Option<Vec<u8>> {
     let target = b"dns=";
     let pos = headers.windows(target.len()).position(|w| w == target)?;
     let rem = &headers[pos + target.len()..];
-    
+
     let mut end = 0;
     while end < rem.len() {
         let b = rem[end];
@@ -122,14 +122,13 @@ pub fn extract_dns_query_from_h3_headers(headers: &[u8]) -> Option<Vec<u8>> {
 
 fn base64_decode_fast(input: &str) -> Result<Vec<u8>, &'static str> {
     const TABLE: &[u8; 128] = &[
-        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,  62, 255,  62, 255,  63,
-         52,  53,  54,  55,  56,  57,  58,  59,  60,  61, 255, 255, 255,   0, 255, 255,
-        255,   0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,
-         15,  16,  17,  18,  19,  20,  21,  22,  23,  24,  25, 255, 255, 255, 255,  63,
-        255,  26,  27,  28,  29,  30,  31,  32,  33,  34,  35,  36,  37,  38,  39,  40,
-         41,  42,  43,  44,  45,  46,  47,  48,  49,  50,  51, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 62, 255, 62, 255, 63, 52, 53, 54, 55, 56, 57, 58, 59,
+        60, 61, 255, 255, 255, 0, 255, 255, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+        15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 255, 255, 255, 255, 63, 255, 26, 27, 28, 29,
+        30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,
+        255, 255, 255, 255, 255,
     ];
 
     let bytes = input.as_bytes();
@@ -138,10 +137,16 @@ fn base64_decode_fast(input: &str) -> Result<Vec<u8>, &'static str> {
     let mut bits = 0;
 
     for &b in bytes {
-        if b == b'=' { break; }
-        if b as usize >= TABLE.len() { return Err("Invalid base64 byte"); }
+        if b == b'=' {
+            break;
+        }
+        if b as usize >= TABLE.len() {
+            return Err("Invalid base64 byte");
+        }
         let val = TABLE[b as usize];
-        if val == 255 { return Err("Invalid base64 char"); }
+        if val == 255 {
+            return Err("Invalid base64 char");
+        }
         buf = (buf << 6) | (val as u32);
         bits += 6;
         if bits >= 8 {
@@ -378,9 +383,15 @@ async fn handle_doq_connection(
                         if let Some((headers_len, len_len)) = read_varint(&stream_buf[type_len..]) {
                             let total_headers_frame = type_len + len_len + headers_len as usize;
                             while stream_buf.len() < total_headers_frame {
-                                let read_more = tokio::time::timeout(DOQ_STREAM_TIMEOUT, recv_stream.read(&mut chunk)).await;
+                                let read_more = tokio::time::timeout(
+                                    DOQ_STREAM_TIMEOUT,
+                                    recv_stream.read(&mut chunk),
+                                )
+                                .await;
                                 match read_more {
-                                    Ok(Ok(Some(m))) if m > 0 => stream_buf.extend_from_slice(&chunk[..m]),
+                                    Ok(Ok(Some(m))) if m > 0 => {
+                                        stream_buf.extend_from_slice(&chunk[..m])
+                                    }
                                     _ => break,
                                 }
                             }
@@ -392,44 +403,71 @@ async fn handle_doq_connection(
                             };
 
                             // Check if GET query with ?dns=...
-                            let query_opt = if let Some(q) = extract_dns_query_from_h3_headers(headers_payload) {
+                            let query_opt = if let Some(q) =
+                                extract_dns_query_from_h3_headers(headers_payload)
+                            {
                                 Some(q)
                             } else {
                                 // Check subsequent DATA frame (Type 0x00) for POST
                                 let rem_start = total_headers_frame;
                                 let mut data_buf = stream_buf[rem_start..].to_vec();
                                 while data_buf.is_empty() {
-                                    let read_more = tokio::time::timeout(DOQ_STREAM_TIMEOUT, recv_stream.read(&mut chunk)).await;
+                                    let read_more = tokio::time::timeout(
+                                        DOQ_STREAM_TIMEOUT,
+                                        recv_stream.read(&mut chunk),
+                                    )
+                                    .await;
                                     match read_more {
-                                        Ok(Ok(Some(m))) if m > 0 => data_buf.extend_from_slice(&chunk[..m]),
+                                        Ok(Ok(Some(m))) if m > 0 => {
+                                            data_buf.extend_from_slice(&chunk[..m])
+                                        }
                                         _ => break,
                                     }
                                 }
 
                                 if let Some((data_type, d_type_len)) = read_varint(&data_buf) {
                                     if data_type == 0x00 {
-                                        if let Some((data_len, d_len_len)) = read_varint(&data_buf[d_type_len..]) {
-                                            let total_data = d_type_len + d_len_len + data_len as usize;
+                                        if let Some((data_len, d_len_len)) =
+                                            read_varint(&data_buf[d_type_len..])
+                                        {
+                                            let total_data =
+                                                d_type_len + d_len_len + data_len as usize;
                                             while data_buf.len() < total_data {
-                                                let read_more = tokio::time::timeout(DOQ_STREAM_TIMEOUT, recv_stream.read(&mut chunk)).await;
+                                                let read_more = tokio::time::timeout(
+                                                    DOQ_STREAM_TIMEOUT,
+                                                    recv_stream.read(&mut chunk),
+                                                )
+                                                .await;
                                                 match read_more {
-                                                    Ok(Ok(Some(m))) if m > 0 => data_buf.extend_from_slice(&chunk[..m]),
+                                                    Ok(Ok(Some(m))) if m > 0 => {
+                                                        data_buf.extend_from_slice(&chunk[..m])
+                                                    }
                                                     _ => break,
                                                 }
                                             }
                                             if data_buf.len() >= total_data {
-                                                Some(data_buf[d_type_len + d_len_len..total_data].to_vec())
+                                                Some(
+                                                    data_buf[d_type_len + d_len_len..total_data]
+                                                        .to_vec(),
+                                                )
                                             } else {
                                                 None
                                             }
-                                        } else { None }
-                                    } else { None }
-                                } else { None }
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
                             };
 
                             if let Some(query_bytes) = query_opt {
                                 if !state_clone.check_rate_limit(client_ip, None) {
-                                    let fail = crate::dns::parser::build_servfail_response(&query_bytes);
+                                    let fail =
+                                        crate::dns::parser::build_servfail_response(&query_bytes);
                                     let h3_resp = build_h3_response_frames(&fail);
                                     let _ = send_stream.write_all(&h3_resp).await;
                                     let _ = send_stream.finish();
@@ -529,7 +567,20 @@ mod tests {
 
     #[test]
     fn test_varint_encode_decode_roundtrip() {
-        let test_cases = vec![0u64, 1, 25, 63, 64, 1000, 16383, 16384, 1_000_000, 1_073_741_823, 1_073_741_824, 999_999_999_999];
+        let test_cases = vec![
+            0u64,
+            1,
+            25,
+            63,
+            64,
+            1000,
+            16383,
+            16384,
+            1_000_000,
+            1_073_741_823,
+            1_073_741_824,
+            999_999_999_999,
+        ];
         for val in test_cases {
             let mut encoded = Vec::new();
             write_varint(val, &mut encoded);
@@ -541,7 +592,9 @@ mod tests {
 
     #[test]
     fn test_build_h3_response_frames_validity() {
-        let dummy_dns_response = vec![0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
+        let dummy_dns_response = vec![
+            0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+        ];
         let h3_bytes = build_h3_response_frames(&dummy_dns_response);
 
         // Verify HEADERS frame
@@ -553,12 +606,17 @@ mod tests {
         assert!(h3_bytes.len() > headers_end);
 
         // Verify DATA frame
-        let (data_type, d_type_len) = read_varint(&h3_bytes[headers_end..]).expect("data frame type");
+        let (data_type, d_type_len) =
+            read_varint(&h3_bytes[headers_end..]).expect("data frame type");
         assert_eq!(data_type, 0x00); // DATA frame
-        let (data_len, d_len_len) = read_varint(&h3_bytes[headers_end + d_type_len..]).expect("data length");
+        let (data_len, d_len_len) =
+            read_varint(&h3_bytes[headers_end + d_type_len..]).expect("data length");
         assert_eq!(data_len as usize, dummy_dns_response.len());
         let data_start = headers_end + d_type_len + d_len_len;
-        assert_eq!(&h3_bytes[data_start..data_start + data_len as usize], &dummy_dns_response[..]);
+        assert_eq!(
+            &h3_bytes[data_start..data_start + data_len as usize],
+            &dummy_dns_response[..]
+        );
     }
 
     #[test]

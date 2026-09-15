@@ -3,7 +3,7 @@ pub mod rules;
 pub mod status;
 pub mod system;
 
-use axum::{http::HeaderMap, Router};
+use axum::{Router, http::HeaderMap};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

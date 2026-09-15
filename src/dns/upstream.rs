@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 // Removed unused imports
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 pub const DEFAULT_UPSTREAM_URL: &str =
@@ -12,29 +12,32 @@ pub const DEFAULT_UPSTREAM_URL: &str =
 
 /// Official IANA Root Server Hints (13 Root Name Server clusters).
 pub const IANA_ROOT_HINTS: &[&str] = &[
-    "198.41.0.4:53",      // a.root-servers.net (Verisign)
-    "199.9.14.201:53",    // b.root-servers.net (USC-ISI)
-    "192.33.4.12:53",     // c.root-servers.net (Cogent)
-    "199.7.91.13:53",     // d.root-servers.net (University of Maryland)
-    "192.203.230.10:53",  // e.root-servers.net (NASA)
-    "192.5.5.241:53",     // f.root-servers.net (Internet Systems Consortium)
-    "192.112.36.4:53",    // g.root-servers.net (US Department of Defense)
-    "198.97.190.53:53",   // h.root-servers.net (US Army Research Lab)
-    "192.36.148.17:53",   // i.root-servers.net (Netnod)
-    "192.58.128.30:53",   // j.root-servers.net (Verisign)
-    "193.0.14.129:53",    // k.root-servers.net (RIPE NCC)
-    "199.7.83.42:53",     // l.root-servers.net (ICANN)
-    "202.12.27.33:53",    // m.root-servers.net (WIDE Project)
+    "198.41.0.4:53",     // a.root-servers.net (Verisign)
+    "199.9.14.201:53",   // b.root-servers.net (USC-ISI)
+    "192.33.4.12:53",    // c.root-servers.net (Cogent)
+    "199.7.91.13:53",    // d.root-servers.net (University of Maryland)
+    "192.203.230.10:53", // e.root-servers.net (NASA)
+    "192.5.5.241:53",    // f.root-servers.net (Internet Systems Consortium)
+    "192.112.36.4:53",   // g.root-servers.net (US Department of Defense)
+    "198.97.190.53:53",  // h.root-servers.net (US Army Research Lab)
+    "192.36.148.17:53",  // i.root-servers.net (Netnod)
+    "192.58.128.30:53",  // j.root-servers.net (Verisign)
+    "193.0.14.129:53",   // k.root-servers.net (RIPE NCC)
+    "199.7.83.42:53",    // l.root-servers.net (ICANN)
+    "202.12.27.33:53",   // m.root-servers.net (WIDE Project)
 ];
 
-
 pub struct Singleflight {
-    in_flight: parking_lot::Mutex<std::collections::HashMap<String, tokio::sync::broadcast::Sender<Vec<u8>>>>,
+    in_flight: parking_lot::Mutex<
+        std::collections::HashMap<String, tokio::sync::broadcast::Sender<Vec<u8>>>,
+    >,
     pub coalesced: std::sync::atomic::AtomicU64,
 }
 
 struct SingleflightGuard<'a> {
-    in_flight: &'a parking_lot::Mutex<std::collections::HashMap<String, tokio::sync::broadcast::Sender<Vec<u8>>>>,
+    in_flight: &'a parking_lot::Mutex<
+        std::collections::HashMap<String, tokio::sync::broadcast::Sender<Vec<u8>>>,
+    >,
     key: &'a str,
     result: Option<Vec<u8>>,
     completed: bool,
@@ -65,11 +68,7 @@ impl Singleflight {
         self.in_flight.lock().len()
     }
 
-    pub async fn do_call<F, Fut>(
-        &self,
-        key: &str,
-        upstream_fn: F,
-    ) -> Option<Vec<u8>>
+    pub async fn do_call<F, Fut>(&self, key: &str, upstream_fn: F) -> Option<Vec<u8>>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Option<Vec<u8>>>,
@@ -88,7 +87,8 @@ impl Singleflight {
         if let Some(ref mut receiver) = rx {
             match receiver.recv().await {
                 Ok(wire) => {
-                    self.coalesced.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    self.coalesced
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     return Some(wire);
                 }
                 Err(_) => return None,
@@ -587,7 +587,8 @@ impl UpstreamPool {
     /// If all configured DoH/DoT resolvers fail or are unreachable, query IANA root servers directly.
     pub async fn resolve_root_hints(&self, query_wire: &[u8]) -> Option<(Vec<u8>, String)> {
         let wire = crate::dns::parser::ensure_edns0_do_bit(query_wire);
-        let wire = crate::dns::parser::process_ecs_option(&wire, crate::dns::parser::EcsMode::Strip);
+        let wire =
+            crate::dns::parser::process_ecs_option(&wire, crate::dns::parser::EcsMode::Strip);
         let wire = crate::dns::parser::apply_dns0x20_randomization(&wire);
 
         let mut tasks = Vec::with_capacity(3);
@@ -599,9 +600,17 @@ impl UpstreamPool {
                 if let Ok(addr) = hint_str.parse::<std::net::SocketAddr>() {
                     if sock.send_to(&wire_c, addr).await.is_ok() {
                         let mut buf = [0u8; 4096];
-                        if let Ok(Ok((len, _))) = tokio::time::timeout(Duration::from_millis(1500), sock.recv_from(&mut buf)).await {
+                        if let Ok(Ok((len, _))) = tokio::time::timeout(
+                            Duration::from_millis(1500),
+                            sock.recv_from(&mut buf),
+                        )
+                        .await
+                        {
                             if len >= 12 {
-                                return Some((buf[..len].to_vec(), format!("Root-Hint ({})", hint_str)));
+                                return Some((
+                                    buf[..len].to_vec(),
+                                    format!("Root-Hint ({})", hint_str),
+                                ));
                             }
                         }
                     }
@@ -653,10 +662,18 @@ impl UpstreamPool {
                 }
             }
             Ok(resp) => {
-                tracing::warn!("[upstream] Upstream feed URL {} returned HTTP {}; using default fallback upstreams", feed_url, resp.status());
+                tracing::warn!(
+                    "[upstream] Upstream feed URL {} returned HTTP {}; using default fallback upstreams",
+                    feed_url,
+                    resp.status()
+                );
             }
             Err(e) => {
-                tracing::warn!("[upstream] Failed to fetch upstreams from {}: {}; using default fallback upstreams", feed_url, e);
+                tracing::warn!(
+                    "[upstream] Failed to fetch upstreams from {}: {}; using default fallback upstreams",
+                    feed_url,
+                    e
+                );
             }
         }
 
@@ -995,7 +1012,8 @@ mod tests {
                         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                         Some(vec![0u8; 12])
                     }
-                }).await
+                })
+                .await
             }));
         }
         let mut results = vec![];
@@ -1004,9 +1022,17 @@ mod tests {
         }
         assert!(results.iter().all(|r| r.is_some()));
         let count = call_count.load(std::sync::atomic::Ordering::Relaxed);
-        assert!(count <= 3, "Expected at most 3 upstream calls due to singleflight, got {}", count);
+        assert!(
+            count <= 3,
+            "Expected at most 3 upstream calls due to singleflight, got {}",
+            count
+        );
         let coalesced = sf.coalesced.load(std::sync::atomic::Ordering::Relaxed);
-        assert!(coalesced >= 7, "Expected at least 7 coalesced calls, got {}", coalesced);
+        assert!(
+            coalesced >= 7,
+            "Expected at least 7 coalesced calls, got {}",
+            coalesced
+        );
     }
 
     #[tokio::test]
@@ -1016,10 +1042,12 @@ mod tests {
 
         // 1. Spawn a task that starts singleflight and gets cancelled halfway
         let handle = tokio::spawn(async move {
-            sf_clone.do_call("cancelled.com:1", || async {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                Some(vec![1u8, 2, 3])
-            }).await
+            sf_clone
+                .do_call("cancelled.com:1", || async {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    Some(vec![1u8, 2, 3])
+                })
+                .await
         });
 
         // Give it 10ms to start and register in_flight
@@ -1029,9 +1057,9 @@ mod tests {
         let _ = handle.await;
 
         // 2. Subsequent query for the same key must NOT deadlock or hang on a dead channel
-        let result = sf.do_call("cancelled.com:1", || async {
-            Some(vec![4u8, 5, 6])
-        }).await;
+        let result = sf
+            .do_call("cancelled.com:1", || async { Some(vec![4u8, 5, 6]) })
+            .await;
 
         assert_eq!(result, Some(vec![4u8, 5, 6]));
     }

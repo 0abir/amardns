@@ -24,11 +24,11 @@ pub fn render_error_page(
     };
 
     let accent_color = match status_code {
-        404 => "#00ffe7", // Cyan
+        404 => "#00ffe7",       // Cyan
         401 | 403 => "#ff2d6b", // Neon Red/Pink
-        405 => "#ffcc00", // Yellow / Warning
+        405 => "#ffcc00",       // Yellow / Warning
         500..=599 => "#f97316", // Orange
-        _ => "#a78bfa", // Purple
+        _ => "#a78bfa",         // Purple
     };
 
     let border_color = match status_code {
@@ -41,7 +41,8 @@ pub fn render_error_page(
 
     let show_auth_box = status_code == 401 || status_code == 403;
 
-    format!(r##"<!DOCTYPE html>
+    format!(
+        r##"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -465,12 +466,21 @@ pub fn render_405(path: &str, client_ip: &str, region: &str, machine_id: &str) -
 }
 
 #[allow(dead_code)]
-pub fn render_500(path: &str, error_msg: &str, client_ip: &str, region: &str, machine_id: &str) -> String {
+pub fn render_500(
+    path: &str,
+    error_msg: &str,
+    client_ip: &str,
+    region: &str,
+    machine_id: &str,
+) -> String {
     render_error_page(
         500,
         "EDGE_500_INTERNAL_ERROR",
         "Edge Processing Error",
-        &format!("An internal exception was encountered during query processing: {}", html_escape(error_msg)),
+        &format!(
+            "An internal exception was encountered during query processing: {}",
+            html_escape(error_msg)
+        ),
         path,
         client_ip,
         region,

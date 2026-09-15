@@ -158,7 +158,9 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         if has_fatal {
-            panic!("[startup] FATAL: One or more configuration errors detected. Fix the above errors and restart.");
+            panic!(
+                "[startup] FATAL: One or more configuration errors detected. Fix the above errors and restart."
+            );
         }
     }
 
@@ -173,7 +175,9 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     if config.dns_token_secret.trim().is_empty()
         || config.dns_token_secret.trim().starts_with("CHANGE_ME")
     {
-        tracing::warn!("[startup] WARNING: DNS_TOKEN_SECRET is unset or default. HMAC view tokens will not work.");
+        tracing::warn!(
+            "[startup] WARNING: DNS_TOKEN_SECRET is unset or default. HMAC view tokens will not work."
+        );
     }
 
     // 3. Application State
@@ -254,11 +258,16 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                             .as_secs();
                         let last_fired = read_cron_stamp(&cron_stamp);
                         if now_unix.saturating_sub(last_fired) < 90 {
-                            info!("[cron] Skipping double-fire: already ran {}s ago (stamp file guard)", now_unix - last_fired);
+                            info!(
+                                "[cron] Skipping double-fire: already ran {}s ago (stamp file guard)",
+                                now_unix - last_fired
+                            );
                             tokio::time::sleep(std::time::Duration::from_secs(61)).await;
                             continue;
                         }
-                        info!("[cron] Running threat feed, IANA root anchors, DDNS IP sync, and upstream ranker sync (wall-clock cron)...");
+                        info!(
+                            "[cron] Running threat feed, IANA root anchors, DDNS IP sync, and upstream ranker sync (wall-clock cron)..."
+                        );
                         write_cron_stamp(&cron_stamp);
                         cron_state.trigger_background_feed_sync();
                         cron_state.sync_dnssec_root_anchors().await;
@@ -275,7 +284,9 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                             cron_tz
                         );
                         tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
-                        info!("[cron] Running threat feed, IANA root anchors, DDNS IP sync, and upstream ranker sync (wall-clock cron)...");
+                        info!(
+                            "[cron] Running threat feed, IANA root anchors, DDNS IP sync, and upstream ranker sync (wall-clock cron)..."
+                        );
                         write_cron_stamp(&cron_stamp);
                         cron_state.trigger_background_feed_sync();
                         cron_state.sync_dnssec_root_anchors().await;
@@ -295,7 +306,9 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
                 loop {
                     interval.tick().await;
-                    info!("[cron] Running daily threat feed, IANA root anchors, DDNS IP sync, and upstream ranker sync (fallback 24 h)...");
+                    info!(
+                        "[cron] Running daily threat feed, IANA root anchors, DDNS IP sync, and upstream ranker sync (fallback 24 h)..."
+                    );
                     cron_state.trigger_background_feed_sync();
                     cron_state.sync_dnssec_root_anchors().await;
                     server::ddns::sync_all_ddns_records(&cron_ddns_cfg).await;
@@ -433,7 +446,10 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // 6g. Automated Dynamic DNS (DDNS) IP Synchronizer
     // Automatically discovers the app's public Anycast IPv4 and IPv6 addresses
     // and synchronizes DNS A & AAAA records across deSEC, DuckDNS, and Dynu.
-    if config.desec_token.is_some() || config.duckdns_token.is_some() || config.dynu_api_key.is_some() {
+    if config.desec_token.is_some()
+        || config.duckdns_token.is_some()
+        || config.dynu_api_key.is_some()
+    {
         let startup_ddns_cfg = config.clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -452,7 +468,10 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             match server::tls::DynamicCertResolver::from_pem(&cert_path, &key_path) {
                 Ok(r) => Arc::new(r),
                 Err(e) => {
-                    warn!("[doq] Failed to parse certificates from '{}': {}. Generating fallback resolver...", cert_path, e);
+                    warn!(
+                        "[doq] Failed to parse certificates from '{}': {}. Generating fallback resolver...",
+                        cert_path, e
+                    );
                     let fallback =
                         server::tls::DynamicCertResolver::from_self_signed(&config.custom_domains)
                             .map_err(|e| -> Box<dyn std::error::Error> { e })?;
@@ -461,7 +480,9 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         None => {
-            info!("[doq] No certificate files found on disk. Generating ephemeral self-signed fallback resolver...");
+            info!(
+                "[doq] No certificate files found on disk. Generating ephemeral self-signed fallback resolver..."
+            );
             let fallback =
                 server::tls::DynamicCertResolver::from_self_signed(&config.custom_domains)
                     .map_err(|e| -> Box<dyn std::error::Error> { e })?;
@@ -536,7 +557,9 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             );
             server::tls::create_doh_tls_config(cert_path, key_path).ok()
         } else {
-            info!("[tls] Native TLS requested for DoH but cert files not found on disk yet. Running in edge TLS mode.");
+            info!(
+                "[tls] Native TLS requested for DoH but cert files not found on disk yet. Running in edge TLS mode."
+            );
             None
         }
     } else {
@@ -548,7 +571,9 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         quic_cert_resolver.clone(),
     ) {
         Ok(cfg) => {
-            info!("[dot] Native TLS termination enabled with dynamic hot-reloadable certificate resolver (ALPN: dot)");
+            info!(
+                "[dot] Native TLS termination enabled with dynamic hot-reloadable certificate resolver (ALPN: dot)"
+            );
             Some(cfg)
         }
         Err(e) => {
@@ -635,7 +660,8 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 &plain53_host_udp,
                 53,
                 shutdown_rx_udp53,
-            ).await;
+            )
+            .await;
         });
 
         let plain53_state_tcp = state.clone();
@@ -647,7 +673,8 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 &plain53_host_tcp,
                 53,
                 shutdown_rx_tcp53,
-            ).await;
+            )
+            .await;
         });
 
         info!("[boot] Plain DNS (UDP+TCP) port 53 listeners started (PLAIN53_ENABLED=true)");

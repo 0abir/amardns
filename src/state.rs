@@ -315,7 +315,10 @@ impl AppState {
         } else {
             "root-anchors.xml"
         };
-        let _ = self.dnssec_anchors.sync_from_iana(&client, Some(cache_path)).await;
+        let _ = self
+            .dnssec_anchors
+            .sync_from_iana(&client, Some(cache_path))
+            .await;
     }
 
     /// Triggers immediate graceful draining across all listeners, background workers, and SSE clients.
@@ -969,7 +972,8 @@ impl AppState {
     /// Revokes all HMAC tokens issued before `timestamp` (global revocation epoch).
     #[allow(dead_code)]
     pub fn revoke_all_tokens_before(&self, timestamp: u64) {
-        self.token_revocation_epoch.store(timestamp, Ordering::Release);
+        self.token_revocation_epoch
+            .store(timestamp, Ordering::Release);
     }
 
     /// Returns true if a token has been explicitly revoked or was issued before the revocation epoch.
@@ -1312,12 +1316,7 @@ impl AppState {
 
         info!(
             "[threat_feed] Feed sync & crossmatch completed: {}/{} blocked rules, {}/{} whitelist rules (crossmatched: {}, {} overlap prioritized)",
-            block_count,
-            exp_b,
-            white_count,
-            exp_w,
-            is_crossmatched,
-            crossmatched_overlap
+            block_count, exp_b, white_count, exp_w, is_crossmatched, crossmatched_overlap
         );
 
         Ok((block_count, white_count))
@@ -1355,7 +1354,9 @@ impl AppState {
                         );
                         tracing::info!(
                             "[threat_feed] Background feed sync attempt #{} succeeded: {} blocked, {} whitelist rules loaded",
-                            attempt, b, w
+                            attempt,
+                            b,
+                            w
                         );
                         // Broadcast an SSE update event to all active dashboard clients
                         let _ = state.log_broadcaster.send(serde_json::json!({
@@ -1370,7 +1371,9 @@ impl AppState {
                         let current_bloom_cnt = state.threat_bloom.read().count();
                         tracing::warn!(
                             "[threat_feed] Feed sync attempt #{} failed (0 rules or CDN error). Retrying in background in {}s (current in-memory rules: {})...",
-                            attempt, delay_secs, current_bloom_cnt
+                            attempt,
+                            delay_secs,
+                            current_bloom_cnt
                         );
                         tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
                         delay_secs = (delay_secs * 2).min(60);

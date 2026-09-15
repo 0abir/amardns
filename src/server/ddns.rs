@@ -242,7 +242,11 @@ pub async fn update_duckdns_ip(
         );
         Ok(())
     } else {
-        Err(format!("DuckDNS IP update failed for '{}': response='{}'", domain, text).into())
+        Err(format!(
+            "DuckDNS IP update failed for '{}': response='{}'",
+            domain, text
+        )
+        .into())
     }
 }
 
@@ -279,7 +283,10 @@ pub async fn update_dynu_ip(
                 .as_array()
                 .and_then(|arr| {
                     arr.iter().find(|d| {
-                        d["name"].as_str().map(|s| s.eq_ignore_ascii_case(domain)).unwrap_or(false)
+                        d["name"]
+                            .as_str()
+                            .map(|s| s.eq_ignore_ascii_case(domain))
+                            .unwrap_or(false)
                     })
                 })
                 .and_then(|d| d["id"].as_u64())
@@ -324,7 +331,11 @@ pub async fn update_dynu_ip(
     } else {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        Err(format!("Dynu IP update failed for '{}': HTTP {} - {}", domain, status, body).into())
+        Err(format!(
+            "Dynu IP update failed for '{}': HTTP {} - {}",
+            domain, status, body
+        )
+        .into())
     }
 }
 

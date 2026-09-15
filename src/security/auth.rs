@@ -1,7 +1,7 @@
 // src/security/auth.rs
 // Master Key and HMAC Token authentication matching the Node reference implementation.
 
-use axum::http::{header, HeaderMap};
+use axum::http::{HeaderMap, header};
 use ring::hmac;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -440,15 +440,30 @@ mod tests {
 
         // 10. Individual Token Revocation
         let token_rev = generate_hmac_token(&state.config.dns_token_secret, "/", 7200);
-        assert_eq!(check_auth(&state, Some(&token_rev), &HeaderMap::new(), "/"), AuthRole::View);
+        assert_eq!(
+            check_auth(&state, Some(&token_rev), &HeaderMap::new(), "/"),
+            AuthRole::View
+        );
         state.revoke_token(&token_rev);
-        assert_eq!(check_auth(&state, Some(&token_rev), &HeaderMap::new(), "/"), AuthRole::None);
+        assert_eq!(
+            check_auth(&state, Some(&token_rev), &HeaderMap::new(), "/"),
+            AuthRole::None
+        );
 
         // 11. Global Revocation Epoch
         let token_epoch = generate_hmac_token(&state.config.dns_token_secret, "/api/status", 7200);
-        assert_eq!(check_auth(&state, Some(&token_epoch), &HeaderMap::new(), "/api/status"), AuthRole::View);
-        let now_ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        assert_eq!(
+            check_auth(&state, Some(&token_epoch), &HeaderMap::new(), "/api/status"),
+            AuthRole::View
+        );
+        let now_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         state.revoke_all_tokens_before(now_ts + 10);
-        assert_eq!(check_auth(&state, Some(&token_epoch), &HeaderMap::new(), "/api/status"), AuthRole::None);
+        assert_eq!(
+            check_auth(&state, Some(&token_epoch), &HeaderMap::new(), "/api/status"),
+            AuthRole::None
+        );
     }
 }

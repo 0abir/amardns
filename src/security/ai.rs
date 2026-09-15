@@ -589,11 +589,7 @@ impl AIBrain {
                                 }
                             }
                         }
-                        if ok {
-                            Some(tmp)
-                        } else {
-                            None
-                        }
+                        if ok { Some(tmp) } else { None }
                     };
                     if let Some(w) = parsed {
                         *self.neural_weights.write() = w;

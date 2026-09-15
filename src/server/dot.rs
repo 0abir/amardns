@@ -387,8 +387,7 @@ where
         }
 
         let mut query = vec![0u8; msg_len];
-        let body_res =
-            tokio::time::timeout(DOT_READ_TIMEOUT, reader.read_exact(&mut query)).await;
+        let body_res = tokio::time::timeout(DOT_READ_TIMEOUT, reader.read_exact(&mut query)).await;
         if body_res.is_err() || body_res.unwrap().is_err() {
             break;
         }
@@ -403,11 +402,7 @@ where
         let tx_c = tx.clone();
         tokio::spawn(async move {
             let resp_bytes = crate::server::doh::process_dns_wire_packet(
-                state_c,
-                &query,
-                client_ip,
-                None,
-                "DoT",
+                state_c, &query, client_ip, None, "DoT",
             )
             .await;
             let _ = tx_c.send(resp_bytes).await;

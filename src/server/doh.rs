@@ -3,19 +3,19 @@
 // DNSSEC local cryptographic validation, Google Safe Browsing cloud threat intelligence, and host shielding.
 
 use axum::{
+    Json, Router,
     body::Bytes,
     extract::{ConnectInfo, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
-    Json, Router,
 };
 use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
-use crate::dns::dnssec::{validate_dnssec, DnssecStatus};
+use crate::dns::dnssec::{DnssecStatus, validate_dnssec};
 use crate::dns::parser::{build_blocked_response, build_servfail_response, parse_dns_query};
 use crate::security::auth::check_auth;
 use crate::server::api::DnsQueryParam;
@@ -294,7 +294,11 @@ pub async fn doh_post_handler(
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded").into_response();
     }
 
-    let candidate_key = params.key.as_deref().or(params.token.as_deref()).or(dev_ref);
+    let candidate_key = params
+        .key
+        .as_deref()
+        .or(params.token.as_deref())
+        .or(dev_ref);
     if state.is_private_mode.load(Ordering::Relaxed) {
         let auth = check_auth(&state, candidate_key, &headers, "/dns-query");
         if !auth.is_view_or_admin() {
@@ -328,7 +332,11 @@ pub async fn doh_get_handler(
         return (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded").into_response();
     }
 
-    let candidate_key = params.key.as_deref().or(params.token.as_deref()).or(dev_ref);
+    let candidate_key = params
+        .key
+        .as_deref()
+        .or(params.token.as_deref())
+        .or(dev_ref);
     if state.is_private_mode.load(Ordering::Relaxed) {
         let auth = check_auth(&state, candidate_key, &headers, "/dns-query");
         if !auth.is_view_or_admin() {
@@ -350,7 +358,7 @@ pub async fn doh_get_handler(
         match base64_decode(&padded) {
             Ok(b) => b,
             Err(_) => {
-                return (StatusCode::BAD_REQUEST, "Invalid base64url dns query").into_response()
+                return (StatusCode::BAD_REQUEST, "Invalid base64url dns query").into_response();
             }
         }
     } else if let Some(domain_name) = params.name.as_deref() {
@@ -521,7 +529,9 @@ pub async fn process_dns_wire_packet_full(
     // RFC 8482: Return minimal HINFO for ANY (QTYPE=255) queries
     if q.qtype == 255 {
         if let Some(any_resp) = crate::dns::parser::build_any_minimal_response(query_wire) {
-            state.wal.append_query(&q.name, q.qtype, log_id, 0, 0, "ANY_HINFO");
+            state
+                .wal
+                .append_query(&q.name, q.qtype, log_id, 0, 0, "ANY_HINFO");
             state.metrics.record_latency(query_start.elapsed());
             return (any_resp, "ANY_HINFO", "INSECURE".to_string(), None);
         }
@@ -1000,7 +1010,9 @@ pub async fn process_dns_wire_packet_full(
         if dnssec_res.status == crate::dns::dnssec::DnssecStatus::Bogus {
             let is_cd = (parsed.flags & 0x0010) != 0;
             if !is_cd {
-                state.wal.append_query(&q.name, q.qtype, log_id, 2, lat, "DNSSEC_BOGUS");
+                state
+                    .wal
+                    .append_query(&q.name, q.qtype, log_id, 2, lat, "DNSSEC_BOGUS");
                 state.log_query_dnssec(
                     &q.name,
                     q.qtype,
@@ -1020,15 +1032,26 @@ pub async fn process_dns_wire_packet_full(
                 crate::dns::parser::append_ede_to_response(
                     &mut servfail,
                     6,
-                    dnssec_res.failure_reason.as_deref().unwrap_or("DNSSEC validation failure (RFC 4035 Section 5.5)"),
+                    dnssec_res
+                        .failure_reason
+                        .as_deref()
+                        .unwrap_or("DNSSEC validation failure (RFC 4035 Section 5.5)"),
                 );
                 state.metrics.record_latency(query_start.elapsed());
-                return (servfail, "DNSSEC_BOGUS", "BOGUS".to_string(), Some("dnssec_bogus"));
+                return (
+                    servfail,
+                    "DNSSEC_BOGUS",
+                    "BOGUS".to_string(),
+                    Some("dnssec_bogus"),
+                );
             } else {
                 crate::dns::parser::append_ede_to_response(
                     &mut upstream_resp,
                     6,
-                    dnssec_res.failure_reason.as_deref().unwrap_or("DNSSEC validation failure"),
+                    dnssec_res
+                        .failure_reason
+                        .as_deref()
+                        .unwrap_or("DNSSEC validation failure"),
                 );
             }
         }
@@ -1091,7 +1114,11 @@ pub async fn process_dns_wire_packet_full(
             None, false,
         );
         let mut fail = build_servfail_response(query_wire);
-        crate::dns::parser::append_ede_to_response(&mut fail, 22, "All upstream resolvers unreachable");
+        crate::dns::parser::append_ede_to_response(
+            &mut fail,
+            22,
+            "All upstream resolvers unreachable",
+        );
         state.metrics.record_latency(query_start.elapsed());
         (fail, "FAIL", "INSECURE".to_string(), None)
     }
@@ -1383,7 +1410,6 @@ pub async fn doh_json_handler(
             "Comment": comment
         });
 
-
         state.log_query_dnssec(
             &clean_domain,
             qtype,
@@ -1420,8 +1446,6 @@ pub async fn doh_json_handler(
     )
         .into_response()
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -1485,7 +1509,9 @@ mod tests {
     #[test]
     fn test_prometheus_text_format() {
         let metrics = crate::telemetry::metrics::Metrics::new();
-        metrics.requests.fetch_add(42, std::sync::atomic::Ordering::Relaxed);
+        metrics
+            .requests
+            .fetch_add(42, std::sync::atomic::Ordering::Relaxed);
         let output = metrics.prometheus_text(100, 1.5, 0);
         assert!(output.contains("amardns_queries_total 42"));
         assert!(output.contains("# TYPE amardns_queries_total counter"));
@@ -1502,13 +1528,8 @@ mod tests {
         let client_ip = IpAddr::from([127, 0, 0, 1]);
 
         // Process wire packet
-        let (resp, cache_status, _, block_reason) = process_dns_wire_packet_full(
-            state.clone(),
-            &query_wire,
-            client_ip,
-            None,
-            "DoH",
-        ).await;
+        let (resp, _cache_status, _, _block_reason) =
+            process_dns_wire_packet_full(state.clone(), &query_wire, client_ip, None, "DoH").await;
 
         assert!(!resp.is_empty());
         // Verify response wire is valid DNS message
@@ -1516,4 +1537,3 @@ mod tests {
         assert!(parsed.is_some());
     }
 }
-

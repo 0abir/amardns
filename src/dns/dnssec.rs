@@ -1,6 +1,6 @@
 use ring::signature::{
-    UnparsedPublicKey, ECDSA_P256_SHA256_FIXED, ED25519, RSA_PKCS1_2048_8192_SHA256,
-    RSA_PKCS1_2048_8192_SHA512,
+    ECDSA_P256_SHA256_FIXED, ED25519, RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA512,
+    UnparsedPublicKey,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -9,7 +9,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const IANA_ROOT_ANCHORS_URL: &str = "https://data.iana.org/root-anchors/root-anchors.xml";
 pub const IANA_ROOT_ANCHORS_P7S_URL: &str = "https://data.iana.org/root-anchors/root-anchors.p7s";
-
 
 /// DNSSEC Record Types (RFC 4034)
 pub const TYPE_DS: u16 = 43;
@@ -127,9 +126,12 @@ impl TrustAnchorStore {
                 key_tag: 20326,
                 algorithm: DnssecAlgorithm::RsaSha256,
                 digest_type: 2,
-                digest: hex_decode("E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D")
-                    .unwrap_or_default(),
-                digest_hex: "E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D".to_string(),
+                digest: hex_decode(
+                    "E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D",
+                )
+                .unwrap_or_default(),
+                digest_hex: "E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D"
+                    .to_string(),
                 valid_from: Some("2017-02-02T00:00:00+00:00".to_string()),
                 valid_until: None,
                 public_key: None,
@@ -140,9 +142,12 @@ impl TrustAnchorStore {
                 key_tag: 38696,
                 algorithm: DnssecAlgorithm::RsaSha256,
                 digest_type: 2,
-                digest: hex_decode("683D2D0ACB8C9B712A1948B27F741219298D0A450D612C483AF444A4C0FB2B16")
-                    .unwrap_or_default(),
-                digest_hex: "683D2D0ACB8C9B712A1948B27F741219298D0A450D612C483AF444A4C0FB2B16".to_string(),
+                digest: hex_decode(
+                    "683D2D0ACB8C9B712A1948B27F741219298D0A450D612C483AF444A4C0FB2B16",
+                )
+                .unwrap_or_default(),
+                digest_hex: "683D2D0ACB8C9B712A1948B27F741219298D0A450D612C483AF444A4C0FB2B16"
+                    .to_string(),
                 valid_from: Some("2024-07-18T00:00:00+00:00".to_string()),
                 valid_until: None,
                 public_key: None,
@@ -203,13 +208,21 @@ impl TrustAnchorStore {
         cache_path: Option<&str>,
     ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
         let (xml_resp, p7s_resp) = tokio::join!(
-            http.get(IANA_ROOT_ANCHORS_URL).timeout(std::time::Duration::from_secs(10)).send(),
-            http.get(IANA_ROOT_ANCHORS_P7S_URL).timeout(std::time::Duration::from_secs(10)).send(),
+            http.get(IANA_ROOT_ANCHORS_URL)
+                .timeout(std::time::Duration::from_secs(10))
+                .send(),
+            http.get(IANA_ROOT_ANCHORS_P7S_URL)
+                .timeout(std::time::Duration::from_secs(10))
+                .send(),
         );
 
         let xml_resp = xml_resp?;
         if !xml_resp.status().is_success() {
-            return Err(format!("Failed to fetch IANA root anchors XML: HTTP {}", xml_resp.status()).into());
+            return Err(format!(
+                "Failed to fetch IANA root anchors XML: HTTP {}",
+                xml_resp.status()
+            )
+            .into());
         }
         let xml_bytes = xml_resp.bytes().await?;
 
@@ -217,7 +230,9 @@ impl TrustAnchorStore {
         match p7s_resp {
             Ok(p7s_ok) if p7s_ok.status().is_success() => {
                 let p7s_bytes = p7s_ok.bytes().await?;
-                if let Err(e) = crate::dns::pkcs7::verify_iana_root_anchors_smime(&xml_bytes, &p7s_bytes) {
+                if let Err(e) =
+                    crate::dns::pkcs7::verify_iana_root_anchors_smime(&xml_bytes, &p7s_bytes)
+                {
                     tracing::error!(
                         "[dnssec] S/MIME signature verification failed for IANA root anchors: {}. Rejecting update to prevent trust anchor poisoning.",
                         e
@@ -266,7 +281,6 @@ impl TrustAnchorStore {
 
         Ok(count)
     }
-
 
     /// Loads trust anchors from a cached XML file on disk
     #[allow(dead_code)]
@@ -361,7 +375,9 @@ impl NsecRecord {
     }
 
     pub fn matches(&self, qname: &str) -> bool {
-        self.name.trim_end_matches('.').eq_ignore_ascii_case(qname.trim_end_matches('.'))
+        self.name
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case(qname.trim_end_matches('.'))
     }
 
     pub fn covers(&self, qname: &str) -> bool {
@@ -514,7 +530,10 @@ impl DnssecValidationDetails {
 
     /// Returns true if this validation result represents a verified cryptographic denial-of-existence proof
     pub fn is_denial_of_existence(&self) -> bool {
-        self.algorithm.as_deref().map(|a| a.contains("Proof")).unwrap_or(false)
+        self.algorithm
+            .as_deref()
+            .map(|a| a.contains("Proof"))
+            .unwrap_or(false)
     }
 }
 
@@ -628,12 +647,7 @@ pub fn nsec3_hash_covers(owner_hash: &[u8], next_hash: &[u8], target_hash: &[u8]
 }
 
 /// Hashes a domain name according to RFC 5155 Section 5 (NSEC3 Iterated Hashing)
-pub fn hash_nsec3_name(
-    name: &str,
-    hash_alg: u8,
-    iterations: u16,
-    salt: &[u8],
-) -> Option<Vec<u8>> {
+pub fn hash_nsec3_name(name: &str, hash_alg: u8, iterations: u16, salt: &[u8]) -> Option<Vec<u8>> {
     if hash_alg != 1 {
         return None;
     }
@@ -646,13 +660,17 @@ pub fn hash_nsec3_name(
     let mut input = Vec::with_capacity(wire.len() + salt.len());
     input.extend_from_slice(&wire);
     input.extend_from_slice(salt);
-    let mut digest = ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, &input).as_ref().to_vec();
+    let mut digest = ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, &input)
+        .as_ref()
+        .to_vec();
 
     for _ in 0..iterations {
         let mut step = Vec::with_capacity(digest.len() + salt.len());
         step.extend_from_slice(&digest);
         step.extend_from_slice(salt);
-        digest = ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, &step).as_ref().to_vec();
+        digest = ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, &step)
+            .as_ref()
+            .to_vec();
     }
 
     Some(digest)
@@ -761,13 +779,12 @@ pub fn parse_iana_root_anchors_xml(xml: &str, now_epoch: Option<u64>) -> Vec<Dyn
             }
         }
 
-        let key_tag = extract_xml_tag(block_content, "KeyTag")
-            .and_then(|s| s.parse::<u16>().ok());
+        let key_tag = extract_xml_tag(block_content, "KeyTag").and_then(|s| s.parse::<u16>().ok());
         let algorithm = extract_xml_tag(block_content, "Algorithm")
             .and_then(|s| s.parse::<u8>().ok())
             .map(DnssecAlgorithm::from);
-        let digest_type = extract_xml_tag(block_content, "DigestType")
-            .and_then(|s| s.parse::<u8>().ok());
+        let digest_type =
+            extract_xml_tag(block_content, "DigestType").and_then(|s| s.parse::<u8>().ok());
         let digest_hex = extract_xml_tag(block_content, "Digest");
 
         if let (Some(tag), Some(alg), Some(dtype), Some(dhex)) =
@@ -874,16 +891,14 @@ pub fn verify_dnssec_signature(
             if public_key.is_empty() {
                 return false;
             }
-            let peer_public_key =
-                UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA256, public_key);
+            let peer_public_key = UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA256, public_key);
             peer_public_key.verify(signed_data, signature).is_ok()
         }
         DnssecAlgorithm::RsaSha512 => {
             if public_key.is_empty() {
                 return false;
             }
-            let peer_public_key =
-                UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA512, public_key);
+            let peer_public_key = UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA512, public_key);
             peer_public_key.verify(signed_data, signature).is_ok()
         }
         _ => {
@@ -972,8 +987,14 @@ pub fn parse_ds_rdata(rdata: &[u8], name: String) -> Option<DsRecord> {
 }
 
 /// Parses an NSEC record from DNS wire format RDATA (RFC 4034 Section 4)
-pub fn parse_nsec_rdata(wire: &[u8], rdata_offset: usize, rdlen: usize, name: String) -> Option<NsecRecord> {
-    let (next_domain_name, next_offset) = crate::dns::parser::parse_name_with_offset(wire, rdata_offset)?;
+pub fn parse_nsec_rdata(
+    wire: &[u8],
+    rdata_offset: usize,
+    rdlen: usize,
+    name: String,
+) -> Option<NsecRecord> {
+    let (next_domain_name, next_offset) =
+        crate::dns::parser::parse_name_with_offset(wire, rdata_offset)?;
     if next_offset > rdata_offset + rdlen {
         return None;
     }
@@ -1084,7 +1105,9 @@ pub fn verify_nsec3_nxdomain(qname: &str, nsec3s: &[Nsec3Record]) -> bool {
         };
 
         let ce_matched = nsec3s.iter().any(|n| n.matches_hash(&ce_hash));
-        let ncn_covered = nsec3s.iter().any(|n| n.covers_hash(&ncn_hash) || (n.is_opt_out() && n.covers_hash(&ncn_hash)));
+        let ncn_covered = nsec3s
+            .iter()
+            .any(|n| n.covers_hash(&ncn_hash) || (n.is_opt_out() && n.covers_hash(&ncn_hash)));
 
         if ce_matched && ncn_covered {
             return true;
@@ -1368,7 +1391,6 @@ pub fn validate_dnssec(wire: &[u8], now_epoch: Option<u64>) -> DnssecValidationD
 
     // Case 1: Wire has RRSIG records present - perform strict local cryptographic validation
     if !rrsigs.is_empty() {
-
         for rrsig in &rrsigs {
             // Check time validity window with 300s clock drift margin
             if (now + 300) < rrsig.sig_inception as u64 {
@@ -1640,20 +1662,20 @@ mod tests {
     fn test_dnssec_validation_bogus_expired_rrsig() {
         let wire = [
             0x12, 0x34, 0x81, 0x80, // Flags
-            0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00,
-            0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
+            0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x07, b'e', b'x', b'a', b'm', b'p',
+            b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
             // Answer: A 93.184.216.34
-            0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x04, 93, 184, 216, 34,
+            0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x04, 93, 184, 216,
+            34,
             // RRSIG (type covered 1 = A, alg 13 = ECDSA, expiration: 1600000000, inception: 1500000000)
-            0xc0, 0x0c, 0x00, 0x2e, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c,
-            0x00, 0x23, // rdlength = 35 (18 header + 13 name + 4 sig)
-            0x00, 0x01, 0x0d, 0x02, 0x00, 0x00, 0x01, 0x2c,
-            0x5f, 0x5e, 0x10, 0x00, // expiration: 1600000000
+            0xc0, 0x0c, 0x00, 0x2e, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00,
+            0x23, // rdlength = 35 (18 header + 13 name + 4 sig)
+            0x00, 0x01, 0x0d, 0x02, 0x00, 0x00, 0x01, 0x2c, 0x5f, 0x5e, 0x10,
+            0x00, // expiration: 1600000000
             0x59, 0x68, 0x2f, 0x00, // inception: 1500000000
             0x12, 0x34, // key tag: 4660
-            0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00,
-            0xaa, 0xbb, 0xcc, 0xdd, // signature bytes
-
+            0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00, 0xaa,
+            0xbb, 0xcc, 0xdd, // signature bytes
         ];
         // Test at now = 1700000000 (well past expiration 1600000000)
         let res = validate_dnssec(&wire, Some(1700000000));
@@ -1670,7 +1692,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let count = store.sync_from_iana(&client, None).await.expect("Live IANA S/MIME sync should succeed");
+        let count = store
+            .sync_from_iana(&client, None)
+            .await
+            .expect("Live IANA S/MIME sync should succeed");
         assert!(count >= 2);
         let anchors = store.get_anchors();
         assert!(anchors.iter().any(|a| a.key_tag == 20326));
@@ -1692,10 +1717,22 @@ mod tests {
 
     #[test]
     fn test_canonical_name_cmp() {
-        assert_eq!(canonical_name_cmp("example.com", "example.com"), std::cmp::Ordering::Equal);
-        assert_eq!(canonical_name_cmp("a.example.com", "b.example.com"), std::cmp::Ordering::Less);
-        assert_eq!(canonical_name_cmp("example.com", "a.example.com"), std::cmp::Ordering::Less);
-        assert_eq!(canonical_name_cmp("z.a.example.com", "b.example.com"), std::cmp::Ordering::Less);
+        assert_eq!(
+            canonical_name_cmp("example.com", "example.com"),
+            std::cmp::Ordering::Equal
+        );
+        assert_eq!(
+            canonical_name_cmp("a.example.com", "b.example.com"),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            canonical_name_cmp("example.com", "a.example.com"),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            canonical_name_cmp("z.a.example.com", "b.example.com"),
+            std::cmp::Ordering::Less
+        );
     }
 
     #[test]
@@ -1789,5 +1826,3 @@ mod tests {
         assert!(!verify_nsec3_nodata(existing, 1, &nsec3_list));
     }
 }
-
-

@@ -5,9 +5,9 @@ use std::fs::File;
 use std::io::BufReader;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls;
 use tokio_rustls::rustls::pki_types::CertificateDer;
-use tokio_rustls::TlsAcceptor;
 use tower_service::Service;
 
 /// Loads certificates and private key from PEM files and creates a rustls::ServerConfig.
