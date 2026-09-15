@@ -919,7 +919,8 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
     <span><span style="display:inline-block;width:8px;height:8px;background:rgba(0,255,231,.3);border:1px solid #00ffe7;margin-right:4px;vertical-align:middle"></span>AI</span>
     <span><span style="display:inline-block;width:8px;height:8px;background:rgba(255,45,107,.3);border:1px solid #ff2d6b;margin-right:4px;vertical-align:middle"></span>MANUAL</span>
   </div>
-  <div class="ap" style="margin-bottom:10px"><div class="apb"><div class="btags" id="btags"><span style="color:var(--mut);font-size:8px">Loading…</span></div></div></div>
+  <div class="ap" style="margin-bottom:6px"><div class="apb"><div class="btags" id="btags"><span style="color:var(--mut);font-size:8px">Loading…</span></div></div></div>
+  <div id="btags-paging" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-size:10px;color:var(--sub);min-height:22px"></div>
   <div class="action-input-row">
     <button class="btn btn-d" id="btn-clear-block" style="white-space:nowrap;flex-shrink:0"> Clean</button>
     <input class="fld" id="block-in" aria-label="Domain to block" placeholder="domain.com (comma-sep)" style="flex:1;min-width:0">
@@ -928,7 +929,8 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
 
   <div class="sh">Whitelist</div>
   <div style="color:var(--sub);font-size:11px;margin-bottom:8px">Whitelisted domains bypass all intelligence checks.</div>
-  <div class="ap" style="margin-bottom:10px"><div class="apb"><div class="btags" id="wltags"><span style="color:var(--mut);font-size:8px">Loading…</span></div></div></div>
+  <div class="ap" style="margin-bottom:6px"><div class="apb"><div class="btags" id="wltags"><span style="color:var(--mut);font-size:8px">Loading…</span></div></div></div>
+  <div id="wltags-paging" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-size:10px;color:var(--sub);min-height:22px"></div>
   <div class="action-input-row">
     <button class="btn btn-d" id="btn-clear-wl" style="white-space:nowrap;flex-shrink:0"> Clean</button>
     <input class="fld" id="wl-in" aria-label="Domain to whitelist" placeholder="domain.com (comma-sep)" style="flex:1;min-width:0">
@@ -937,7 +939,8 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
 
   <div class="sh">Common Domains</div>
   <div style="color:var(--sub);font-size:11px;margin-bottom:8px">Common domains bypass DGA and entropy checks.</div>
-  <div class="ap" style="margin-bottom:10px"><div class="apb"><div class="btags" id="comtags"><span style="color:var(--mut);font-size:8px">Loading…</span></div></div></div>
+  <div class="ap" style="margin-bottom:6px"><div class="apb"><div class="btags" id="comtags"><span style="color:var(--mut);font-size:8px">Loading…</span></div></div></div>
+  <div id="comtags-paging" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-size:10px;color:var(--sub);min-height:22px"></div>
   <div class="action-input-row">
     <button class="btn btn-d" id="btn-clear-com" style="white-space:nowrap;flex-shrink:0"> Clean</button>
     <input class="fld" id="com-in" aria-label="Domain for common list" placeholder="domain.com (comma-sep)" style="flex:1;min-width:0">
@@ -1093,6 +1096,9 @@ if(typeof window!=='undefined'){
   window.addEventListener('mouseup',function(){_isMouseDown=false;},true);
 }
 var _expandedGroups=new Set();
+var _blockPage=1, _blockPageSize=25;
+var _wlPage=1, _wlPageSize=25;
+var _comPage=1, _comPageSize=25;
 var _lastBlkCount=null;
 var _lastWlCount=null;
 function isNodeSelected(node){
@@ -2586,15 +2592,54 @@ function renderBlockRow(row){
   }
   return'<div class="btag" style="'+style+'"'+tip+'>'+tagBadge+'<span>'+dom+'</span><span class="btag-x" data-domain='+JSON.stringify(dom)+' data-auto="0"></span></div>';
 }
+function renderPagination(containerId, currentPage, totalPages, totalGroups, totalDomains, pageHandlerName){
+  var pEl=document.getElementById(containerId);
+  if(!pEl)return;
+  if(totalDomains===0){
+    pEl.innerHTML='';
+    return;
+  }
+  if(totalPages<=1&&totalGroups<=25){
+    pEl.innerHTML='<span style="color:var(--mut);font-size:9px">Total: '+totalDomains+' domains ('+totalGroups+' root groups)</span>';
+    return;
+  }
+  var start=(currentPage-1)*25+1;
+  var end=Math.min(currentPage*25,totalGroups);
+  var prevDis=currentPage<=1?'disabled style="opacity:0.35;cursor:not-allowed;padding:2px 8px;font-size:10px"':'style="padding:2px 8px;font-size:10px"';
+  var nextDis=currentPage>=totalPages?'disabled style="opacity:0.35;cursor:not-allowed;padding:2px 8px;font-size:10px"':'style="padding:2px 8px;font-size:10px"';
+
+  pEl.innerHTML=
+    '<span>Showing <b>'+start+'–'+end+'</b> of <b>'+totalGroups+'</b> groups ('+totalDomains+' domains)</span>'+
+    '<div style="display:flex;gap:6px;align-items:center">'+
+      '<button class="btn btn-d" '+prevDis+' onclick="'+pageHandlerName+'('+(currentPage-1)+')">◀ Prev</button>'+
+      '<span style="font-family:var(--fm);color:var(--acc)">'+currentPage+' / '+totalPages+'</span>'+
+      '<button class="btn btn-d" '+nextDis+' onclick="'+pageHandlerName+'('+(currentPage+1)+')">Next ▶</button>'+
+    '</div>';
+}
+
 // Blocklist
+function setBlockPage(p){
+  _blockPage=p;
+  loadBlock();
+}
 function loadBlock(){
   api('/api/blocklist').then(function(d){
     var tags=document.getElementById('btags');
-    if(!d.domains||!d.domains.length){tags.innerHTML='<span style="color:var(--mut);font-size:8px">Blocklist empty.</span>';return;}
+    if(!d.domains||!d.domains.length){
+      tags.innerHTML='<span style="color:var(--mut);font-size:8px">Blocklist empty.</span>';
+      renderPagination('btags-paging',1,1,0,0,'setBlockPage');
+      return;
+    }
     var grouped=groupDomainsByRoot(d.domains);
+    var totalPages=Math.max(1,Math.ceil(grouped.order.length/_blockPageSize));
+    if(_blockPage>totalPages)_blockPage=totalPages;
+    if(_blockPage<1)_blockPage=1;
+    var start=(_blockPage-1)*_blockPageSize;
+    var pageRoots=grouped.order.slice(start,start+_blockPageSize);
+
     var html=[];
-    for(var k=0;k<grouped.order.length;k++){
-      var root=grouped.order[k];
+    for(var k=0;k<pageRoots.length;k++){
+      var root=pageRoots[k];
       var items=grouped.groups[root];
       if(items.length>=3){
         var itemDoms=items.map(function(it){return typeof it==='string'?it:it.domain;});
@@ -2638,6 +2683,7 @@ function loadBlock(){
     if(tags.innerHTML!==newHtml&&!isNodeSelected(tags)&&!_isMouseDown){
       tags.innerHTML=newHtml;
     }
+    renderPagination('btags-paging',_blockPage,totalPages,grouped.order.length,d.domains.length,'setBlockPage');
   }).catch(function(e){var tags=document.getElementById('btags');if(tags&&!tags.children.length)tags.innerHTML='<span style="color:var(--mut);font-size:8px">Blocklist empty.</span>';});
 }
 function _cleanDom(str) {
@@ -2681,6 +2727,7 @@ function removeBlock(el,domain,isAuto,domainsList){
         toast('Unblocked group: '+domain,'ok');
         var grp=el.closest('.btag-group');
         if(grp)grp.remove();
+        loadBlock();
         go();
       }).catch(function(e){toast(e.message,'er');});
     return;
@@ -2699,6 +2746,7 @@ function removeBlock(el,domain,isAuto,domainsList){
         if(b){b.innerHTML=rem.length+' subdomains <span class="grp-arrow">'+(grp.querySelector('.group-subdomains').style.display==='none'?'▾':'▴')+'</span>';}
       }
     }
+    loadBlock();
     go();
   }).catch(function(e){toast(e.message,'er');});
 }
@@ -2711,14 +2759,28 @@ function clearBlock(){
 }
 
 // Whitelist
+function setWlPage(p){
+  _wlPage=p;
+  loadWhitelist();
+}
 function loadWhitelist(){
   api('/api/whitelist').then(function(d){
     var tags=document.getElementById('wltags');
-    if(!d.domains||!d.domains.length){tags.innerHTML='<span style="color:var(--mut);font-size:8px">Whitelist empty.</span>';return;}
+    if(!d.domains||!d.domains.length){
+      tags.innerHTML='<span style="color:var(--mut);font-size:8px">Whitelist empty.</span>';
+      renderPagination('wltags-paging',1,1,0,0,'setWlPage');
+      return;
+    }
     var grouped=groupDomainsByRoot(d.domains);
+    var totalPages=Math.max(1,Math.ceil(grouped.order.length/_wlPageSize));
+    if(_wlPage>totalPages)_wlPage=totalPages;
+    if(_wlPage<1)_wlPage=1;
+    var start=(_wlPage-1)*_wlPageSize;
+    var pageRoots=grouped.order.slice(start,start+_wlPageSize);
+
     var html=[];
-    for(var k=0;k<grouped.order.length;k++){
-      var root=grouped.order[k];
+    for(var k=0;k<pageRoots.length;k++){
+      var root=pageRoots[k];
       var items=grouped.groups[root];
       if(items.length>=3){
         var itemDoms=items.map(function(it){return typeof it==='string'?it:it.domain;});
@@ -2748,6 +2810,7 @@ function loadWhitelist(){
       }
     }
     var newHtml=html.join('');if(tags.innerHTML!==newHtml&&!isNodeSelected(tags)&&!_isMouseDown)tags.innerHTML=newHtml;
+    renderPagination('wltags-paging',_wlPage,totalPages,grouped.order.length,d.domains.length,'setWlPage');
   }).catch(function(e){var tags=document.getElementById('wltags');if(tags)tags.innerHTML='<span style="color:var(--mut);font-size:8px">Whitelist empty.</span>';});
 }
 function addWhitelist(){
@@ -2775,6 +2838,7 @@ function removeWhitelist(el,domain,domainsList){
         var grp=el.closest('.wltag-group');
         if(grp)grp.remove();
         toast('Removed group: '+domain,'ok');
+        loadWhitelist();
       }).catch(function(e){toast(e.message,'er');});
     return;
   }
@@ -2791,6 +2855,7 @@ function removeWhitelist(el,domain,domainsList){
       }
     }
     toast('Removed: '+domain,'ok');
+    loadWhitelist();
   }).catch(function(e){toast(e.message,'er');});
 }
 function clearWhitelist(){
@@ -2801,21 +2866,73 @@ function clearWhitelist(){
 }
 
 // Common
+function setComPage(p){
+  _comPage=p;
+  loadCommon();
+}
 function loadCommon(){
   api('/api/common').then(function(d){
     var tags=document.getElementById('comtags');
-    if(!d.domains||!d.domains.length){tags.innerHTML='<span style="color:var(--mut);font-size:8px">Common list empty.</span>';return;}
-    var newHtml=d.domains.map(function(row){
-      var dom=typeof row==='string'?row:row.domain;
-      var rs=typeof row==='object'&&row.reason?row.reason:'';
-      var clr=tc(rs);
-      var bClr=clr.startsWith('#')?clr+'44':clr.replace('var(--','rgba(0,255,231,').replace(')','0.25)');
-      var bg=clr.startsWith('#')?clr+'11':clr.replace(')','0.05)');
-      var style='border-color:'+bClr+';background:'+bg+';color:var(--txt)';
-      var reasonHtml=rs?(' · <span style="color:'+clr+';opacity:1">'+rs+'</span>'):'';
-      return'<div class="btag" style="'+style+'">'+dom+'<span style="font-size:8px">'+reasonHtml+'</span><span class="btag-x" data-domain='+JSON.stringify(dom)+' data-list="com"></span></div>';
-    }).join('');
+    if(!d.domains||!d.domains.length){
+      tags.innerHTML='<span style="color:var(--mut);font-size:8px">Common list empty.</span>';
+      renderPagination('comtags-paging',1,1,0,0,'setComPage');
+      return;
+    }
+    var grouped=groupDomainsByRoot(d.domains);
+    var totalPages=Math.max(1,Math.ceil(grouped.order.length/_comPageSize));
+    if(_comPage>totalPages)_comPage=totalPages;
+    if(_comPage<1)_comPage=1;
+    var start=(_comPage-1)*_comPageSize;
+    var pageRoots=grouped.order.slice(start,start+_comPageSize);
+
+    var html=[];
+    for(var k=0;k<pageRoots.length;k++){
+      var root=pageRoots[k];
+      var items=grouped.groups[root];
+      if(items.length>=3){
+        var itemDoms=items.map(function(it){return typeof it==='string'?it:it.domain;});
+        var subHtml=items.map(function(row){
+          var dom=typeof row==='string'?row:row.domain;
+          var rs=typeof row==='object'&&row.reason?row.reason:'';
+          var clr=tc(rs);
+          var bClr=clr.startsWith('#')?clr+'44':clr.replace('var(--','rgba(0,255,231,').replace(')','0.25)');
+          var bg=clr.startsWith('#')?clr+'11':clr.replace(')','0.05)');
+          var style='border-color:'+bClr+';background:'+bg+';color:var(--txt)';
+          var reasonHtml=rs?(' · <span style="color:'+clr+';opacity:1">'+rs+'</span>'):'';
+          return '<div class="btag" style="'+style+'">'+dom+'<span style="font-size:8px">'+reasonHtml+'</span><span class="btag-x" data-domain='+JSON.stringify(dom)+' data-list="com"></span></div>';
+        }).join('');
+        var isOpen=_expandedGroups.has(root);
+        var disp=isOpen?'flex':'none';
+        var arrowTxt=isOpen?'▴':'▾';
+        html.push(
+          '<div class="comtag-group" data-group="'+root+'">'+
+            '<div class="btag comtag-group-hdr" style="border-color:rgba(0,255,231,0.4);background:rgba(0,255,231,0.08);color:var(--txt);cursor:pointer">'+
+              '<span style="color:var(--acc);font-weight:700">*.'+root+'</span>'+
+              '<span class="grp-badge" style="background:rgba(0,255,231,0.2);color:var(--acc)">'+items.length+' subdomains <span class="grp-arrow">'+arrowTxt+'</span></span>'+
+              '<span class="btag-x" data-domain="*.'+root+'" data-list="com" data-domains='+JSON.stringify(JSON.stringify(itemDoms))+' title="Remove all '+items.length+' subdomains"></span>'+
+            '</div>'+
+            '<div class="group-subdomains" style="display:'+disp+';background:rgba(0,0,0,0.3);border:1px dashed rgba(0,255,231,0.25)">'+
+              subHtml+
+            '</div>'+
+          '</div>'
+        );
+      } else {
+        for(var j=0;j<items.length;j++){
+          var row=items[j];
+          var dom=typeof row==='string'?row:row.domain;
+          var rs=typeof row==='object'&&row.reason?row.reason:'';
+          var clr=tc(rs);
+          var bClr=clr.startsWith('#')?clr+'44':clr.replace('var(--','rgba(0,255,231,').replace(')','0.25)');
+          var bg=clr.startsWith('#')?clr+'11':clr.replace(')','0.05)');
+          var style='border-color:'+bClr+';background:'+bg+';color:var(--txt)';
+          var reasonHtml=rs?(' · <span style="color:'+clr+';opacity:1">'+rs+'</span>'):'';
+          html.push('<div class="btag" style="'+style+'">'+dom+'<span style="font-size:8px">'+reasonHtml+'</span><span class="btag-x" data-domain='+JSON.stringify(dom)+' data-list="com"></span></div>');
+        }
+      }
+    }
+    var newHtml=html.join('');
     if(tags.innerHTML!==newHtml)tags.innerHTML=newHtml;
+    renderPagination('comtags-paging',_comPage,totalPages,grouped.order.length,d.domains.length,'setComPage');
   });
 }
 function addCommon(){
@@ -2835,8 +2952,32 @@ function addCommon(){
     loadCommon();
   }).catch(function(e){toast(e.message,'er');});
 }
-function removeCommon(el,domain){
-  api('/api/common','DELETE',{domain:domain}).then(function(){el.closest('.wltag').remove();}).catch(function(e){toast(e.message,'er');});
+function removeCommon(el,domain,domainsList){
+  if(domainsList&&Array.isArray(domainsList)){
+    Promise.all(domainsList.map(function(d){return api('/api/common','DELETE',{domain:d});}))
+      .then(function(){
+        var grp=el.closest('.comtag-group');
+        if(grp)grp.remove();
+        toast('Removed common group: '+domain,'ok');
+        loadCommon();
+      }).catch(function(e){toast(e.message,'er');});
+    return;
+  }
+  api('/api/common','DELETE',{domain:domain}).then(function(){
+    var grp=el.closest('.comtag-group');
+    el.closest('.btag').remove();
+    if(grp){
+      var rem=grp.querySelectorAll('.group-subdomains .btag');
+      if(!rem||rem.length===0){
+        grp.remove();
+      }else{
+        var b=grp.querySelector('.grp-badge');
+        if(b){b.innerHTML=rem.length+' subdomains <span class="grp-arrow">'+(grp.querySelector('.group-subdomains').style.display==='none'?'▾':'▴')+'</span>';}
+      }
+    }
+    toast('Removed: '+domain,'ok');
+    loadCommon();
+  }).catch(function(e){toast(e.message,'er');});
 }
 function clearCommon(){
   if(!confirm('Clear all common domains?'))return;
@@ -3346,7 +3487,18 @@ $('wltags').addEventListener('click',function(e){
     toggleDomainGroup(hdr);
   }
 });
-$('comtags').addEventListener('click',function(e){var x=e.target.closest('.btag-x');if(!x)return;removeCommon(x,x.dataset.domain);});
+$('comtags').addEventListener('click',function(e){
+  var x=e.target.closest('.btag-x');
+  if(x){
+    var doms=x.dataset.domains?JSON.parse(x.dataset.domains):null;
+    removeCommon(x,x.dataset.domain,doms);
+    return;
+  }
+  var hdr=e.target.closest('.comtag-group-hdr');
+  if(hdr){
+    toggleDomainGroup(hdr);
+  }
+});
 
 // Feature 8: Real-Time SSE Log Stream for live query monitoring
 var _sseSource=null;
