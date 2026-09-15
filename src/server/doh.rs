@@ -377,7 +377,7 @@ pub async fn add_security_headers(mut response: Response) -> Response {
     );
     headers.insert(
         header::HeaderName::from_static("alt-svc"),
-        header::HeaderValue::from_static("h3=\":443\"; ma=86400"),
+        header::HeaderValue::from_static("clear"),
     );
     response
 }
@@ -601,9 +601,14 @@ pub async fn process_dns_query(
     let (resp_bytes, cache_status, dnssec_status, block_reason) =
         process_dns_wire_packet_full(state, query_wire, client_ip, dev_tag, proto).await;
 
+    let min_ttl = crate::dns::parser::extract_min_ttl(&resp_bytes)
+        .unwrap_or(60)
+        .clamp(1, 3600);
+
     let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/dns-message")
+        .header(header::CACHE_CONTROL, format!("public, max-age={}", min_ttl))
         .header("x-cache", cache_status)
         .header("x-dnssec", dnssec_status);
 
