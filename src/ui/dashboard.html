@@ -1554,13 +1554,19 @@ var _selectedLogId = null;
 var _logAutoScroll = true;
 var _logPaused = false;
 var _logFilter = '';
+var _filterStatus = 'ALL';
+var _filterProto = 'ALL';
+var _filterSearch = '';
 var _dnssecFilter = 'all';
 var _userScrolledLogs = false;
+var _lastTotalQueries = 0;
+var _lastLogTime = 0;
 
 function escHtml(s){
   if(s==null)return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
+var _esc = escHtml;
 
 function padStr(s, len) {
   s = '' + (s || '');
@@ -1655,29 +1661,31 @@ function renderLogs(d) {
   }
 
   var filtered = _logs.filter(function(l) {
-    if (_filterStatus === 'BLOCKED') {
+    if (_filterStatus && _filterStatus !== 'ALL') {
       var s = (l.status || '').toUpperCase();
-      if (!s.includes('BLOCK') && !s.includes('REBIND') && !s.includes('GSB') && !s.includes('TTL') && s !== 'NEG_HIT') return false;
-    } else if (_filterStatus === 'CACHE') {
-      var s = (l.status || '').toUpperCase();
-      if (s !== 'HIT' && s !== 'STALE_HIT') return false;
-    } else if (_filterStatus === 'RESOLVED') {
-      var s = (l.status || '').toUpperCase();
-      if (s !== 'RESOLVED' && s !== 'ALLOW') return false;
+      if (_filterStatus === 'BLOCKED') {
+        if (!s.includes('BLOCK') && !s.includes('REBIND') && !s.includes('GSB') && !s.includes('TTL') && s !== 'NEG_HIT') return false;
+      } else if (_filterStatus === 'CACHE') {
+        if (s !== 'HIT' && s !== 'STALE_HIT') return false;
+      } else if (_filterStatus === 'RESOLVED') {
+        if (s !== 'RESOLVED' && s !== 'ALLOW') return false;
+      }
     }
 
-    if (_filterProto !== 'ALL') {
+    if (_filterProto && _filterProto !== 'ALL') {
       var p = (l.proto || '').toUpperCase();
       if (!p.includes(_filterProto)) return false;
     }
 
-    if (_filterSearch) {
-      var q = _filterSearch.toLowerCase();
+    var q = (_logFilter || _filterSearch || '').toLowerCase();
+    if (q) {
       var dom = (l.domain || '').toLowerCase();
       var cl = (l.client || '').toLowerCase();
       var rea = (l.reason || '').toLowerCase();
       var ups = (l.upstream || '').toLowerCase();
-      if (!dom.includes(q) && !cl.includes(q) && !rea.includes(q) && !ups.includes(q)) return false;
+      var stStr = (l.status || '').toLowerCase();
+      var qType = (l.qtype || '').toLowerCase();
+      if (!dom.includes(q) && !cl.includes(q) && !rea.includes(q) && !ups.includes(q) && !stStr.includes(q) && !qType.includes(q)) return false;
     }
     return true;
   });
@@ -1698,7 +1706,7 @@ function renderLogs(d) {
 
   var linesHtml = filtered.map(function(l) {
     var isSel = inspected && inspected.id === l.id;
-    var d = new Date(l.t);
+    var d = new Date(l.t || Date.now());
     var timeStr = String(d.getHours()).padStart(2, '0') + ':' +
                   String(d.getMinutes()).padStart(2, '0') + ':' +
                   String(d.getSeconds()).padStart(2, '0') + '.' +
@@ -1766,7 +1774,7 @@ function renderLogs(d) {
       }
     }
 
-    var latStr = '(' + (l.lat != null ? l.lat : 0) + 'ms, ' + (l.rcode === 0 ? 'NOERROR' : (l.rcode === 3 ? 'NXDOMAIN' : (l.rcode === 2 ? 'SERVFAIL' : 'RCODE:' + l.rcode))) + ')';
+    var latStr = '(' + (l.lat != null ? l.lat : 0) + 'ms, ' + (l.rcode === 0 ? 'NOERROR' : (l.rcode === 3 ? 'NXDOMAIN' : (l.rcode === 2 ? 'SERVFAIL' : 'RCODE:' + (l.rcode != null ? l.rcode : 0)))) + ')';
     
     var isBlocked = stUpper.includes('BLOCK') || stUpper.includes('REBIND') || stUpper.includes('GSB') || stUpper.includes('TTL') || stUpper === 'NEG_HIT';
     var rawMeta = isBlocked ? (l.reason || 'Filter') : (l.upstream || 'AeroCache');
@@ -1821,7 +1829,7 @@ function renderLogs(d) {
       '</div>';
   }).join('');
 
-  var shouldScroll = !_userScrolledLogs;
+  var shouldScroll = _logAutoScroll && !_userScrolledLogs;
   box.innerHTML = linesHtml;
   if (shouldScroll) {
     box.scrollTop = box.scrollHeight;
@@ -1853,7 +1861,7 @@ function updateParamInspector(l) {
   }
 
   if (badge) {
-    badge.textContent = (_selectedLogId === l.id ? 'Pinned Query #' : 'Latest Query #') + l.id;
+    badge.textContent = (_selectedLogId === l.id ? 'Pinned Query #' : 'Latest Query #') + (l.id != null ? l.id : '');
     badge.style.borderColor = _selectedLogId === l.id ? 'var(--acc)' : 'rgba(0,255,231,.25)';
   }
 
@@ -1879,9 +1887,9 @@ function updateParamInspector(l) {
     st('pv-dnssec-sub', 'Standard domain (No RRSIG records)');
   }
 
-  var latColor = l.lat < 5 ? 'var(--good)' : (l.lat < 50 ? 'var(--acc)' : 'var(--warn)');
+  var latColor = (l.lat != null && l.lat < 5) ? 'var(--good)' : ((l.lat != null && l.lat < 50) ? 'var(--acc)' : 'var(--warn)');
   st('pv-latency', '<span style="color:' + latColor + '">' + (l.lat != null ? l.lat : 0) + ' ms</span>');
-  var rcName = l.rcode === 0 ? 'NOERROR (0)' : (l.rcode === 3 ? 'NXDOMAIN (3)' : (l.rcode === 2 ? 'SERVFAIL (2)' : 'RCODE ' + l.rcode));
+  var rcName = l.rcode === 0 ? 'NOERROR (0)' : (l.rcode === 3 ? 'NXDOMAIN (3)' : (l.rcode === 2 ? 'SERVFAIL (2)' : 'RCODE ' + (l.rcode != null ? l.rcode : 0)));
   st('pv-rcode', escHtml(rcName));
 
   var rawReason = l.reason && l.reason !== 'none' ? l.reason : '';
@@ -1889,16 +1897,18 @@ function updateParamInspector(l) {
   var reasonText = reasonTag || 'No threat detected';
   var reasonColor = rawReason ? 'var(--bad)' : 'var(--good)';
   st('pv-reason', '<span style="color:' + reasonColor + '">' + escHtml(reasonText) + '</span>');
-  var verdictText = l.status.includes('BLOCK') ? ('Blocked by ' + (reasonTag || 'Filter')) : ('Resolver: ' + formatResolverName(l.upstream || 'AeroCache'));
+  var stUpper = String(l.status || 'RESOLVED').toUpperCase();
+  var isBlocked = stUpper.includes('BLOCK') || stUpper.includes('REBIND') || stUpper.includes('GSB') || stUpper.includes('TTL') || stUpper === 'NEG_HIT';
+  var verdictText = isBlocked ? ('Blocked by ' + (reasonTag || 'Filter')) : ('Resolver: ' + formatResolverName(l.upstream || 'AeroCache'));
   st('pv-verdict', escHtml(verdictText));
 
-  var dObj = new Date(l.t);
+  var dObj = new Date(l.t || Date.now());
   var timeFmt = dObj.toLocaleTimeString() + '.' + String(dObj.getMilliseconds()).padStart(3, '0');
-  var ageSec = Math.max(0, Math.round((Date.now() - l.t) / 1000));
+  var ageSec = Math.max(0, Math.round((Date.now() - (l.t || Date.now())) / 1000));
   st('pv-time', timeFmt);
   st('pv-age', ageSec < 60 ? ageSec + 's ago' : Math.round(ageSec / 60) + 'm ago');
 
-  var rawStr = '[' + dObj.toISOString() + '] client=' + l.client + ' proto=' + l.proto + ' qname=' + l.domain + ' qtype=' + l.qtype + ' status=' + l.status + ' rcode=' + l.rcode + ' lat=' + l.lat + 'ms upstream="' + l.upstream + '" reason="' + l.reason + '"';
+  var rawStr = '[' + dObj.toISOString() + '] client=' + (l.client || 'unknown') + ' proto=' + (l.proto || 'DoH') + ' qname=' + (l.domain || '—') + ' qtype=' + (l.qtype || 'A') + ' status=' + (l.status || 'RESOLVED') + ' rcode=' + (l.rcode != null ? l.rcode : 0) + ' lat=' + (l.lat != null ? l.lat : 0) + 'ms upstream="' + (l.upstream || 'AeroCache') + '" reason="' + (l.reason || 'none') + '"';
   st('pv-raw', escHtml(rawStr));
 
   if (actions) {
