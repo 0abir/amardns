@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#000508">
+<meta name="description" content="AmarDNS Autonomous AI-Shielded Zero-GC Private DNS Resolver Gateway Dashboard & Telemetry Console.">
+<meta name="robots" content="noindex, nofollow">
 <meta name="mobile-web-app-capable" content="yes">
 <title>Amar DNS</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2224%22 fill=%22%2300e5cc%22/><path d=%22M50 20 L75 32 V52 C75 68 50 80 50 80 C50 80 25 68 25 52 V32 Z%22 fill=%22%23000508%22/></svg>">
@@ -89,13 +91,12 @@ html,body{min-height:100%;min-height:-webkit-fill-available;background:var(--bg)
 .nar-ts{color:var(--mut);font-size:11px;flex-shrink:0}
 
 /* Tabs */
-.tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:14px;border-bottom:1px solid var(--brd);justify-content:center}
-.tab{padding:8px 14px;font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--sub);cursor:pointer;transition:all .15s;border-bottom:2px solid transparent;margin-bottom:-1px;border-radius:4px 4px 0 0;min-height:38px;display:inline-flex;align-items:center;justify-content:center;touch-action:manipulation}
-@media(max-width:900px){.tab{flex:1 1 calc(25% - 4px);text-align:center;padding:8px 6px;font-size:10px}}
-@media(max-width:640px){.tab{flex:1 1 calc(33.333% - 4px);text-align:center;padding:7px 4px;font-size:9.5px;letter-spacing:.04em}}
-@media(max-width:380px){.tab{flex:1 1 calc(50% - 4px);font-size:9px;padding:7px 2px}}
-.tab:hover{color:var(--txt);background:rgba(0,255,231,.04)}
-.tab.on{color:var(--acc);border-bottom-color:var(--acc);background:rgba(0,255,231,.06)}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--brd);justify-content:center;align-items:center}
+.tab{padding:8px 16px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--sub);cursor:pointer;transition:all .15s ease;border-bottom:2px solid transparent;margin-bottom:-1px;border-radius:4px 4px 0 0;min-height:38px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;flex-shrink:0;touch-action:manipulation}
+@media(max-width:768px){.tab{padding:7px 12px;font-size:10px;letter-spacing:.05em}}
+@media(max-width:480px){.tab{padding:6px 9px;font-size:9.5px}}
+.tab:hover{color:var(--txt);background:rgba(0,255,231,.05)}
+.tab.on{color:var(--acc);border-bottom-color:var(--acc);background:rgba(0,255,231,.08)}
 .tc{display:none}.tc.on{display:block}
 
 /* Section header */
@@ -287,15 +288,16 @@ select.fld option{background:var(--sur2)}
 .tdot-grn{background:#27c93f;box-shadow:0 0 5px rgba(39,201,63,.4)}
 .terminal-title{font-family:'Fira Code','Roboto Mono',monospace;font-size:11px;color:var(--sub);text-align:center;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .terminal-sub{font-family:'Fira Code','Roboto Mono',monospace;font-size:10px;color:var(--acc)}
-.terminal-col-header{display:grid;grid-template-columns:88px 52px 115px 42px minmax(130px,1fr) 115px 110px minmax(125px,auto);gap:10px;padding:7px 12px;font-family:'Fira Code','Roboto Mono',monospace;font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--sub);border-bottom:1px solid rgba(0,255,231,.1);background:rgba(0,255,231,.025);user-select:none;box-sizing:border-box;min-width:820px}
+.terminal-col-header{display:grid;grid-template-columns:95px 52px 95px 45px minmax(200px,1fr) 130px 145px 135px;gap:12px;padding:7px 12px;font-family:'Fira Code','Roboto Mono',monospace;font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--sub);border-bottom:1px solid rgba(0,255,231,.1);background:rgba(0,255,231,.025);user-select:none;box-sizing:border-box;min-width:950px}
 .terminal-col-header > *{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@keyframes logFadeIn{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:translateY(0)}}
-.terminal-body{height:350px;overflow-y:auto;overflow-x:auto;padding:6px;font-family:'Fira Code','Roboto Mono',SFMono-Regular,Consolas,monospace;font-size:11.5px;line-height:1.6;color:#a4b3c6}
+@keyframes logSlideIn{0%{opacity:0;transform:translateY(6px);background:rgba(0,255,231,.12)}100%{opacity:1;transform:translateY(0);background:transparent}}
+.terminal-body{height:350px;overflow-y:auto;overflow-x:auto;padding:6px;font-family:'Fira Code','Roboto Mono',SFMono-Regular,Consolas,monospace;font-size:11.5px;line-height:1.6;color:#a4b3c6;scroll-behavior:smooth}
 .terminal-body::-webkit-scrollbar{width:6px;height:6px}
 .terminal-body::-webkit-scrollbar-track{background:rgba(0,0,0,.3)}
 .terminal-body::-webkit-scrollbar-thumb{background:rgba(0,255,231,.25);border-radius:3px}
 .terminal-body::-webkit-scrollbar-thumb:hover{background:var(--acc)}
-.log-line{display:grid;grid-template-columns:88px 52px 115px 42px minmax(130px,1fr) 115px 110px minmax(125px,auto);gap:10px;align-items:center;width:100%;min-width:820px;padding:5px 10px;border-radius:4px;cursor:pointer;transition:background .12s ease,border-color .12s ease;border-left:2px solid transparent;margin-bottom:2px;box-sizing:border-box;animation:logFadeIn .2s ease-out}
+.log-line{display:grid;grid-template-columns:95px 52px 95px 45px minmax(200px,1fr) 130px 145px 135px;gap:12px;align-items:center;width:100%;min-width:950px;padding:5px 10px;border-radius:4px;cursor:pointer;transition:background .12s ease,border-color .12s ease;border-left:2px solid transparent;margin-bottom:2px;box-sizing:border-box}
+.log-line.log-new{animation:logSlideIn .35s cubic-bezier(.16,1,.3,1) forwards}
 .log-line:hover{background:rgba(0,255,231,.07);color:#f0fdf4}
 .log-line.active{background:rgba(0,255,231,.14);color:#00ffe7;border-left-color:var(--acc);box-shadow:inset 0 0 10px rgba(0,255,231,.12)}
 .log-line > *{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -325,16 +327,16 @@ select.fld option{background:var(--sur2)}
 .param-header-ico{color:var(--acc);font-size:14px}
 .param-header-txt{font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--txt)}
 .param-selected-badge{font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:3px;background:rgba(0,255,231,.08);color:var(--acc);border:1px solid rgba(0,255,231,.25);font-family:monospace}
-.param-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:14px;max-width:100%;width:100%}
-@media(min-width:540px){.param-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}}
-@media(min-width:1100px){.param-grid{grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}}
-@media(max-width:360px){.param-grid{grid-template-columns:1fr;gap:6px}}
-.param-card{background:var(--sur);border:1px solid var(--brd2);padding:10px 12px;clip-path:polygon(0 0,calc(100% - 6px) 0,100% 6px,100% 100%,6px 100%,0 calc(100% - 6px));transition:all .15s;min-width:0;max-width:100%;overflow:hidden;box-sizing:border-box}
+.param-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px;max-width:100%;width:100%}
+@media(min-width:680px){.param-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}}
+@media(min-width:1440px){.param-grid{grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}}
+@media(max-width:440px){.param-grid{grid-template-columns:1fr;gap:8px}}
+.param-card{background:var(--sur);border:1px solid var(--brd2);padding:12px 14px;clip-path:polygon(0 0,calc(100% - 6px) 0,100% 6px,100% 100%,6px 100%,0 calc(100% - 6px));transition:all .15s;min-width:0;max-width:100%;overflow:hidden;box-sizing:border-box}
 .param-card:hover{border-color:rgba(0,255,231,.3);box-shadow:0 0 10px rgba(0,255,231,.05)}
 .param-k{font-size:8.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--sub);margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.param-v{font-family:var(--fh);font-size:clamp(12px,1.6vw,14px);font-weight:700;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;max-width:100%}
+.param-v{font-family:var(--fh);font-size:clamp(12.5px,1.4vw,14.5px);font-weight:700;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;max-width:100%}
 .param-v.highlight{color:var(--acc)}
-.param-sub{font-size:10px;color:var(--sub);margin-top:3px;white-space:normal;line-height:1.35;word-break:break-word;overflow-wrap:break-word;overflow:hidden;max-width:100%}
+.param-sub{font-size:10px;color:var(--sub);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .param-raw-wrap{background:var(--sur);border:1px solid var(--brd2);padding:10px 12px;clip-path:polygon(0 0,calc(100% - 6px) 0,100% 6px,100% 100%,6px 100%,0 calc(100% - 6px));margin-bottom:20px;max-width:100%;overflow:hidden;box-sizing:border-box}
 .param-raw-lbl{font-size:8.5px;font-weight:700;letter-spacing:.12em;color:var(--sub);margin-bottom:6px}
 .param-raw-box{font-family:'Fira Code','Roboto Mono',monospace;font-size:11px;color:#a4b3c6;background:rgba(0,0,0,.35);padding:8px 12px;border:1px solid rgba(0,255,231,.1);border-radius:3px;user-select:all;word-break:break-all;white-space:pre-wrap;max-width:100%;overflow-x:auto;box-sizing:border-box}
@@ -1625,7 +1627,9 @@ function formatResolverName(raw) {
   return m.charAt(0).toUpperCase() + m.slice(1);
 }
 
-function buildLogRowHtml(l, isSel) {
+var _lastLogFilterKey = '';
+
+function buildLogRowHtml(l, isSel, isNew) {
   var d = new Date(l.t || Date.now());
   var timeStr = String(d.getHours()).padStart(2, '0') + ':' +
                 String(d.getMinutes()).padStart(2, '0') + ':' +
@@ -1654,7 +1658,6 @@ function buildLogRowHtml(l, isSel) {
   
   var typeStr = (l.qtype || 'A').toUpperCase();
   var domainStr = l.domain || '—';
-  if (domainStr.length > 28) domainStr = domainStr.substring(0, 27) + '…';
 
   var statusStr = l.status || 'RESOLVED';
   var statusClass = 'll-status-ok';
@@ -1716,7 +1719,9 @@ function buildLogRowHtml(l, isSel) {
     metaColor = '#94a3b8'; // Ash font color for all upstreams
   }
 
-  return '<div class="log-line' + (isSel ? ' active' : '') + '" data-log-id="' + l.id + '">' +
+  var cls = 'log-line' + (isSel ? ' active' : '') + (isNew ? ' log-new' : '');
+
+  return '<div class="' + cls + '" data-log-id="' + l.id + '">' +
     '<span class="ll-ts">' + timeStr + '</span>' +
     '<span class="ll-proto ' + protoClass + '">' + protoLabel + '</span>' +
     '<span class="ll-dev" title="' + escHtml(l.client) + '">' + escHtml(devStr) + '</span>' +
@@ -1744,18 +1749,61 @@ function renderLogs(d) {
   
   if (!box) return;
 
-  var currentQueries = d.totalQueries != null ? d.totalQueries : (d.stats ? d.stats.totalQueries : 0);
-  var currentBlocked = d.blockedQueries != null ? d.blockedQueries : (d.stats ? d.stats.blockedQueries : 0);
+  var currentQueries = d.dnsRequestsTotal != null ? d.dnsRequestsTotal : (d.totalQueries != null ? d.totalQueries : (d.stats ? d.stats.totalQueries : 0));
   var now = Date.now();
+  var speedVal = 0.0;
+
   if (_lastTotalQueries > 0 && now > _lastLogTime) {
     var deltaQ = Math.max(0, currentQueries - _lastTotalQueries);
     var deltaSec = (now - _lastLogTime) / 1000.0;
-    var speed = deltaSec > 0 ? (deltaQ / deltaSec).toFixed(1) : '0.0';
-    var avgL = (d.avgLatency != null ? d.avgLatency : 0) + 'ms avg';
-    if (speedStat) speedStat.textContent = speed + ' R/s · ' + avgL;
+    if (deltaSec > 0 && deltaQ > 0) {
+      speedVal = deltaQ / deltaSec;
+    }
   }
-  _lastTotalQueries = currentQueries;
-  _lastLogTime = now;
+
+  // Also check backend instant RPS (d.ai.rps)
+  if (speedVal === 0.0 && d.ai && d.ai.rps != null && d.ai.rps > 0) {
+    speedVal = Number(d.ai.rps);
+  }
+
+  // Check queries in recent 5s window from in-memory stream for real-time live responsiveness
+  if (_logs && _logs.length > 0) {
+    var recentWindow = _logs.filter(function(l){ return l.t && (now - l.t) <= 5000; }).length;
+    if (recentWindow > 0) {
+      var liveRps = recentWindow / 5.0;
+      if (liveRps > speedVal) speedVal = liveRps;
+    }
+  }
+
+  // Calculate live average latency from recent queries in memory or backend
+  var avgLatencyNum = 0;
+  if (_logs && _logs.length > 0) {
+    var latSum = 0;
+    var latCount = 0;
+    var recentSlice = _logs.slice(-50);
+    for (var i = 0; i < recentSlice.length; i++) {
+      if (recentSlice[i].lat != null) {
+        latSum += recentSlice[i].lat;
+        latCount++;
+      }
+    }
+    if (latCount > 0) {
+      avgLatencyNum = Math.round(latSum / latCount);
+    }
+  }
+  if (avgLatencyNum === 0) {
+    var bAvg = d.performance && d.performance.avgLatencyMs != null ? d.performance.avgLatencyMs : (d.avgLatency != null ? d.avgLatency : 0);
+    avgLatencyNum = Math.round(bAvg);
+  }
+
+  if (speedStat) {
+    speedStat.textContent = speedVal.toFixed(1) + ' R/s · ' + avgLatencyNum + 'ms avg';
+  }
+
+  if (currentQueries > 0) {
+    _lastTotalQueries = currentQueries;
+    _lastLogTime = now;
+  }
 
   if (countBadge) {
     countBadge.textContent = _logs.length + ' logged';
@@ -1801,7 +1849,7 @@ function renderLogs(d) {
 
   if (filtered.length === 0) {
     box.innerHTML = '<div style="color:var(--sub);font-size:11px;padding:12px 0;font-family:monospace;text-align:center">No matching queries found</div>';
-    _lastRenderedLogSig = '__EMPTY__';
+    _lastLogFilterKey = '__EMPTY__';
     updateParamInspector(null);
     return;
   }
@@ -1814,18 +1862,72 @@ function renderLogs(d) {
     inspected = filtered[filtered.length - 1];
   }
 
-  var sig = filtered.map(function(l){ return l.id + (inspected && inspected.id === l.id ? ':S' : ''); }).join(',');
-  if (sig !== _lastRenderedLogSig) {
+  var filterKey = (_filterStatus || '') + ':' + (_filterProto || '') + ':' + (_logFilter || _filterSearch || '');
+  var existingLines = box.querySelectorAll('.log-line');
+  var existingCount = existingLines.length;
+
+  var shouldScroll = _logAutoScroll && !_userScrolledLogs;
+
+  if (existingCount === 0 || _lastLogFilterKey !== filterKey) {
+    // Fresh render or filter changed: render all filtered rows cleanly without reflow jitter
+    _lastLogFilterKey = filterKey;
     var linesHtml = filtered.map(function(l) {
-      return buildLogRowHtml(l, inspected && inspected.id === l.id);
+      return buildLogRowHtml(l, inspected && inspected.id === l.id, false);
     }).join('');
-
     box.innerHTML = linesHtml;
-    _lastRenderedLogSig = sig;
-
-    var shouldScroll = _logAutoScroll && !_userScrolledLogs;
     if (shouldScroll) {
       box.scrollTop = box.scrollHeight;
+    }
+  } else {
+    // Incremental update: append only new incoming log rows
+    var lastRenderedEl = existingLines[existingLines.length - 1];
+    var lastRenderedId = lastRenderedEl ? Number(lastRenderedEl.dataset.logId) : -1;
+
+    var newItems = [];
+    var startIndex = -1;
+    for (var i = 0; i < filtered.length; i++) {
+      if (filtered[i].id > lastRenderedId) {
+        startIndex = i;
+        break;
+      }
+    }
+    if (startIndex !== -1) {
+      newItems = filtered.slice(startIndex);
+    }
+
+    if (newItems.length > 0) {
+      var frag = document.createDocumentFragment();
+      var tempDiv = document.createElement('div');
+      var newHtml = newItems.map(function(l) {
+        return buildLogRowHtml(l, inspected && inspected.id === l.id, true);
+      }).join('');
+      tempDiv.innerHTML = newHtml;
+      while (tempDiv.firstChild) {
+        frag.appendChild(tempDiv.firstChild);
+      }
+      box.appendChild(frag);
+
+      // Prune excess older lines from top of terminal to keep DOM light and fast
+      while (box.children.length > 300) {
+        box.removeChild(box.firstChild);
+      }
+
+      if (shouldScroll) {
+        box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
+      }
+    }
+
+    // Update active highlight without re-rendering existing rows
+    existingLines = box.querySelectorAll('.log-line');
+    for (var j = 0; j < existingLines.length; j++) {
+      var lineEl = existingLines[j];
+      var lid = Number(lineEl.dataset.logId);
+      var isAct = inspected && inspected.id === lid;
+      if (isAct && !lineEl.classList.contains('active')) {
+        lineEl.classList.add('active');
+      } else if (!isAct && lineEl.classList.contains('active')) {
+        lineEl.classList.remove('active');
+      }
     }
   }
 

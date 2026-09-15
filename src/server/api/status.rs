@@ -693,6 +693,7 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
         },
         "devices": devices_list,
         "dnsRequestsTotal": reqs,
+        "totalQueries": reqs,
         "upstreamsActive": active_upstreams,
         "upstreamsTotal": upstreams.len(),
         "avgLatency": avg_latency,
