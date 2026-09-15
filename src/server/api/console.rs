@@ -75,10 +75,10 @@ async fn handle_console_commands(
     let auth = check_auth(state, key, headers, "/api/console/commands");
     if !auth.is_admin() {
         return (
-            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
             [(header::CONTENT_TYPE, "application/json")],
             serde_json::json!({
-                "error": "Admin authorization required for console access"
+                "error": "This feature is only for Admin"
             })
             .to_string(),
         )
@@ -120,10 +120,11 @@ async fn handle_console_exec(
     let auth = check_auth(state, key, headers, "/api/console/exec");
     if !auth.is_admin() {
         return (
-            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
             [(header::CONTENT_TYPE, "application/json")],
             serde_json::json!({
-                "output": "Error: Admin authorization required. Please authenticate.",
+                "output": "This feature is only for Admin",
+                "error": "This feature is only for Admin",
                 "status": "error",
                 "command": raw_cmd,
                 "elapsed_ms": 0.0
@@ -1454,5 +1455,29 @@ mod tests {
         let (out, status) = execute_command(&state, "nonexistentcommand").await;
         assert_eq!(status, "error");
         assert!(out.contains("Command not recognized"));
+    }
+
+    #[tokio::test]
+    async fn test_console_auth_enforcement_view_token_rejected() {
+        let state = Arc::new(AppState::new(mock_config()));
+
+        // Generate regular view-only HMAC token (not DNS_MASTER_KEY)
+        let view_token = crate::security::auth::generate_hmac_token(&state.config.dns_token_secret, "/", 3600);
+
+        // 1. Test handle_console_commands with view token
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, format!("Bearer {}", view_token).parse().unwrap());
+        let res = handle_console_commands(&state, None, &headers).await;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // 2. Test handle_console_exec with view token
+        let res = handle_console_exec(&state, None, &headers, "stats").await;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // 3. Test handle_console_exec with Master Key (Admin)
+        let mut admin_headers = HeaderMap::new();
+        admin_headers.insert(header::AUTHORIZATION, "Bearer secret123".parse().unwrap());
+        let res = handle_console_exec(&state, None, &admin_headers, "stats").await;
+        assert_eq!(res.status(), StatusCode::OK);
     }
 }

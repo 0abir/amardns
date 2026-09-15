@@ -3624,6 +3624,22 @@ function initConsole(){
   var inEl=document.getElementById('console-input');
   if(!outEl||!inEl)return;
 
+  if(_D && _D.isViewOnly){
+    outEl.innerHTML=
+      '<div style="padding:50px 20px;text-align:center;font-family:var(--fm)">'+
+        '<div style="font-size:18px;font-weight:700;color:var(--bad);margin-bottom:10px;letter-spacing:0.08em">ACCESS RESTRICTED</div>'+
+        '<div style="font-size:14px;color:var(--txt);font-weight:700;margin-bottom:12px">This feature is only for Admin</div>'+
+        '<div style="font-size:11px;color:var(--mut);max-width:520px;margin:0 auto;line-height:1.6">The interactive DNS engine console is strictly restricted to DNS_MASTER_KEY authentication. Regular HMAC tokens and view-only sessions cannot execute console commands.</div>'+
+      '</div>';
+    inEl.disabled=true;
+    inEl.placeholder='This feature is only for Admin (DNS_MASTER_KEY required)';
+    var sendBtn=document.getElementById('btn-console-send');
+    if(sendBtn){sendBtn.disabled=true;sendBtn.style.opacity='0.4';sendBtn.style.cursor='not-allowed';}
+    var chipsContainer=document.getElementById('console-chips');
+    if(chipsContainer){chipsContainer.style.opacity='0.35';chipsContainer.style.pointerEvents='none';}
+    return;
+  }
+
   if(!_consoleInitialized){
     _consoleInitialized=true;
 
