@@ -102,6 +102,22 @@ pub async fn start_plain_udp(
                         match result {
                             Ok((len, peer)) => {
                                 if len < 12 { continue; }
+
+                                // Fast-Path Microsecond Negative Absorber (<1µs zero-alloc drop)
+                                if let Some(parsed) = crate::dns::parser::parse_dns_query(&buf[..len]) {
+                                    if let Some(ref q) = parsed.question {
+                                        let clean = q.name.trim_end_matches('.').to_ascii_lowercase();
+                                        if let Some((reason, is_nx)) = state_worker.fast_neg_filter.get(&clean) {
+                                            state_worker.metrics.threat_blocks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                            state_worker.metrics.fast_neg_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                            let mut blocked = crate::dns::parser::build_blocked_response(&buf[..len], is_nx);
+                                            crate::dns::parser::append_ede_to_response(&mut blocked, 15, reason);
+                                            let _ = sock.send_to(&blocked, peer).await;
+                                            continue;
+                                        }
+                                    }
+                                }
+
                                 let query = buf[..len].to_vec();
                                 let state_c = state_worker.clone();
                                 let sock_c = sock.clone();

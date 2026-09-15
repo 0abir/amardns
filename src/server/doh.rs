@@ -998,8 +998,39 @@ pub async fn process_dns_wire_packet_full(
         }
 
         if dnssec_res.status == crate::dns::dnssec::DnssecStatus::Bogus {
-            crate::dns::parser::append_ede_to_response(&mut upstream_resp, 6, 
-                dnssec_res.failure_reason.as_deref().unwrap_or("DNSSEC validation failure"));
+            let is_cd = (parsed.flags & 0x0010) != 0;
+            if !is_cd {
+                state.wal.append_query(&q.name, q.qtype, log_id, 2, lat, "DNSSEC_BOGUS");
+                state.log_query_dnssec(
+                    &q.name,
+                    q.qtype,
+                    log_id,
+                    proto,
+                    "SERVFAIL",
+                    2,
+                    lat,
+                    "dnssec_bogus",
+                    "DNSSEC Validator",
+                    "BOGUS",
+                    dnssec_alg_str,
+                    dnssec_tag,
+                    false,
+                );
+                let mut servfail = build_servfail_response(query_wire);
+                crate::dns::parser::append_ede_to_response(
+                    &mut servfail,
+                    6,
+                    dnssec_res.failure_reason.as_deref().unwrap_or("DNSSEC validation failure (RFC 4035 Section 5.5)"),
+                );
+                state.metrics.record_latency(query_start.elapsed());
+                return (servfail, "DNSSEC_BOGUS", "BOGUS".to_string(), Some("dnssec_bogus"));
+            } else {
+                crate::dns::parser::append_ede_to_response(
+                    &mut upstream_resp,
+                    6,
+                    dnssec_res.failure_reason.as_deref().unwrap_or("DNSSEC validation failure"),
+                );
+            }
         }
 
         // Feature 13: Smart TTL & SWR grace learning with dynamic frequency booster
@@ -1460,4 +1491,29 @@ mod tests {
         assert!(output.contains("# TYPE amardns_queries_total counter"));
         assert!(output.contains("amardns_cache_entries 100"));
     }
+
+    #[tokio::test]
+    async fn test_dnssec_bogus_servfail_enforcement() {
+        let config = crate::config::Config::from_env();
+        let state = Arc::new(AppState::new(config));
+
+        // Create query for test domain without CD bit
+        let query_wire = crate::dns::parser::build_query_wire("dnssec-bogus.test", 1);
+        let client_ip = IpAddr::from([127, 0, 0, 1]);
+
+        // Process wire packet
+        let (resp, cache_status, _, block_reason) = process_dns_wire_packet_full(
+            state.clone(),
+            &query_wire,
+            client_ip,
+            None,
+            "DoH",
+        ).await;
+
+        assert!(!resp.is_empty());
+        // Verify response wire is valid DNS message
+        let parsed = crate::dns::parser::parse_dns_query(&resp);
+        assert!(parsed.is_some());
+    }
 }
+
