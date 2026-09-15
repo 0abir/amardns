@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod console;
 pub mod rules;
 pub mod status;
 pub mod system;
@@ -102,4 +103,5 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(rules::routes())
         .merge(ai::routes())
         .merge(system::routes())
+        .merge(console::routes())
 }

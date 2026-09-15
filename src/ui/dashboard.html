@@ -424,6 +424,68 @@ select.fld option{background:var(--sur2)}
 .bll-act{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bll-proof{color:#a4b3c6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%}
 
+/* Terminal Console */
+.chip-cmd {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: var(--txt);
+  padding: 4px 10px;
+  font-family: var(--fm);
+  font-size: 10.5px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.chip-cmd:hover {
+  background: rgba(0,255,231,0.15);
+  border-color: var(--acc);
+  color: var(--acc);
+  transform: translateY(-1px);
+}
+.chip-cmd:active {
+  transform: translateY(0);
+}
+.console-line {
+  margin-bottom: 12px;
+  animation: fadeIn 0.1s ease;
+}
+.console-prompt-line {
+  color: var(--acc);
+  font-weight: 700;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px dashed rgba(0,255,231,0.2);
+  padding-bottom: 3px;
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+.console-output-text {
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+  font-size: 11px;
+}
+.console-ac-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  transition: background 0.1s;
+}
+.console-ac-item:hover, .console-ac-item.active {
+  background: rgba(0,255,231,0.14);
+  color: var(--acc);
+}
+
 footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);letter-spacing:.1em}
 </style>
 </head>
@@ -450,6 +512,7 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
 
 <div class="tabs">
   <div class="tab on" data-tab="overview" >Overview</div>
+  <div class="tab" data-tab="console" style="color:var(--acc);font-weight:700">>_ CONSOLE</div>
   <div class="tab" data-tab="logs" >LOGS</div>
   <div class="tab" data-tab="brain" >BRAIN</div>
   <div class="tab" data-tab="upstreams" >Upstreams</div>
@@ -478,6 +541,55 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
     <div class="ap"><div class="aph">Anomaly Log <span id="ano-cnt" style="color:var(--warn)">0</span></div><div class="apb"><div class="loglist" id="log-ano"></div></div></div>
   </div>
   <div class="sh">Active Incident</div><div id="inc-ov"></div>
+</div>
+
+<!-- CONSOLE -->
+<div class="tc" id="tc-console">
+  <div class="terminal-card" style="background:#090d16;border:1px solid var(--brd2);border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,0.6);display:flex;flex-direction:column;height:calc(100vh - 240px);min-height:540px;max-height:850px;overflow:hidden;position:relative">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:rgba(15,23,42,0.85);border-bottom:1px solid rgba(255,255,255,0.08);backdrop-filter:blur(10px);user-select:none;flex-wrap:wrap;gap:8px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="display:flex;gap:6px">
+          <span style="width:11px;height:11px;border-radius:50%;background:#ff5f56;display:inline-block;box-shadow:0 0 6px rgba(255,95,86,0.5)"></span>
+          <span style="width:11px;height:11px;border-radius:50%;background:#ffbd2e;display:inline-block;box-shadow:0 0 6px rgba(255,189,46,0.5)"></span>
+          <span style="width:11px;height:11px;border-radius:50%;background:#27c93f;display:inline-block;box-shadow:0 0 6px rgba(39,201,63,0.5)"></span>
+        </div>
+        <span style="font-family:var(--fm);font-size:11px;font-weight:700;color:var(--txt);margin-left:6px;letter-spacing:0.04em">AMARDNS ENGINE TERMINAL</span>
+        <span style="font-size:9px;background:rgba(0,255,231,0.15);color:var(--acc);padding:2px 6px;border-radius:4px;border:1px solid rgba(0,255,231,0.3);font-family:var(--fm)">SESSION ACTIVE</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button class="btn btn-sm" id="btn-console-copy" style="font-size:10px;padding:3px 9px" title="Copy output text">Copy Output</button>
+        <button class="btn btn-sm btn-d" id="btn-console-clear" style="font-size:10px;padding:3px 9px" title="Clear console buffer">Clear Buffer</button>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:6px;padding:8px 14px;background:rgba(10,15,28,0.7);border-bottom:1px solid rgba(255,255,255,0.04);overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch" id="console-chips">
+      <span style="font-size:10px;color:var(--mut);font-family:var(--fm);margin-right:4px">PRESETS:</span>
+      <button class="chip-cmd" data-cmd="motd">motd</button>
+      <button class="chip-cmd" data-cmd="stats">stats</button>
+      <button class="chip-cmd" data-cmd="bench">bench</button>
+      <button class="chip-cmd" data-cmd="upstreams">upstreams</button>
+      <button class="chip-cmd" data-cmd="trace github.com">trace github.com</button>
+      <button class="chip-cmd" data-cmd="resolve cloudflare.com A">resolve cloudflare.com</button>
+      <button class="chip-cmd" data-cmd="ai test bad-phish-domain.xyz">ai test</button>
+      <button class="chip-cmd" data-cmd="dnssec status">dnssec status</button>
+      <button class="chip-cmd" data-cmd="cache stats">cache stats</button>
+      <button class="chip-cmd" data-cmd="feed status">feed status</button>
+      <button class="chip-cmd" data-cmd="sockets">sockets</button>
+      <button class="chip-cmd" data-cmd="help">help</button>
+    </div>
+
+    <div id="console-output" style="flex:1;overflow-y:auto;overflow-x:auto;padding:14px 18px;font-family:var(--fm);font-size:11px;line-height:1.55;color:#e2e8f0;background:#050811;-webkit-overflow-scrolling:touch;white-space:pre-wrap;word-break:break-word"></div>
+
+    <div style="display:flex;align-items:center;background:#0b1120;border-top:1px solid rgba(255,255,255,0.08);padding:8px 14px;position:relative">
+      <span style="font-family:var(--fm);font-size:12px;font-weight:700;color:var(--acc);margin-right:8px;user-select:none;display:flex;align-items:center;gap:4px">
+        <span>amardns</span><span style="color:var(--mut)">»</span>
+      </span>
+      <input type="text" id="console-input" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Type a command (e.g. 'help', 'trace github.com', 'bench')..." style="flex:1;background:transparent;border:none;outline:none;color:#ffffff;font-family:var(--fm);font-size:12px;caret-color:var(--acc)">
+      <button class="btn btn-g btn-sm" id="btn-console-send" style="padding:4px 12px;font-size:11px;margin-left:8px;font-weight:700">Run ↵</button>
+    </div>
+
+    <div id="console-autocomplete" style="display:none;position:absolute;bottom:52px;left:14px;right:14px;background:#0f172a;border:1px solid var(--acc);border-radius:6px;box-shadow:0 12px 36px rgba(0,0,0,0.8);max-height:220px;overflow-y:auto;z-index:100;font-family:var(--fm);font-size:11px"></div>
+  </div>
 </div>
 
 <!-- LOGS -->
@@ -1128,6 +1240,7 @@ function tab(el){
 }
 var _tabData={};
 function renderTab(id){
+  if(id==='console'){initConsole();return;}
   if(!_D)return;
   if(id==='logs')renderLogs(_D);
   if(id==='brain')renderBrain(_D);
@@ -3499,6 +3612,258 @@ $('comtags').addEventListener('click',function(e){
     toggleDomainGroup(hdr);
   }
 });
+
+// Feature: Interactive Engine Console
+var _consoleInitialized=false;
+var _consoleHistory=[];
+var _consoleHistIdx=-1;
+var _consoleCommandsList=[];
+
+function initConsole(){
+  var outEl=document.getElementById('console-output');
+  var inEl=document.getElementById('console-input');
+  if(!outEl||!inEl)return;
+
+  if(!_consoleInitialized){
+    _consoleInitialized=true;
+
+    // Fetch command list for auto-complete
+    api('/api/console/commands').then(function(d){
+      if(d&&d.commands)_consoleCommandsList=d.commands;
+    }).catch(function(){});
+
+    // Run initial banner
+    runConsoleCommand('motd', true);
+
+    // Event listeners for input
+    inEl.addEventListener('keydown',function(e){
+      if(e.key==='Enter'){
+        e.preventDefault();
+        var cmd=inEl.value.trim();
+        if(cmd){
+          _consoleHistory.push(cmd);
+          _consoleHistIdx=_consoleHistory.length;
+          inEl.value='';
+          hideAutocomplete();
+          runConsoleCommand(cmd);
+        }
+      }else if(e.key==='ArrowUp'){
+        e.preventDefault();
+        if(_consoleHistory.length>0){
+          if(_consoleHistIdx>0)_consoleHistIdx--;
+          inEl.value=_consoleHistory[_consoleHistIdx]||'';
+        }
+      }else if(e.key==='ArrowDown'){
+        e.preventDefault();
+        if(_consoleHistory.length>0){
+          if(_consoleHistIdx<_consoleHistory.length-1){
+            _consoleHistIdx++;
+            inEl.value=_consoleHistory[_consoleHistIdx]||'';
+          }else{
+            _consoleHistIdx=_consoleHistory.length;
+            inEl.value='';
+          }
+        }
+      }else if(e.key==='Tab'){
+        e.preventDefault();
+        handleConsoleTab();
+      }else if(e.key==='l'&&e.ctrlKey){
+        e.preventDefault();
+        clearConsoleBuffer();
+      }else if(e.key==='Escape'){
+        hideAutocomplete();
+      }
+    });
+
+    inEl.addEventListener('input',function(){
+      var val=inEl.value.trim().toLowerCase();
+      if(!val){hideAutocomplete();return;}
+      showAutocomplete(val);
+    });
+
+    var sendBtn=document.getElementById('btn-console-send');
+    if(sendBtn){
+      sendBtn.addEventListener('click',function(){
+        var cmd=inEl.value.trim();
+        if(cmd){
+          _consoleHistory.push(cmd);
+          _consoleHistIdx=_consoleHistory.length;
+          inEl.value='';
+          hideAutocomplete();
+          runConsoleCommand(cmd);
+        }
+      });
+    }
+
+    var clrBtn=document.getElementById('btn-console-clear');
+    if(clrBtn){
+      clrBtn.addEventListener('click',clearConsoleBuffer);
+    }
+
+    var cpyBtn=document.getElementById('btn-console-copy');
+    if(cpyBtn){
+      cpyBtn.addEventListener('click',function(){
+        var text=outEl.innerText;
+        if(navigator.clipboard&&navigator.clipboard.writeText){
+          navigator.clipboard.writeText(text).then(function(){
+            toast('Console output copied to clipboard','ok');
+          }).catch(function(){toast('Failed to copy output','er');});
+        }
+      });
+    }
+
+    // Quick preset chip clicks
+    var chipsContainer=document.getElementById('console-chips');
+    if(chipsContainer){
+      chipsContainer.addEventListener('click',function(e){
+        var chip=e.target.closest('.chip-cmd');
+        if(chip&&chip.dataset.cmd){
+          inEl.value=chip.dataset.cmd;
+          inEl.focus();
+        }
+      });
+    }
+  }
+
+  setTimeout(function(){inEl.focus();},100);
+}
+
+function clearConsoleBuffer(){
+  var outEl=document.getElementById('console-output');
+  if(outEl)outEl.innerHTML='<div style="color:var(--mut);font-size:10px;margin-bottom:8px">// Buffer cleared. Type "help" or "motd" to begin.</div>';
+}
+
+function runConsoleCommand(cmd, isInitial){
+  var outEl=document.getElementById('console-output');
+  if(!outEl)return;
+
+  var lineEl=document.createElement('div');
+  lineEl.className='console-line';
+
+  if(!isInitial){
+    var ts=new Date().toLocaleTimeString();
+    var promptLine=document.createElement('div');
+    promptLine.className='console-prompt-line';
+    promptLine.innerHTML='<span><span style="color:var(--acc);font-weight:700">amardns » </span><span style="color:#ffffff">'+escapeHtml(cmd)+'</span></span><span style="font-size:9px;color:var(--mut)">'+ts+'</span>';
+    lineEl.appendChild(promptLine);
+  }
+
+  var loadingEl=document.createElement('div');
+  loadingEl.style.color='var(--mut)';
+  loadingEl.style.fontSize='10px';
+  loadingEl.textContent='Executing command in engine...';
+  lineEl.appendChild(loadingEl);
+  outEl.appendChild(lineEl);
+  outEl.scrollTop=outEl.scrollHeight;
+
+  api('/api/console/exec','POST',{command:cmd}).then(function(res){
+    loadingEl.remove();
+    if(res.output==='__CLEAR__'){
+      clearConsoleBuffer();
+      return;
+    }
+    var resEl=document.createElement('div');
+    resEl.className='console-output-text';
+    if(res.status==='error'){
+      resEl.style.color='#ff2d6b';
+      resEl.innerHTML=formatConsoleOutput(res.output||'Error executing command');
+    }else{
+      resEl.innerHTML=formatConsoleOutput(res.output||'');
+    }
+    if(!isInitial&&res.elapsed_ms!=null){
+      var timeBadge=document.createElement('div');
+      timeBadge.style.fontSize='9px';
+      timeBadge.style.color='var(--mut)';
+      timeBadge.style.textAlign='right';
+      timeBadge.style.marginTop='4px';
+      timeBadge.textContent='Completed in '+res.elapsed_ms.toFixed(2)+' ms';
+      resEl.appendChild(timeBadge);
+    }
+    lineEl.appendChild(resEl);
+    outEl.scrollTop=outEl.scrollHeight;
+  }).catch(function(err){
+    loadingEl.remove();
+    var errEl=document.createElement('div');
+    errEl.className='console-output-text';
+    errEl.style.color='#ff2d6b';
+    errEl.textContent='Console Error: '+(err.message||'Failed to execute command');
+    lineEl.appendChild(errEl);
+    outEl.scrollTop=outEl.scrollHeight;
+  });
+}
+
+function formatConsoleOutput(text){
+  if(!text)return'';
+  var escaped=escapeHtml(text);
+  escaped=escaped.replace(/(── \[ .+? \] ──+)/g,'<span style="color:var(--acc);font-weight:700">$1</span>');
+  escaped=escaped.replace(/(\b(?:ALLOW|HEALTHY|ACTIVE|YES|NOERROR|VALID|SECURE|PASSED|PASS)\b)/g,'<span style="color:#39ff14;font-weight:700">$1</span>');
+  escaped=escaped.replace(/(\b(?:BLOCKED|BLOCK|OFFLINE|SERVFAIL|DEGRADED|ERROR|THREAT DETECTED|BOGUS|FAIL)\b)/g,'<span style="color:#ff2d6b;font-weight:700">$1</span>');
+  escaped=escaped.replace(/(\b(?:ANOMALOUS|SUSPICIOUS|NXDOMAIN|DEGRADED|WARN)\b)/g,'<span style="color:#ffaa00;font-weight:700">$1</span>');
+  escaped=escaped.replace(/(\b(?:DoH|DoH3|DoQ|DoT|UDP|TCP|DNSSEC)\b)/g,'<span style="color:#c084fc;font-weight:700">$1</span>');
+  escaped=escaped.replace(/(\[\d+\/\d+\])/g,'<span style="color:var(--acc2);font-weight:700">$1</span>');
+  return escaped;
+}
+
+function escapeHtml(str){
+  if(!str)return'';
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+}
+
+function showAutocomplete(val){
+  var acEl=document.getElementById('console-autocomplete');
+  if(!acEl)return;
+  var matches=_consoleCommandsList.filter(function(c){
+    return c.name.toLowerCase().startsWith(val)||c.syntax.toLowerCase().startsWith(val);
+  });
+  if(matches.length===0){hideAutocomplete();return;}
+
+  var html=matches.slice(0,6).map(function(c,i){
+    return '<div class="console-ac-item '+(i===0?'active':'')+'" data-cmd="'+escapeHtml(c.syntax.split(' ')[0])+'">'+
+      '<div><b style="color:var(--acc)">'+escapeHtml(c.name)+'</b> <span style="color:var(--sub);font-size:9.5px">'+escapeHtml(c.syntax)+'</span></div>'+
+      '<span style="color:var(--mut);font-size:9px">'+escapeHtml(c.category)+'</span>'+
+    '</div>';
+  }).join('');
+
+  acEl.innerHTML=html;
+  acEl.style.display='block';
+
+  acEl.querySelectorAll('.console-ac-item').forEach(function(item){
+    item.addEventListener('click',function(){
+      var inEl=document.getElementById('console-input');
+      if(inEl){
+        inEl.value=item.dataset.cmd+' ';
+        inEl.focus();
+      }
+      hideAutocomplete();
+    });
+  });
+}
+
+function hideAutocomplete(){
+  var acEl=document.getElementById('console-autocomplete');
+  if(acEl)acEl.style.display='none';
+}
+
+function handleConsoleTab(){
+  var acEl=document.getElementById('console-autocomplete');
+  var inEl=document.getElementById('console-input');
+  if(!inEl)return;
+  if(acEl&&acEl.style.display!=='none'){
+    var active=acEl.querySelector('.console-ac-item.active')||acEl.querySelector('.console-ac-item');
+    if(active&&active.dataset.cmd){
+      inEl.value=active.dataset.cmd+' ';
+      hideAutocomplete();
+      return;
+    }
+  }
+  var val=inEl.value.trim().toLowerCase();
+  if(!val)return;
+  var match=_consoleCommandsList.find(function(c){return c.name.toLowerCase().startsWith(val);});
+  if(match){
+    inEl.value=match.name+' ';
+    hideAutocomplete();
+  }
+}
 
 // Feature 8: Real-Time SSE Log Stream for live query monitoring
 var _sseSource=null;

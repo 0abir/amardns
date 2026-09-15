@@ -381,6 +381,11 @@ impl DnsCache {
         self.cache.entry_count()
     }
 
+    pub fn flush(&self) {
+        self.cache.invalidate_all();
+        self.neg_cache.invalidate_all();
+    }
+
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.cache.entry_count() as usize
