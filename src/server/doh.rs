@@ -26,11 +26,24 @@ pub fn create_doh_router(state: Arc<AppState>) -> Router {
         // Mount all modular REST API routes (status, rules, system, AI)
         .merge(crate::server::api::api_routes())
         // DNS wire queries (Standard RFC 8484 endpoint)
-        .route("/dns-query", get(doh_get_handler).post(doh_post_handler))
+        .route(
+            "/dns-query",
+            get(doh_get_handler)
+                .post(doh_post_handler)
+                .options(doh_options_handler),
+        )
         // Root DoH fallback + Web Dashboard
-        .route("/", get(root_get_handler).post(doh_post_handler))
+        .route(
+            "/",
+            get(root_get_handler)
+                .post(doh_post_handler)
+                .options(doh_options_handler),
+        )
         // DoH JSON API (RFC 8427) — browser-testable
-        .route("/resolve", get(doh_json_handler))
+        .route(
+            "/resolve",
+            get(doh_json_handler).options(doh_options_handler),
+        )
         // Public SEO, Sitemap & Manifest routes
         .route("/robots.txt", get(robots_txt_handler))
         .route("/sitemap.xml", get(sitemap_xml_handler))
@@ -297,6 +310,25 @@ async fn host_shield_middleware(
     next.run(req).await
 }
 
+pub async fn doh_options_handler() -> Response {
+    (
+        StatusCode::NO_CONTENT,
+        [
+            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
+            (
+                header::ACCESS_CONTROL_ALLOW_METHODS,
+                "GET, POST, OPTIONS, HEAD",
+            ),
+            (
+                header::ACCESS_CONTROL_ALLOW_HEADERS,
+                "Content-Type, Accept, X-Device-Id, X-Client-Id, Authorization",
+            ),
+            (header::ACCESS_CONTROL_MAX_AGE, "86400"),
+        ],
+    )
+        .into_response()
+}
+
 pub async fn add_security_headers(mut response: Response) -> Response {
     let headers = response.headers_mut();
     headers.insert(
@@ -321,17 +353,27 @@ pub async fn add_security_headers(mut response: Response) -> Response {
     );
     headers.insert(
         header::HeaderName::from_static("cross-origin-resource-policy"),
-        header::HeaderValue::from_static("same-origin"),
+        header::HeaderValue::from_static("cross-origin"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        header::HeaderValue::from_static("*"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        header::HeaderValue::from_static("GET, POST, OPTIONS, HEAD"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        header::HeaderValue::from_static(
+            "Content-Type, Accept, X-Device-Id, X-Client-Id, Authorization",
+        ),
     );
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
         header::HeaderValue::from_static(
             "default-src 'self' 'unsafe-inline' data:; connect-src 'self' *; img-src 'self' data: https:;",
         ),
-    );
-    headers.insert(
-        header::HeaderName::from_static("alt-svc"),
-        header::HeaderValue::from_static("h3=\":443\"; ma=86400"),
     );
     response
 }
