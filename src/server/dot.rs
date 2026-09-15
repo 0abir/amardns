@@ -98,7 +98,7 @@ pub fn create_dual_stack_tcp_listener(addr: SocketAddr) -> Result<TcpListener, s
     }
     socket.set_nonblocking(true)?;
     socket.bind(&addr.into())?;
-    socket.listen(1024)?;
+    socket.listen(4096)?;
     let std_listener: std::net::TcpListener = socket.into();
     TcpListener::from_std(std_listener)
 }

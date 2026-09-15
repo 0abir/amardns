@@ -62,7 +62,7 @@ fn create_reuseport_tcp(addr: SocketAddr) -> std::io::Result<std::net::TcpListen
         let _ = socket.set_only_v6(false);
     }
     socket.bind(&addr.into())?;
-    socket.listen(1024)?;
+    socket.listen(4096)?;
     Ok(socket.into())
 }
 
