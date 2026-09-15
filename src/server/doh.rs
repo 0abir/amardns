@@ -377,7 +377,7 @@ pub async fn add_security_headers(mut response: Response) -> Response {
     );
     headers.insert(
         header::HeaderName::from_static("alt-svc"),
-        header::HeaderValue::from_static("clear"),
+        header::HeaderValue::from_static("h3=\":443\"; ma=86400"),
     );
     response
 }
