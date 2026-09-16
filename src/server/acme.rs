@@ -823,7 +823,7 @@ pub struct AcmeConfig {
     pub cert_resolver: Option<Arc<crate::server::tls::DynamicCertResolver>>,
 }
 
-/// Executes full ACME DNS-01 certificate provisioning against ZeroSSL or Let's Encrypt.
+/// Executes full ACME DNS-01 certificate provisioning against ZeroSSL or Let's Encrypt with automated fallback.
 pub async fn provision_acme_certificate(
     config: &AcmeConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -831,7 +831,26 @@ pub async fn provision_acme_certificate(
         return Err("No domains specified for ACME certificate provisioning".into());
     }
 
-    let is_zerossl = config.zerossl_api_key.is_some();
+    if config.zerossl_api_key.is_some() {
+        match provision_acme_certificate_ca(config, true).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                warn!(
+                    "[acme] ZeroSSL DNS-01 provisioning encountered error: {}. Falling back to Let's Encrypt DNS-01...",
+                    e
+                );
+            }
+        }
+    }
+
+    provision_acme_certificate_ca(config, false).await
+}
+
+async fn provision_acme_certificate_ca(
+    config: &AcmeConfig,
+    use_zerossl: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let is_zerossl = use_zerossl && config.zerossl_api_key.is_some();
     let ca_name = if is_zerossl {
         "ZeroSSL"
     } else {
@@ -855,50 +874,60 @@ pub async fn provision_acme_certificate(
 
     // 1. Create / Register Account
     info!("[acme] [1/5] Registering ACME account with {}...", ca_name);
-    let account_payload = if let Some(ref api_key) = config.zerossl_api_key {
-        // Fetch EAB credentials via header-based auth
-        info!("[acme] Fetching ZeroSSL EAB credentials via API...");
-        let eab_resp: serde_json::Value = http
-            .post("https://api.zerossl.com/acme/eab-credentials")
-            .header("Authorization", format!("ApiKey {}", api_key))
-            .send()
-            .await?
-            .json()
-            .await?;
+    let account_payload = if is_zerossl {
+        if let Some(ref api_key) = config.zerossl_api_key {
+            // Fetch EAB credentials via header-based auth
+            info!("[acme] Fetching ZeroSSL EAB credentials via API...");
+            let eab_resp: serde_json::Value = http
+                .post("https://api.zerossl.com/acme/eab-credentials")
+                .header("Authorization", format!("ApiKey {}", api_key))
+                .send()
+                .await?
+                .json()
+                .await?;
 
-        let eab_kid = eab_resp["eab_kid"]
-            .as_str()
-            .ok_or("Missing eab_kid in ZeroSSL EAB response")?;
-        let eab_hmac_key = eab_resp["eab_hmac_key"]
-            .as_str()
-            .ok_or("Missing eab_hmac_key in ZeroSSL EAB response")?;
+            let eab_kid = eab_resp["eab_kid"]
+                .as_str()
+                .ok_or("Missing eab_kid in ZeroSSL EAB response")?;
+            let eab_hmac_key = eab_resp["eab_hmac_key"]
+                .as_str()
+                .ok_or("Missing eab_hmac_key in ZeroSSL EAB response")?;
 
-        let eab_protected = serde_json::json!({
-            "alg": "HS256",
-            "kid": eab_kid,
-            "url": client.dir.new_account.clone(),
-        });
-        let eab_protected_b64 = b64url(eab_protected.to_string().as_bytes());
-        let eab_payload_b64 = b64url(client.jwk_json.to_string().as_bytes());
-        let eab_signing_input = format!("{}.{}", eab_protected_b64, eab_payload_b64);
+            let eab_protected = serde_json::json!({
+                "alg": "HS256",
+                "kid": eab_kid,
+                "url": client.dir.new_account.clone(),
+            });
+            let eab_protected_b64 = b64url(eab_protected.to_string().as_bytes());
+            let eab_payload_b64 = b64url(client.jwk_json.to_string().as_bytes());
+            let eab_signing_input = format!("{}.{}", eab_protected_b64, eab_payload_b64);
 
-        let hmac_key_bytes = b64url_decode(eab_hmac_key)
-            .map_err(|e| format!("Failed to decode eab_hmac_key: {}", e))?;
-        let hmac_key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &hmac_key_bytes);
-        let eab_sig = ring::hmac::sign(&hmac_key, eab_signing_input.as_bytes());
-        let eab_sig_b64 = b64url(eab_sig.as_ref());
+            let hmac_key_bytes = b64url_decode(eab_hmac_key)
+                .map_err(|e| format!("Failed to decode eab_hmac_key: {}", e))?;
+            let hmac_key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &hmac_key_bytes);
+            let eab_sig = ring::hmac::sign(&hmac_key, eab_signing_input.as_bytes());
+            let eab_sig_b64 = b64url(eab_sig.as_ref());
 
+            serde_json::json!({
+                "termsOfServiceAgreed": true,
+                "contact": [format!("mailto:admin@{}", config.domains[0])],
+                "externalAccountBinding": {
+                    "protected": eab_protected_b64,
+                    "payload": eab_payload_b64,
+                    "signature": eab_sig_b64,
+                }
+            })
+        } else {
+            serde_json::json!({
+                "termsOfServiceAgreed": true,
+                "contact": [format!("mailto:admin@{}", config.domains[0])],
+            })
+        }
+    } else {
         serde_json::json!({
             "termsOfServiceAgreed": true,
             "contact": [format!("mailto:admin@{}", config.domains[0])],
-            "externalAccountBinding": {
-                "protected": eab_protected_b64,
-                "payload": eab_payload_b64,
-                "signature": eab_sig_b64,
-            }
         })
-    } else {
-        serde_json::json!({ "termsOfServiceAgreed": true })
     };
 
     let acc_resp = client
@@ -1541,9 +1570,7 @@ async fn try_acquire_cluster_lock(
         {
             if resp.status().is_success() {
                 if let Ok(json) = resp.json::<serde_json::Value>().await {
-                    if json["ok"].as_bool().unwrap_or(false)
-                        && !json["granted"].as_bool().unwrap_or(false)
-                    {
+                    if json["granted"].as_bool() == Some(false) {
                         return false;
                     }
                 }
@@ -1697,6 +1724,19 @@ pub fn spawn_acme_supervisor(
                 }
 
                 if is_leader_region {
+                    // Stagger startup slightly based on machine_id hash to eliminate simultaneous lock collision
+                    let stagger_ms = (machine_id.bytes().map(|b| b as u64).sum::<u64>() % 7 + 1) * 800;
+                    tokio::time::sleep(Duration::from_millis(stagger_ms)).await;
+
+                    // Re-check peer sync after stagger
+                    if try_sync_from_peer(&config, master_key.as_deref()).await {
+                        info!(
+                            "[acme-supervisor] Successfully synced valid TLS certificate bundle from peer machine"
+                        );
+                        tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
+                        continue;
+                    }
+
                     // Try to acquire the cluster ACME provisioning lock
                     let has_lock = try_acquire_cluster_lock(
                         &http,

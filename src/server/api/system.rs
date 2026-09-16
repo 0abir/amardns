@@ -1174,7 +1174,7 @@ fn handle_acquire_lock(state: &Arc<AppState>, body: serde_json::Value) -> Respon
     if let Some((ref holder, expiry)) = *lock {
         if expiry > now && holder != &machine_id {
             return Json(serde_json::json!({
-                "ok": false,
+                "ok": true,
                 "granted": false,
                 "holder": holder,
                 "expires_in_secs": expiry.saturating_sub(now)
