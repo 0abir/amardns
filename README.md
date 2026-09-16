@@ -199,21 +199,12 @@ docker run -d \
 
 ## Deploy to Fly.io
 
-AmarDNS includes a fully automated, idempotent production deployment script that provisions high-availability instances in Singapore (`sin`), Anycast IPv4/IPv6, persistent storage volumes, and custom TLS certificates with zero manual intervention:
+AmarDNS deploys seamlessly to Fly.io with multi-region Anycast, persistent storage volumes, and custom TLS termination:
 
 ```bash
-# Automated 1-Command Deployment (Fresh setup or update)
-./scripts/deploy_fly.sh
+# Deploy to Fly.io
+fly deploy --ha=false
 ```
-
-The script automatically:
-1. Provisions the `amardns` application in the Singapore (`sin`) region if not present.
-2. Allocates Anycast **Shared IPv4** (`66.241.124.97`) and **Dedicated IPv6** (`2a09:8280:1::190:125e:0`).
-3. Provisions 2x 1GB persistent storage volumes in `sin` (`/data`).
-4. Registers custom domain hostnames (`amardns.dedyn.io`, `amardns.duckdns.org`, `amardns.ddnsfree.com`) on Fly Edge.
-5. Deploys the application with High Availability (`--ha=true`).
-6. Synchronizes in-memory ZeroSSL Multi-SAN certificates to Fly Edge proxy to bypass any Let's Encrypt rate-limits.
-7. Executes end-to-end verification across HTTPS/DoH, DoT (port 853), and Plain DNS (port 53).
 
 ---
 
