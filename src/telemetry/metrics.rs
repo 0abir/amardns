@@ -74,6 +74,12 @@ pub struct Metrics {
     pub upstream_last_sync: AtomicU64,
 }
 
+impl Default for Metrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Metrics {
     pub fn new() -> Self {
         let now_unix = SystemTime::now()

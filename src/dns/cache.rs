@@ -398,6 +398,11 @@ impl DnsCache {
     pub fn len(&self) -> usize {
         self.cache.entry_count() as usize
     }
+
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.cache.entry_count() == 0
+    }
 }
 
 #[cfg(test)]

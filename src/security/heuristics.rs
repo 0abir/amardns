@@ -312,6 +312,12 @@ pub struct ClientFingerprintTracker {
     total_fp_events: AtomicU64,
 }
 
+impl Default for ClientFingerprintTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClientFingerprintTracker {
     pub fn new() -> Self {
         Self {

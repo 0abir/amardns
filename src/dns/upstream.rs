@@ -27,17 +27,16 @@ pub const IANA_ROOT_HINTS: &[&str] = &[
     "202.12.27.33:53",   // m.root-servers.net (WIDE Project)
 ];
 
+type InFlightMap =
+    std::collections::HashMap<String, tokio::sync::broadcast::Sender<(Vec<u8>, String)>>;
+
 pub struct Singleflight {
-    in_flight: parking_lot::Mutex<
-        std::collections::HashMap<String, tokio::sync::broadcast::Sender<(Vec<u8>, String)>>,
-    >,
+    in_flight: parking_lot::Mutex<InFlightMap>,
     pub coalesced: std::sync::atomic::AtomicU64,
 }
 
 struct SingleflightGuard<'a> {
-    in_flight: &'a parking_lot::Mutex<
-        std::collections::HashMap<String, tokio::sync::broadcast::Sender<(Vec<u8>, String)>>,
-    >,
+    in_flight: &'a parking_lot::Mutex<InFlightMap>,
     key: &'a str,
     result: Option<(Vec<u8>, String)>,
     completed: bool,
@@ -53,6 +52,12 @@ impl<'a> Drop for SingleflightGuard<'a> {
                 }
             }
         }
+    }
+}
+
+impl Default for Singleflight {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
