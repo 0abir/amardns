@@ -526,7 +526,11 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             key_path: key_dest,
             cert_resolver: Some(cert_resolver.clone()),
         };
-        server::acme::spawn_acme_supervisor(acme_cfg, Some(config.dns_master_key.clone()));
+        server::acme::spawn_acme_supervisor(
+            acme_cfg,
+            Some(config.dns_master_key.clone()),
+            Some(state.clone()),
+        );
     }
 
     // 7. Load TCP TLS configuration for DoH (if configured)

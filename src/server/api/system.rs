@@ -101,9 +101,13 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/cache/stats/:key", get(cache_stats_key))
         .route("/api/ttl/volatile", get(volatile_domains_handler))
         .route("/api/ttl/volatile/:key", get(volatile_domains_key))
-        // Peer TLS Bundle Sync
+        // Peer TLS Bundle Sync & ACME Coordination Lock
         .route("/internal/tls/bundle", get(get_tls_bundle))
         .route("/internal/tls/bundle/:key", get(get_tls_bundle_key))
+        .route("/internal/acme/lock", post(acquire_acme_lock))
+        .route("/internal/acme/lock/:key", post(acquire_acme_lock_key))
+        .route("/internal/acme/unlock", post(release_acme_lock))
+        .route("/internal/acme/unlock/:key", post(release_acme_lock_key))
 }
 
 // ── Query Logs ──────────────────────────────────────────────────────────────
@@ -1119,3 +1123,117 @@ fn handle_tls_bundle(state: &Arc<AppState>) -> Response {
     )
         .into_response()
 }
+
+// ── Peer ACME Coordination Lock ──────────────────────────────────────────────
+
+pub async fn acquire_acme_lock(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let auth = check_auth(&state, None, &headers, "/internal/acme/lock");
+    if !auth.is_admin() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false, "error": "Unauthorized: Master key required" })),
+        )
+            .into_response();
+    }
+    handle_acquire_lock(&state, body)
+}
+
+pub async fn acquire_acme_lock_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let auth = check_auth(&state, Some(&key), &headers, "/internal/acme/lock");
+    if !auth.is_admin() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false, "error": "Unauthorized: Master key required" })),
+        )
+            .into_response();
+    }
+    handle_acquire_lock(&state, body)
+}
+
+fn handle_acquire_lock(state: &Arc<AppState>, body: serde_json::Value) -> Response {
+    let machine_id = body["machine_id"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
+    let ttl_secs = body["ttl_secs"].as_u64().unwrap_or(600);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let mut lock = state.acme_lock.lock();
+    if let Some((ref holder, expiry)) = *lock {
+        if expiry > now && holder != &machine_id {
+            return Json(serde_json::json!({
+                "ok": false,
+                "granted": false,
+                "holder": holder,
+                "expires_in_secs": expiry.saturating_sub(now)
+            }))
+            .into_response();
+        }
+    }
+
+    *lock = Some((machine_id.clone(), now + ttl_secs));
+    Json(serde_json::json!({
+        "ok": true,
+        "granted": true,
+        "holder": machine_id,
+        "ttl_secs": ttl_secs
+    }))
+    .into_response()
+}
+
+pub async fn release_acme_lock(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let auth = check_auth(&state, None, &headers, "/internal/acme/unlock");
+    if !auth.is_admin() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false, "error": "Unauthorized: Master key required" })),
+        )
+            .into_response();
+    }
+    handle_release_lock(&state, body)
+}
+
+pub async fn release_acme_lock_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let auth = check_auth(&state, Some(&key), &headers, "/internal/acme/unlock");
+    if !auth.is_admin() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false, "error": "Unauthorized: Master key required" })),
+        )
+            .into_response();
+    }
+    handle_release_lock(&state, body)
+}
+
+fn handle_release_lock(state: &Arc<AppState>, body: serde_json::Value) -> Response {
+    let machine_id = body["machine_id"].as_str().unwrap_or("unknown");
+    let mut lock = state.acme_lock.lock();
+    if let Some((ref holder, _)) = *lock {
+        if holder == machine_id {
+            *lock = None;
+        }
+    }
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+

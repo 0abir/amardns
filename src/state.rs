@@ -136,6 +136,8 @@ pub struct AppState {
     pub is_feed_syncing: AtomicBool,
     // Dynamic IANA Root Trust Anchor Store
     pub dnssec_anchors: crate::dns::dnssec::TrustAnchorStore,
+    // ACME Provisioning Distributed Lock: (holder_machine_id, expiry_time_unix_secs)
+    pub acme_lock: parking_lot::Mutex<Option<(String, u64)>>,
     // HMAC Token Revocation Store and Epoch
     pub token_revocation_epoch: AtomicU64,
     pub revoked_tokens: RwLock<HashSet<String>>,
@@ -297,6 +299,7 @@ impl AppState {
             last_sse_broadcast_ms: AtomicU64::new(0),
             is_feed_syncing: AtomicBool::new(false),
             dnssec_anchors: crate::dns::dnssec::TrustAnchorStore::new(),
+            acme_lock: parking_lot::Mutex::new(None),
             token_revocation_epoch: AtomicU64::new(0),
             revoked_tokens: RwLock::new(HashSet::new()),
             shutdown_tx,

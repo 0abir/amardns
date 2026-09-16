@@ -833,7 +833,7 @@ pub async fn provision_acme_certificate(
     info!("============================================================");
 
     let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(60))
         .build()?;
     let mut client = AcmeClient::new(http.clone(), dir_url).await?;
 
@@ -1054,12 +1054,32 @@ pub async fn provision_acme_certificate(
 
         let mut all_valid = true;
         for authz_val in authz_urls {
-            let authz_url = authz_val.as_str().unwrap();
-            let authz_data: serde_json::Value = client
-                .post_jws(authz_url, &serde_json::Value::Null)
-                .await?
-                .json()
-                .await?;
+            let authz_url = match authz_val.as_str() {
+                Some(u) => u,
+                None => continue,
+            };
+            let authz_resp = match client.post_jws(authz_url, &serde_json::Value::Null).await {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(
+                        "[acme] Transient network error polling authz: {}. Continuing next tick...",
+                        e
+                    );
+                    all_valid = false;
+                    continue;
+                }
+            };
+            let authz_data: serde_json::Value = match authz_resp.json().await {
+                Ok(j) => j,
+                Err(e) => {
+                    warn!(
+                        "[acme] Error decoding authz response: {}. Continuing next tick...",
+                        e
+                    );
+                    all_valid = false;
+                    continue;
+                }
+            };
             let domain = authz_data["identifier"]["value"]
                 .as_str()
                 .unwrap_or("unknown");
@@ -1089,11 +1109,26 @@ pub async fn provision_acme_certificate(
             }
         }
 
-        let order_check: serde_json::Value = client
-            .post_jws(&order_url, &serde_json::Value::Null)
-            .await?
-            .json()
-            .await?;
+        let order_resp = match client.post_jws(&order_url, &serde_json::Value::Null).await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(
+                    "[acme] Transient network error polling order status: {}. Continuing next tick...",
+                    e
+                );
+                continue;
+            }
+        };
+        let order_check: serde_json::Value = match order_resp.json().await {
+            Ok(j) => j,
+            Err(e) => {
+                warn!(
+                    "[acme] Error decoding order status JSON: {}. Continuing next tick...",
+                    e
+                );
+                continue;
+            }
+        };
         let order_status = order_check["status"].as_str().unwrap_or("unknown");
         info!(
             "[acme] Certificate order status: {} (attempt {})",
@@ -1314,25 +1349,30 @@ async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -> bo
         Err(_) => return false,
     };
 
+    let app_name = std::env::var("FLY_APP_NAME").unwrap_or_else(|_| "amardns".to_string());
     let primary_region = std::env::var("PRIMARY_REGION")
         .or_else(|_| std::env::var("FLY_PRIMARY_REGION"))
         .unwrap_or_else(|_| "sin".to_string());
 
     let peer_urls = [
         format!(
-            "http://{}.amardns.internal:443/internal/tls/bundle/{}",
-            primary_region, key
+            "http://{}.{}.internal:443/internal/tls/bundle/{}",
+            primary_region, app_name, key
         ),
         format!(
-            "http://{}.amardns.internal:443/internal/tls/bundle",
-            primary_region
+            "http://{}.{}.internal:443/internal/tls/bundle",
+            primary_region, app_name
         ),
-        format!("http://amardns.internal:443/internal/tls/bundle/{}", key),
-        "http://amardns.internal:443/internal/tls/bundle".to_string(),
+        format!("http://{}.internal:443/internal/tls/bundle/{}", app_name, key),
+        format!("http://{}.internal:443/internal/tls/bundle", app_name),
         format!("http://_apps.internal:443/internal/tls/bundle/{}", key),
         format!(
-            "http://top1.nearest.of.amardns.internal:443/internal/tls/bundle/{}",
-            key
+            "http://top1.nearest.of.{}.internal:443/internal/tls/bundle/{}",
+            app_name, key
+        ),
+        format!(
+            "http://top1.nearest.of.{}.internal:443/internal/tls/bundle",
+            app_name
         ),
     ];
 
@@ -1394,28 +1434,160 @@ async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -> bo
     false
 }
 
-/// Starts the background ACME Auto-Renewal Supervisor.
-pub fn spawn_acme_supervisor(config: AcmeConfig, master_key: Option<String>) {
+async fn try_acquire_cluster_lock(
+    http: &reqwest::Client,
+    app_state: Option<&Arc<crate::state::AppState>>,
+    machine_id: &str,
+    master_key: Option<&str>,
+) -> bool {
+    let key = master_key.unwrap_or_default();
+    let app_name = std::env::var("FLY_APP_NAME").unwrap_or_else(|_| "amardns".to_string());
+    let primary_region = std::env::var("PRIMARY_REGION")
+        .or_else(|_| std::env::var("FLY_PRIMARY_REGION"))
+        .unwrap_or_else(|_| "sin".to_string());
+
+    // 1. Check local AppState lock
+    if let Some(state) = app_state {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut lock = state.acme_lock.lock();
+        if let Some((ref holder, expiry)) = *lock {
+            if expiry > now && holder != machine_id {
+                return false;
+            }
+        }
+        *lock = Some((machine_id.to_string(), now + 600));
+    }
+
+    // 2. Query peer nodes across Fly 6PN to acquire lock
+    let lock_urls = [
+        format!(
+            "http://{}.{}.internal:443/internal/acme/lock/{}",
+            primary_region, app_name, key
+        ),
+        format!("http://{}.internal:443/internal/acme/lock/{}", app_name, key),
+        format!(
+            "http://top1.nearest.of.{}.internal:443/internal/acme/lock/{}",
+            app_name, key
+        ),
+    ];
+
+    for url in &lock_urls {
+        let body = serde_json::json!({
+            "machine_id": machine_id,
+            "ttl_secs": 600
+        });
+        if let Ok(resp) = http
+            .post(url)
+            .header("x-master-key", key)
+            .header("x-auth-key", key)
+            .json(&body)
+            .send()
+            .await
+        {
+            if resp.status().is_success() {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if json["ok"].as_bool().unwrap_or(false)
+                        && !json["granted"].as_bool().unwrap_or(false)
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    true
+}
+
+async fn try_release_cluster_lock(
+    http: &reqwest::Client,
+    app_state: Option<&Arc<crate::state::AppState>>,
+    machine_id: &str,
+    master_key: Option<&str>,
+) {
+    let key = master_key.unwrap_or_default();
+    let app_name = std::env::var("FLY_APP_NAME").unwrap_or_else(|_| "amardns".to_string());
+    let primary_region = std::env::var("PRIMARY_REGION")
+        .or_else(|_| std::env::var("FLY_PRIMARY_REGION"))
+        .unwrap_or_else(|_| "sin".to_string());
+
+    if let Some(state) = app_state {
+        let mut lock = state.acme_lock.lock();
+        if let Some((ref holder, _)) = *lock {
+            if holder == machine_id {
+                *lock = None;
+            }
+        }
+    }
+
+    let unlock_urls = [
+        format!(
+            "http://{}.{}.internal:443/internal/acme/unlock/{}",
+            primary_region, app_name, key
+        ),
+        format!(
+            "http://{}.internal:443/internal/acme/unlock/{}",
+            app_name, key
+        ),
+    ];
+
+    for url in &unlock_urls {
+        let body = serde_json::json!({ "machine_id": machine_id });
+        let _ = http
+            .post(url)
+            .header("x-master-key", key)
+            .header("x-auth-key", key)
+            .json(&body)
+            .send()
+            .await;
+    }
+}
+
+/// Starts the background ACME Auto-Renewal Supervisor with cluster-wide leader coordination.
+pub fn spawn_acme_supervisor(
+    config: AcmeConfig,
+    master_key: Option<String>,
+    app_state: Option<Arc<crate::state::AppState>>,
+) {
     tokio::spawn(async move {
         let primary_region = std::env::var("PRIMARY_REGION")
             .or_else(|_| std::env::var("FLY_PRIMARY_REGION"))
             .unwrap_or_else(|_| "sin".to_string());
         let current_region = std::env::var("FLY_REGION").unwrap_or_default();
-        let is_leader = current_region.is_empty() || current_region == primary_region;
+        let machine_id = std::env::var("FLY_MACHINE_ID")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_else(|_| "local".to_string());
+        let is_leader_region = current_region.is_empty() || current_region == primary_region;
 
         info!(
-            "[acme-supervisor] Initializing ACME coordinator (Region: '{}', Leader: {}, Primary: '{}')",
+            "[acme-supervisor] Initializing ACME coordinator (Machine: '{}', Region: '{}', LeaderRegion: {}, Primary: '{}')",
+            machine_id,
             if current_region.is_empty() {
                 "local"
             } else {
                 &current_region
             },
-            is_leader,
+            is_leader_region,
             primary_region
         );
 
-        // Stagger startup slightly
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        // Stagger startup slightly based on machine id to prevent dual-boot races
+        let stagger_secs = {
+            let mut h = 0u64;
+            for b in machine_id.bytes() {
+                h = h.wrapping_mul(31).wrapping_add(b as u64);
+            }
+            (h % 5) + 2
+        };
+        tokio::time::sleep(Duration::from_secs(stagger_secs)).await;
+
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap_or_default();
 
         loop {
             let days_opt = validate_existing_cert_and_key(
@@ -1448,61 +1620,99 @@ pub fn spawn_acme_supervisor(config: AcmeConfig, master_key: Option<String>) {
             };
 
             if needs_action {
-                if is_leader {
-                    // LEADER NODE FLOW (e.g. Singapore / primary region)
-                    // First, check if peer already has a valid bundle (e.g. after container restart)
-                    if try_sync_from_peer(&config, master_key.as_deref()).await {
-                        info!(
-                            "[acme-supervisor] Leader synced valid TLS certificate bundle from peer machine"
-                        );
-                        tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
-                        continue;
-                    }
-
-                    // Otherwise, execute authoritative ACME DNS-01 certificate provisioning
-                    let ca_name = if config.zerossl_api_key.is_some() {
-                        "ZeroSSL"
-                    } else {
-                        "Let's Encrypt"
-                    };
+                // First, check if peer already has a valid bundle (e.g. after container restart / peer finished)
+                if try_sync_from_peer(&config, master_key.as_deref()).await {
                     info!(
-                        "[acme-supervisor] Leader node running automated {} DNS-01 provisioning...",
-                        ca_name
+                        "[acme-supervisor] Successfully synced valid TLS certificate bundle from peer machine"
                     );
-                    match provision_acme_certificate(&config).await {
-                        Ok(_) => {
-                            info!(
-                                "[acme-supervisor] {} provisioning succeeded. Next check in 24 hours.",
-                                ca_name
-                            );
-                            tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
-                        }
-                        Err(e) => {
-                            let err_str = e.to_string();
-                            if err_str.contains("rateLimited") {
-                                warn!(
-                                    "[acme-supervisor] Rate limit encountered: {}. Backing off for 6 hours. (Edge TLS & dynamic fallback remain fully operational).",
-                                    err_str
+                    tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
+                    continue;
+                }
+
+                if is_leader_region {
+                    // Try to acquire the cluster ACME provisioning lock
+                    let has_lock = try_acquire_cluster_lock(
+                        &http,
+                        app_state.as_ref(),
+                        &machine_id,
+                        master_key.as_deref(),
+                    )
+                    .await;
+
+                    if has_lock {
+                        let ca_name = if config.zerossl_api_key.is_some() {
+                            "ZeroSSL"
+                        } else {
+                            "Let's Encrypt"
+                        };
+                        info!(
+                            "[acme-supervisor] Acquired ACME leader lock for machine '{}'. Running automated {} DNS-01 provisioning...",
+                            machine_id, ca_name
+                        );
+                        let prov_res = provision_acme_certificate(&config).await;
+                        try_release_cluster_lock(
+                            &http,
+                            app_state.as_ref(),
+                            &machine_id,
+                            master_key.as_deref(),
+                        )
+                        .await;
+
+                        match prov_res {
+                            Ok(_) => {
+                                info!(
+                                    "[acme-supervisor] {} provisioning succeeded. Next check in 24 hours.",
+                                    ca_name
                                 );
-                                tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
-                            } else {
-                                error!(
-                                    "[acme-supervisor] Certificate provisioning error: {}. Will retry in 15 minutes.",
-                                    err_str
-                                );
-                                tokio::time::sleep(Duration::from_secs(900)).await;
+                                tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
                             }
+                            Err(e) => {
+                                let err_str = e.to_string();
+                                if err_str.contains("rateLimited") {
+                                    warn!(
+                                        "[acme-supervisor] Rate limit encountered: {}. Backing off for 6 hours. (Edge TLS & dynamic fallback remain fully operational).",
+                                        err_str
+                                    );
+                                    tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
+                                } else {
+                                    error!(
+                                        "[acme-supervisor] Certificate provisioning error: {}. Will retry in 15 minutes.",
+                                        err_str
+                                    );
+                                    tokio::time::sleep(Duration::from_secs(900)).await;
+                                }
+                            }
+                        }
+                    } else {
+                        // Another machine in the cluster is actively provisioning. Wait as replica.
+                        info!(
+                            "[acme-supervisor] ACME lock is held by a peer node. Waiting for peer to complete certificate provisioning..."
+                        );
+                        let mut synced = false;
+                        for _ in 1..=60 {
+                            tokio::time::sleep(Duration::from_secs(10)).await;
+                            if try_sync_from_peer(&config, master_key.as_deref()).await {
+                                info!(
+                                    "[acme-supervisor] Successfully synced certificate bundle from peer."
+                                );
+                                synced = true;
+                                break;
+                            }
+                        }
+                        if synced {
+                            tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
+                        } else {
+                            tokio::time::sleep(Duration::from_secs(30)).await;
                         }
                     }
                 } else {
-                    // REPLICA NODE FLOW (e.g. Frankfurt / secondary region)
+                    // REPLICA NODE IN SECONDARY REGION
                     info!(
                         "[acme-replica] Replica node in region '{}'. Waiting for leader in region '{}' to provision TLS certificate...",
                         current_region, primary_region
                     );
 
                     let mut synced = false;
-                    // Poll leader every 10 seconds for up to 10 minutes (60 attempts)
                     for attempt in 1..=60 {
                         if try_sync_from_peer(&config, master_key.as_deref()).await {
                             info!(
