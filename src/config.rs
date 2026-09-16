@@ -312,15 +312,23 @@ impl Config {
 
     /// Verifies if an incoming HTTP Host header is allowed under custom domain & shield policies.
     pub fn is_host_allowed(&self, host_header: Option<&str>) -> bool {
-        let host = match host_header {
-            Some(h) => h
-                .split(':')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_ascii_lowercase(),
+        let raw = match host_header {
+            Some(h) => h.trim(),
             None => return true,
         };
+        // Strip port properly, handling IPv6 bracketed hosts like [::1]:443 or [fdaa::1]:443
+        let host = if let Some(stripped) = raw.strip_prefix('[') {
+            if let Some(end_bracket) = stripped.find(']') {
+                &stripped[..end_bracket]
+            } else {
+                raw
+            }
+        } else {
+            raw.split(':').next().unwrap_or(raw)
+        }
+        .trim()
+        .to_ascii_lowercase();
+
         // Allow internal health checks, loopback, and peer traffic
         if host.is_empty()
             || host == "localhost"
@@ -390,7 +398,10 @@ mod tests {
         assert!(cfg.is_host_allowed(Some("amardns.ddnsfree.com")));
         assert!(cfg.is_host_allowed(Some("localhost:8443")));
         assert!(cfg.is_host_allowed(Some("127.0.0.1:8443")));
+        assert!(cfg.is_host_allowed(Some("[::1]:8443")));
+        assert!(cfg.is_host_allowed(Some("[fdaa:8b:56f6:a7b:188:10cc:4b65:2]:443")));
         assert!(cfg.is_host_allowed(Some("amardns.internal:8080")));
+        assert!(cfg.is_host_allowed(Some("sin.amardns.internal:443")));
 
         // Block .fly.dev when platform_domain is false
         assert!(!cfg.is_host_allowed(Some("amardns.fly.dev")));

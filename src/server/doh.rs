@@ -272,6 +272,15 @@ async fn host_shield_middleware(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    let path = req.uri().path();
+    // Exempt internal cluster sync routes, node health check, and ACME challenge endpoints from host shielding
+    if path.starts_with("/internal/")
+        || path == "/health"
+        || path.starts_with("/.well-known/acme-challenge/")
+    {
+        return next.run(req).await;
+    }
+
     let host_opt = headers.get(header::HOST).and_then(|h| h.to_str().ok());
     if !state.config.is_host_allowed(host_opt) {
         let accept_header = headers
@@ -284,7 +293,7 @@ async fn host_shield_middleware(
                 .unwrap_or_else(|_| "local".to_string());
             let fly_region = std::env::var("FLY_REGION").unwrap_or_else(|_| "sin".to_string());
             let html = crate::ui::error::render_403(
-                req.uri().path(),
+                path,
                 "shielded-host",
                 &fly_region,
                 &fly_machine_id,
