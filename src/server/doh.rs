@@ -720,6 +720,9 @@ pub async fn process_dns_wire_packet_full(
     }
 
     if let Some(flag) = state.fingerprint.record_query(client_ip, &q.name) {
+        if flag == "QUERY_STRESS" || flag == "DNS_SCAN" {
+            state.metrics.burst_events.fetch_add(1, Ordering::Relaxed);
+        }
         state.log_action("rogue_client_detected", &format!("{}: {}", client_ip, flag));
         state.log_anomaly("rogue_client_scanner", &format!("{}: {}", client_ip, flag));
     }
@@ -1021,6 +1024,9 @@ pub async fn process_dns_wire_packet_full(
             0
         };
         if let Some(flag) = state.fingerprint.record_response(client_ip, rcode) {
+            if flag == "NX_SCANNER" {
+                state.metrics.nx_alarms.fetch_add(1, Ordering::Relaxed);
+            }
             state.log_action("rogue_client_detected", &format!("{}: {}", client_ip, flag));
         }
 

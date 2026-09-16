@@ -528,6 +528,7 @@ impl AppState {
             self.fast_neg_filter
                 .insert(clean.clone(), ("lookalike_threat", true));
             self.metrics.alike_blocks.fetch_add(1, Ordering::Relaxed);
+            self.metrics.auto_blocks.fetch_add(1, Ordering::Relaxed);
             self.brain.typo_blocks.fetch_add(1, Ordering::Relaxed);
             let (feats, ent) = self.brain.extract_features(&clean);
             self.brain.record_decision(
@@ -553,6 +554,7 @@ impl AppState {
             self.fast_neg_filter.insert(clean.clone(), ("DGA", true));
             self.metrics.dga_blocks.fetch_add(1, Ordering::Relaxed);
             self.metrics.dcc_hits.fetch_add(1, Ordering::Relaxed);
+            self.metrics.auto_blocks.fetch_add(1, Ordering::Relaxed);
             self.brain.zero_day_blocks.fetch_add(1, Ordering::Relaxed);
             let (feats, ent) = self.brain.extract_features(&clean);
             self.brain.record_decision(
@@ -579,6 +581,7 @@ impl AppState {
                 .insert(clean.clone(), ("c2_miner_threat", true));
             self.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
             self.metrics.dcc_hits.fetch_add(1, Ordering::Relaxed);
+            self.metrics.auto_blocks.fetch_add(1, Ordering::Relaxed);
             self.brain.zero_day_blocks.fetch_add(1, Ordering::Relaxed);
             let (feats, ent) = self.brain.extract_features(&clean);
             self.brain.record_decision(
@@ -604,6 +607,8 @@ impl AppState {
         if score > 0.90 {
             self.fast_neg_filter.insert(clean.clone(), (verdict, true));
             self.metrics.dga_blocks.fetch_add(1, Ordering::Relaxed);
+            self.metrics.dcc_hits.fetch_add(1, Ordering::Relaxed);
+            self.metrics.auto_blocks.fetch_add(1, Ordering::Relaxed);
             self.brain.zero_day_blocks.fetch_add(1, Ordering::Relaxed);
             let (feats, ent) = self.brain.extract_features(&clean);
             self.brain.record_decision(
