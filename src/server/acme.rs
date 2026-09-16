@@ -1339,6 +1339,9 @@ async fn provision_acme_certificate_ca(
         }
     }
 
+    // Automatically import newly provisioned multi-domain certificate into Fly Edge if token present
+    try_import_to_fly_edge(&http, &config.domains, &cert_pem, &key_pem).await;
+
     info!("============================================================");
     info!(
         "[acme] {} CERTIFICATE PROVISIONED SUCCESSFULLY!",
@@ -1347,6 +1350,50 @@ async fn provision_acme_certificate_ca(
     info!("============================================================");
 
     Ok(())
+}
+
+pub async fn try_import_to_fly_edge(
+    http: &reqwest::Client,
+    domains: &[String],
+    cert_pem: &str,
+    key_pem: &str,
+) {
+    let fly_token = std::env::var("FLY_API_TOKEN")
+        .or_else(|_| std::env::var("FLY_AUTH_TOKEN"))
+        .ok();
+    let token = match fly_token {
+        Some(t) if !t.is_empty() => t,
+        _ => return,
+    };
+    let app_name = std::env::var("FLY_APP_NAME").unwrap_or_else(|_| "amardns".to_string());
+
+    for domain in domains {
+        let query = serde_json::json!({
+            "query": "mutation($appId: String!, $hostname: String!, $fullchain: String!, $privateKey: String!) { importCertificate(input: { appId: $appId, hostname: $hostname, fullchain: $fullchain, privateKey: $privateKey }) { certificate { id hostname clientStatus } } }",
+            "variables": {
+                "appId": app_name,
+                "hostname": domain,
+                "fullchain": cert_pem,
+                "privateKey": key_pem
+            }
+        });
+
+        if let Ok(resp) = http
+            .post("https://api.fly.io/graphql")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(&query)
+            .send()
+            .await
+        {
+            if resp.status().is_success() {
+                info!(
+                    "[acme/fly-edge] Successfully synced/imported live certificate to Fly edge for '{}'",
+                    domain
+                );
+            }
+        }
+    }
 }
 
 async fn check_txt_propagation(http: &reqwest::Client, domain: &str, expected_val: &str) -> bool {
@@ -1536,6 +1583,7 @@ pub async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -
                                         "[acme-peer-sync] Successfully synced and applied TLS certificate bundle ({} days remaining) from peer ({})",
                                         days, url
                                     );
+                                    try_import_to_fly_edge(&http, &config.domains, cert_pem, key_pem).await;
                                     return true;
                                 }
                             }
