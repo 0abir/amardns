@@ -204,6 +204,51 @@ pub fn is_dga_threat(domain: &str) -> bool {
     false
 }
 
+/// Known cryptomining pool tokens and unauthorized mining signatures
+const CRYPTOMINER_SIGNATURES: &[&str] = &[
+    "stratum",
+    "coinhive",
+    "crypto-loot",
+    "webminerpool",
+    "cryptonight",
+    "xmrpool",
+    "moneropool",
+    "nanopool",
+    "minexmr",
+    "minergate",
+    "hashvault",
+    "supportxmr",
+    "unmineable",
+    "2miners",
+    "f2pool",
+];
+
+/// Detects unauthorized cryptomining endpoints, mining pools, and C2 tunneling patterns.
+pub fn is_c2_or_miner_threat(domain: &str) -> bool {
+    let clean = domain.trim_end_matches('.').to_ascii_lowercase();
+    if is_known_immune(&clean) {
+        return false;
+    }
+
+    // Check known cryptominer pool signatures
+    for sig in CRYPTOMINER_SIGNATURES {
+        if clean.contains(sig) {
+            return true;
+        }
+    }
+
+    // High-entropy DNS Tunneling / C2 exfiltration signature check
+    if clean.len() >= 35 {
+        if let Some(first_label) = clean.split('.').next() {
+            if first_label.len() >= 28 && calculate_entropy(first_label) >= 4.1 {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Fast Levenshtein distance calculation
 fn levenshtein_dist(a: &str, b: &str) -> usize {
     let a_bytes = a.as_bytes();
@@ -657,4 +702,16 @@ mod tests {
         tracker.clear();
         assert_eq!(tracker.total_events(), 0);
     }
+
+    #[test]
+    fn test_c2_and_miner_threat_detection() {
+        assert!(is_c2_or_miner_threat("stratum.antpool.com"));
+        assert!(is_c2_or_miner_threat("xmrpool.eu"));
+        assert!(is_c2_or_miner_threat("coinhive.com"));
+        assert!(is_c2_or_miner_threat("nanopool.org"));
+        assert!(!is_c2_or_miner_threat("google.com"));
+        assert!(!is_c2_or_miner_threat("cloudflare.com"));
+        assert!(!is_c2_or_miner_threat("github.com"));
+    }
 }
+

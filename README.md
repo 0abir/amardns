@@ -7,7 +7,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Fly.io%20%7C%20Linux%20%7C%20Docker-purple.svg)](https://fly.io/)
 [![Memory](https://img.shields.io/badge/Memory-Zero_GC_~13MB-green.svg)](#zero-allocation-memory-architecture)
 [![Latency](https://img.shields.io/badge/Latency-P95_<5ms-brightgreen.svg)](#singleflight-coalescing--hedged-upstream-racing)
-[![Tests](https://img.shields.io/badge/Tests-145%20Passed%20(100%25)-success.svg)](#testing--verification)
+[![Tests](https://img.shields.io/badge/Tests-146%20Passed%20(100%25)-success.svg)](#testing--verification)
 
 ---
 
@@ -156,7 +156,7 @@ Incoming Query (DoH / DoT / Plain 53)
 git clone https://github.com/0abir/amardns.git
 cd amardns
 
-# Run full test suite (145 tests)
+# Run full test suite (146 tests)
 cargo test
 
 # Run in release mode (binds default ports 443, 853, 53)

@@ -552,6 +552,7 @@ impl AppState {
         if crate::security::heuristics::is_dga_threat(&clean) {
             self.fast_neg_filter.insert(clean.clone(), ("DGA", true));
             self.metrics.dga_blocks.fetch_add(1, Ordering::Relaxed);
+            self.metrics.dcc_hits.fetch_add(1, Ordering::Relaxed);
             self.brain.zero_day_blocks.fetch_add(1, Ordering::Relaxed);
             let (feats, ent) = self.brain.extract_features(&clean);
             self.brain.record_decision(
@@ -570,6 +571,32 @@ impl AppState {
                 &format!("DGA botnet signature (Entropy {:.2}): {}", ent, clean),
             );
             return (true, true, "DGA");
+        }
+
+        // 8b. Heuristic Cryptominer & C2 Infrastructure Detection
+        if crate::security::heuristics::is_c2_or_miner_threat(&clean) {
+            self.fast_neg_filter
+                .insert(clean.clone(), ("c2_miner_threat", true));
+            self.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
+            self.metrics.dcc_hits.fetch_add(1, Ordering::Relaxed);
+            self.brain.zero_day_blocks.fetch_add(1, Ordering::Relaxed);
+            let (feats, ent) = self.brain.extract_features(&clean);
+            self.brain.record_decision(
+                &clean,
+                ent,
+                0.99,
+                feats,
+                "HARD_BLOCK",
+                "c2_miner_threat",
+                "Intercepted unauthorized cryptominer / C2 botnet endpoint; prevented CPU hijacking and exfiltration",
+            );
+            self.record_detected_block(&clean, "c2_miner_threat");
+            self.log_action("c2_miner_block", &clean);
+            self.log_anomaly(
+                "c2_miner_threat",
+                &format!("Unauthorized Cryptominer / C2 botnet endpoint: {}", clean),
+            );
+            return (true, true, "c2_miner_threat");
         }
 
         // 9. Neural Brain Online Evaluation
@@ -648,6 +675,10 @@ impl AppState {
         }
 
         if crate::security::heuristics::is_dga_threat(&clean) {
+            return true;
+        }
+
+        if crate::security::heuristics::is_c2_or_miner_threat(&clean) {
             return true;
         }
 
@@ -826,6 +857,7 @@ impl AppState {
         match reason {
             "threat_feed_abir" | "FEED" | "THREAT" => "threat_feed_abir",
             "dga_threat" | "DGA" => "dga_threat",
+            "c2_miner_threat" | "MINER" | "C2" => "c2_miner_threat",
             "lookalike_threat" | "TYPOSQUAT" => "lookalike_threat",
             "threat_negative_cache" | "THREAT_CACHE" => "threat_negative_cache",
             _ => "custom_block",

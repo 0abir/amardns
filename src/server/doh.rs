@@ -758,11 +758,15 @@ pub async fn process_dns_wire_packet_full(
                 | "lookalike_threat"
                 | "TYPOSQUAT"
                 | "ai_block"
+                | "c2_miner_threat"
         ) {
             state.metrics.auto_blocks.fetch_add(1, Ordering::Relaxed);
         }
         if reason == "lookalike_threat" || reason == "TYPOSQUAT" {
             state.metrics.alike_blocks.fetch_add(1, Ordering::Relaxed);
+        }
+        if reason == "c2_miner_threat" || reason == "DGA" || reason == "dga_threat" {
+            state.metrics.dcc_hits.fetch_add(1, Ordering::Relaxed);
         }
         state.wal.append_threat_event(&q.name, reason, log_id);
         state
@@ -844,6 +848,7 @@ pub async fn process_dns_wire_packet_full(
         if let Some(threat_type) = state.safe_browsing.check_domain(&q.name).await {
             state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
             state.metrics.gsb_blocks.fetch_add(1, Ordering::Relaxed);
+            state.metrics.dcc_hits.fetch_add(1, Ordering::Relaxed);
             state.fingerprint.record_response(client_ip, 3);
             state
                 .fingerprint
@@ -1075,6 +1080,7 @@ pub async fn process_dns_wire_packet_full(
                         .ttl_guard_blocks
                         .fetch_add(1, Ordering::Relaxed);
                     state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
+                    state.metrics.dcc_hits.fetch_add(1, Ordering::Relaxed);
                     state.log_action(
                         "ttl_guard_block",
                         &format!(
