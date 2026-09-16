@@ -527,10 +527,25 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             cert_resolver: Some(cert_resolver.clone()),
         };
         server::acme::spawn_acme_supervisor(
-            acme_cfg,
+            acme_cfg.clone(),
             Some(config.dns_master_key.clone()),
             Some(state.clone()),
         );
+
+        // If node started without a genuine certificate, spawn an immediate background peer sync poller
+        if config.get_effective_tls_paths().is_none() {
+            let bg_acme_cfg = acme_cfg;
+            let bg_master_key = config.dns_master_key.clone();
+            tokio::spawn(async move {
+                for _ in 0..120 {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    if server::acme::try_sync_from_peer(&bg_acme_cfg, Some(&bg_master_key)).await {
+                        info!("[boot-peer-sync] Genuine TLS certificate synced from peer and hot-reloaded into memory.");
+                        break;
+                    }
+                }
+            });
+        }
     }
 
     // 7. Load TCP TLS configuration for DoH (if configured)

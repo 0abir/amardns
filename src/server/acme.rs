@@ -1135,8 +1135,9 @@ async fn provision_acme_certificate_ca(
     let order_url = finalize_url.replace("/finalize", "");
     let mut order_ready = false;
     let mut verified_authz: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let max_attempts = if is_zerossl { 4 } else { 12 };
 
-    for attempt in 1..=12 {
+    for attempt in 1..=max_attempts {
         let sleep_secs = if attempt <= 2 { 10 } else { 15 };
         tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
 
@@ -1147,7 +1148,7 @@ async fn provision_acme_certificate_ca(
                 let status = order_check["status"].as_str().unwrap_or("unknown").to_string();
                 info!(
                     "[acme] Certificate order status: {} (attempt {}/{})",
-                    status, attempt, 12
+                    status, attempt, max_attempts
                 );
                 if status == "ready" {
                     order_ready = true;
@@ -1198,7 +1199,7 @@ async fn provision_acme_certificate_ca(
             let status = authz_data["status"].as_str().unwrap_or("unknown");
             info!(
                 "[acme] Verification status for '{}': {} (attempt {}/{})",
-                domain, status, attempt, 12
+                domain, status, attempt, max_attempts
             );
             if status == "invalid" {
                 return Err(
@@ -1209,8 +1210,8 @@ async fn provision_acme_certificate_ca(
                 verified_authz.insert(authz_url.to_string());
             } else {
                 all_valid = false;
-                // Only re-notify challenge on attempt 3 and 6 to avoid hammering
-                if attempt == 3 || attempt == 6 {
+                // Only re-notify challenge on attempt 3 to avoid hammering
+                if attempt == 3 {
                     if let Some(chals) = authz_data["challenges"].as_array() {
                         if let Some(dns_chal) = chals.iter().find(|c| c["type"] == "dns-01") {
                             if let Some(chal_url) = dns_chal["url"].as_str() {
@@ -1421,7 +1422,7 @@ async fn check_txt_propagation(http: &reqwest::Client, domain: &str, expected_va
     false
 }
 
-async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -> bool {
+pub async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -> bool {
     let key = match master_key {
         Some(k) if !k.is_empty() => k,
         _ => return false,
@@ -1853,8 +1854,8 @@ pub fn spawn_acme_supervisor(
                             "[acme-supervisor] ACME lock is held by a peer node. Waiting for peer to complete certificate provisioning..."
                         );
                         let mut synced = false;
-                        for _ in 1..=30 {
-                            tokio::time::sleep(Duration::from_secs(15)).await;
+                        for _ in 1..=120 {
+                            tokio::time::sleep(Duration::from_secs(5)).await;
                             if try_sync_from_peer(&config, master_key.as_deref()).await {
                                 info!(
                                     "[acme-supervisor] Successfully synced certificate bundle from peer."
@@ -1866,7 +1867,7 @@ pub fn spawn_acme_supervisor(
                         if synced {
                             tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
                         } else {
-                            tokio::time::sleep(Duration::from_secs(300)).await;
+                            tokio::time::sleep(Duration::from_secs(60)).await;
                         }
                     }
                 } else {
