@@ -171,14 +171,30 @@ impl AcmeClient {
         if let Some(nonce) = cached {
             return Ok(nonce);
         }
-        let resp = self.http.head(&self.dir.new_nonce).send().await?;
-        let nonce = resp
-            .headers()
-            .get("replay-nonce")
-            .ok_or("No replay-nonce header")?
-            .to_str()?
-            .to_string();
-        Ok(nonce)
+        for attempt in 0..3 {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_millis(500 * attempt)).await;
+            }
+            if let Ok(resp) = self.http.head(&self.dir.new_nonce).send().await {
+                if let Some(nonce) = resp
+                    .headers()
+                    .get("replay-nonce")
+                    .and_then(|h| h.to_str().ok())
+                {
+                    return Ok(nonce.to_string());
+                }
+            }
+            if let Ok(resp) = self.http.get(&self.dir.new_nonce).send().await {
+                if let Some(nonce) = resp
+                    .headers()
+                    .get("replay-nonce")
+                    .and_then(|h| h.to_str().ok())
+                {
+                    return Ok(nonce.to_string());
+                }
+            }
+        }
+        Err("No replay-nonce header available from ACME server".into())
     }
 
     async fn post_jws(
@@ -1354,7 +1370,7 @@ async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -> bo
         .or_else(|_| std::env::var("FLY_PRIMARY_REGION"))
         .unwrap_or_else(|_| "sin".to_string());
 
-    let peer_urls = [
+    let mut peer_urls = vec![
         format!(
             "http://{}.{}.internal:443/internal/tls/bundle/{}",
             primary_region, app_name, key
@@ -1375,6 +1391,27 @@ async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -> bo
             app_name
         ),
     ];
+
+    // Direct IPv6 resolution across all Fly mesh instances in cluster
+    for lookup in &[
+        format!("{}.{}.internal:443", primary_region, app_name),
+        format!("{}.internal:443", app_name),
+        format!("global.{}.internal:443", app_name),
+    ] {
+        if let Ok(addrs) = tokio::net::lookup_host(lookup).await {
+            for addr in addrs {
+                peer_urls.push(format!(
+                    "http://[{}]:443/internal/tls/bundle/{}",
+                    addr.ip(),
+                    key
+                ));
+                peer_urls.push(format!(
+                    "http://[{}]:443/internal/tls/bundle",
+                    addr.ip()
+                ));
+            }
+        }
+    }
 
     for url in &peer_urls {
         if let Ok(resp) = http
@@ -1462,7 +1499,7 @@ async fn try_acquire_cluster_lock(
     }
 
     // 2. Query peer nodes across Fly 6PN to acquire lock
-    let lock_urls = [
+    let mut lock_urls = vec![
         format!(
             "http://{}.{}.internal:443/internal/acme/lock/{}",
             primary_region, app_name, key
@@ -1473,6 +1510,21 @@ async fn try_acquire_cluster_lock(
             app_name, key
         ),
     ];
+
+    for lookup in &[
+        format!("{}.{}.internal:443", primary_region, app_name),
+        format!("{}.internal:443", app_name),
+    ] {
+        if let Ok(addrs) = tokio::net::lookup_host(lookup).await {
+            for addr in addrs {
+                lock_urls.push(format!(
+                    "http://[{}]:443/internal/acme/lock/{}",
+                    addr.ip(),
+                    key
+                ));
+            }
+        }
+    }
 
     for url in &lock_urls {
         let body = serde_json::json!({
@@ -1523,7 +1575,7 @@ async fn try_release_cluster_lock(
         }
     }
 
-    let unlock_urls = [
+    let mut unlock_urls = vec![
         format!(
             "http://{}.{}.internal:443/internal/acme/unlock/{}",
             primary_region, app_name, key
@@ -1533,6 +1585,21 @@ async fn try_release_cluster_lock(
             app_name, key
         ),
     ];
+
+    for lookup in &[
+        format!("{}.{}.internal:443", primary_region, app_name),
+        format!("{}.internal:443", app_name),
+    ] {
+        if let Ok(addrs) = tokio::net::lookup_host(lookup).await {
+            for addr in addrs {
+                unlock_urls.push(format!(
+                    "http://[{}]:443/internal/acme/unlock/{}",
+                    addr.ip(),
+                    key
+                ));
+            }
+        }
+    }
 
     for url in &unlock_urls {
         let body = serde_json::json!({ "machine_id": machine_id });
