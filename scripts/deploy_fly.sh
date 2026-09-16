@@ -115,21 +115,21 @@ for domain in "${DOMAINS[@]}"; do
 done
 
 if [ "$NEEDS_IMPORT" -eq 1 ] || [ "${1:-}" = "--force-sync-certs" ]; then
-    log "Retrieving active ZeroSSL Multi-SAN certificate bundle from application..."
+    log "Waiting up to 120s for background ACME ZeroSSL provisioning to complete on container..."
     TMP_CERT="/tmp/amardns_deploy_cert_$$.pem"
     TMP_KEY="/tmp/amardns_deploy_key_$$.pem"
 
     SYNC_OK=0
-    # Try fetching from any working domain or direct host
-    for probe_host in "amardns.ddnsfree.com" "amardns.duckdns.org" "amardns.dedyn.io" "amardns.fly.dev"; do
-        if python3 -c "
+    for attempt in $(seq 1 24); do
+        for probe_host in "amardns.ddnsfree.com" "amardns.duckdns.org" "amardns.dedyn.io" "amardns.fly.dev"; do
+            if python3 -c "
 import urllib.request, json, sys
 url = f'https://${probe_host}/internal/tls/bundle/${MASTER_KEY}'
 req = urllib.request.Request(url, headers={'x-master-key': '${MASTER_KEY}', 'User-Agent': 'DeployScript/1.0'})
 try:
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=8) as resp:
         data = json.loads(resp.read().decode())
-        if data.get('ok'):
+        if data.get('ok') and data.get('cert_pem') and data.get('key_pem'):
             with open('${TMP_CERT}', 'w') as f:
                 f.write(data['cert_pem'])
             with open('${TMP_KEY}', 'w') as f:
@@ -138,10 +138,12 @@ try:
 except Exception:
     sys.exit(1)
 " 2>/dev/null; then
-            log "Successfully retrieved certificate bundle from '$probe_host'."
-            SYNC_OK=1
-            break
-        fi
+                log "Successfully retrieved ZeroSSL certificate bundle from '$probe_host' (attempt $attempt)."
+                SYNC_OK=1
+                break 2
+            fi
+        done
+        sleep 5
     done
 
     if [ "$SYNC_OK" -eq 1 ] && [ -f "$TMP_CERT" ] && [ -f "$TMP_KEY" ]; then
@@ -152,6 +154,7 @@ except Exception:
             fi
         done
         rm -f "$TMP_CERT" "$TMP_KEY"
+        log "Custom certificates imported into Fly Edge proxy successfully."
     else
         log "Certificate bundle not yet ready on container. ACME background supervisor will automatically issue on boot."
     fi
@@ -162,10 +165,15 @@ log "============================================================"
 log "Running End-to-End Protocol Verification..."
 log "============================================================"
 
+PUB_IPV4=$($FLY_CMD ips list -a "$APP_NAME" 2>/dev/null | grep -w "v4" | awk '{print $2}' | head -n1 || echo "66.241.124.97")
+PUB_IPV6=$($FLY_CMD ips list -a "$APP_NAME" 2>/dev/null | grep -w "v6" | awk '{print $2}' | head -n1 || echo "")
+
 python3 -c "
 import ssl, socket, urllib.request, json, base64
 
 hosts = ['amardns.dedyn.io', 'amardns.duckdns.org', 'amardns.ddnsfree.com']
+v4_ip = '${PUB_IPV4}'
+v6_ip = '${PUB_IPV6}'
 
 print('\n--- HTTPS / DoH Health Checks ---')
 for h in hosts:
@@ -178,11 +186,11 @@ for h in hosts:
     except Exception as e:
         print(f'  ✗ https://{h}/health -> {e}')
 
-print('\n--- DoT Port 853 TLS Handshake ---')
+print(f'\n--- DoT Port 853 TLS Handshake (via Anycast IPv4: {v4_ip}) ---')
 ctx = ssl.create_default_context()
 for h in hosts:
     try:
-        with socket.create_connection(('66.241.124.97', 853), timeout=5) as s:
+        with socket.create_connection((v4_ip, 853), timeout=5) as s:
             with ctx.wrap_socket(s, server_hostname=h) as ss:
                 print(f'  ✓ {h}:853 -> {ss.version()}, {ss.cipher()[0]}')
     except Exception as e:
