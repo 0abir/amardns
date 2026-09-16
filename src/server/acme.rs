@@ -1086,26 +1086,26 @@ async fn provision_acme_certificate_ca(
     if !challenge_triggers.is_empty() {
         // Replication sleep for authoritative anycast nameservers
         info!(
-            "[acme] Waiting 35 seconds for DNS TXT records to replicate across authoritative nameservers..."
+            "[acme] Waiting 40 seconds for DNS TXT records to replicate across authoritative nameservers..."
         );
-        tokio::time::sleep(Duration::from_secs(35)).await;
+        tokio::time::sleep(Duration::from_secs(40)).await;
 
-        // Check propagation via DoH (spaced checks, max 3 attempts)
+        // Check propagation via DoH (spaced checks, max 6 attempts)
         for (domain, expected_val) in &expected_challenges {
             let mut propagated = false;
-            for _attempt in 1..=3 {
+            for attempt in 1..=6 {
                 if check_txt_propagation(&http, domain, expected_val).await {
                     info!(
-                        "[acme] Confirmed TXT propagation for '{}' (verified via DoH)",
-                        domain
+                        "[acme] Confirmed TXT propagation for '{}' (verified via DoH on attempt {})",
+                        domain, attempt
                     );
                     propagated = true;
                     break;
                 }
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                tokio::time::sleep(Duration::from_secs(8)).await;
             }
             if !propagated {
-                info!(
+                warn!(
                     "[acme] Direct DoH propagation check pending for '{}'; proceeding with CA challenge.",
                     domain
                 );
@@ -1135,7 +1135,7 @@ async fn provision_acme_certificate_ca(
     let order_url = finalize_url.replace("/finalize", "");
     let mut order_ready = false;
     let mut verified_authz: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let max_attempts = if is_zerossl { 4 } else { 12 };
+    let max_attempts = if is_zerossl { 10 } else { 12 };
 
     for attempt in 1..=max_attempts {
         let sleep_secs = if attempt <= 2 { 10 } else { 15 };
@@ -1568,7 +1568,7 @@ async fn try_acquire_cluster_lock(
             .as_secs();
         let mut lock = state.acme_lock.lock();
         if let Some((ref holder, expiry)) = *lock {
-            if expiry > now && holder != machine_id {
+            if expiry > now && holder != machine_id && holder < &machine_id.to_string() {
                 return false;
             }
         }
@@ -1606,6 +1606,7 @@ async fn try_acquire_cluster_lock(
     let mut seen = std::collections::HashSet::new();
     lock_urls.retain(|u| seen.insert(u.clone()));
 
+    let mut acquired = true;
     for url in &lock_urls {
         let body = serde_json::json!({
             "machine_id": machine_id,
@@ -1624,11 +1625,24 @@ async fn try_acquire_cluster_lock(
             if resp.status().is_success() {
                 if let Ok(json) = resp.json::<serde_json::Value>().await {
                     if json["granted"].as_bool() == Some(false) {
-                        return false;
+                        acquired = false;
+                        break;
                     }
                 }
             }
         }
+    }
+
+    if !acquired {
+        if let Some(state) = app_state {
+            let mut lock = state.acme_lock.lock();
+            if let Some((ref holder, _)) = *lock {
+                if holder == machine_id {
+                    *lock = None;
+                }
+            }
+        }
+        return false;
     }
 
     true
@@ -1841,10 +1855,10 @@ pub fn spawn_acme_supervisor(
                                     tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
                                 } else {
                                     error!(
-                                        "[acme-supervisor] Certificate provisioning error: {}. Will retry in 15 minutes.",
+                                        "[acme-supervisor] Certificate provisioning error: {}. Will retry in 45 seconds.",
                                         err_str
                                     );
-                                    tokio::time::sleep(Duration::from_secs(900)).await;
+                                    tokio::time::sleep(Duration::from_secs(45)).await;
                                 }
                             }
                         }

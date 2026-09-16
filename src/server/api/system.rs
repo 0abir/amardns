@@ -1173,13 +1173,25 @@ fn handle_acquire_lock(state: &Arc<AppState>, body: serde_json::Value) -> Respon
     let mut lock = state.acme_lock.lock();
     if let Some((ref holder, expiry)) = *lock {
         if expiry > now && holder != &machine_id {
-            return Json(serde_json::json!({
-                "ok": true,
-                "granted": false,
-                "holder": holder,
-                "expires_in_secs": expiry.saturating_sub(now)
-            }))
-            .into_response();
+            // Deterministic tie-breaking: allow lower machine_id to preempt to prevent dual-boot deadlock
+            if machine_id < *holder {
+                *lock = Some((machine_id.clone(), now + ttl_secs));
+                return Json(serde_json::json!({
+                    "ok": true,
+                    "granted": true,
+                    "holder": machine_id,
+                    "expires_in_secs": ttl_secs
+                }))
+                .into_response();
+            } else {
+                return Json(serde_json::json!({
+                    "ok": true,
+                    "granted": false,
+                    "holder": holder,
+                    "expires_in_secs": expiry.saturating_sub(now)
+                }))
+                .into_response();
+            }
         }
     }
 
