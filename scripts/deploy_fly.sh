@@ -165,8 +165,8 @@ log "============================================================"
 log "Running End-to-End Protocol Verification..."
 log "============================================================"
 
-PUB_IPV4=$($FLY_CMD ips list -a "$APP_NAME" 2>/dev/null | grep -w "v4" | awk '{print $2}' | head -n1 || echo "66.241.124.97")
-PUB_IPV6=$($FLY_CMD ips list -a "$APP_NAME" 2>/dev/null | grep -w "v6" | awk '{print $2}' | head -n1 || echo "")
+PUB_IPV4=$($FLY_CMD ips list -a "$APP_NAME" 2>/dev/null | grep -w "v4" | awk -F'│' '{print $3}' | tr -d ' ' | head -n1 || echo "")
+PUB_IPV6=$($FLY_CMD ips list -a "$APP_NAME" 2>/dev/null | grep -w "v6" | awk -F'│' '{print $3}' | tr -d ' ' | head -n1 || echo "")
 
 python3 -c "
 import ssl, socket, urllib.request, json, base64
