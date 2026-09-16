@@ -541,11 +541,15 @@ pub async fn handle_nuclear_wipe(
             let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
             let master_key = state.config.dns_master_key.clone();
             tokio::spawn(async move {
+                let scheme = if port == "443" { "https" } else { "http" };
                 let peer_host = format!(
-                    "http://{}.internal:{}/api/nuclear-wipe/{}",
-                    app_name, port, master_key
+                    "{}://{}.internal:{}/api/nuclear-wipe/{}",
+                    scheme, app_name, port, master_key
                 );
-                let client = reqwest::Client::new();
+                let client = reqwest::Client::builder()
+                    .danger_accept_invalid_certs(true)
+                    .build()
+                    .unwrap_or_default();
                 let _ = client
                     .post(&peer_host)
                     .header("x-peer-sync", "1")

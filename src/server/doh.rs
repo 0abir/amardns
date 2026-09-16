@@ -56,6 +56,7 @@ pub fn create_doh_router(state: Arc<AppState>) -> Router {
         .route("/privacy", get(privacy_page_handler))
         .route("/terms", get(terms_page_handler))
         .fallback(fallback_handler)
+        .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             host_shield_middleware,

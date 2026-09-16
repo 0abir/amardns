@@ -32,6 +32,9 @@ COPY --from=builder /empty-data /data
 # 3. Ultra-optimized static binary
 COPY --from=builder /app/target/release/amardns /amardns
 
+# 4. Seed TLS certificates bundle
+COPY certs /certs
+
 ENV PORT=443 \
     DOT_PORT=853 \
     PLAIN53_ENABLED=true \

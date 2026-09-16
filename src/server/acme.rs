@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 const ZEROSSL_ACME_DIR: &str = "https://acme.zerossl.com/v2/DV90";
 const LETSENCRYPT_DIR: &str = "https://acme-v02.api.letsencrypt.org/directory";
@@ -171,26 +171,28 @@ impl AcmeClient {
         if let Some(nonce) = cached {
             return Ok(nonce);
         }
-        for attempt in 0..3 {
+        for attempt in 0..5 {
             if attempt > 0 {
-                tokio::time::sleep(Duration::from_millis(500 * attempt)).await;
+                tokio::time::sleep(Duration::from_millis(1000 * attempt)).await;
             }
-            if let Ok(resp) = self.http.head(&self.dir.new_nonce).send().await {
-                if let Some(nonce) = resp
-                    .headers()
-                    .get("replay-nonce")
-                    .and_then(|h| h.to_str().ok())
-                {
-                    return Ok(nonce.to_string());
+            for endpoint in &[&self.dir.new_nonce, &self.dir.new_account, &self.dir.new_order] {
+                if let Ok(resp) = self.http.head(*endpoint).send().await {
+                    if let Some(nonce) = resp
+                        .headers()
+                        .get("replay-nonce")
+                        .and_then(|h| h.to_str().ok())
+                    {
+                        return Ok(nonce.to_string());
+                    }
                 }
-            }
-            if let Ok(resp) = self.http.get(&self.dir.new_nonce).send().await {
-                if let Some(nonce) = resp
-                    .headers()
-                    .get("replay-nonce")
-                    .and_then(|h| h.to_str().ok())
-                {
-                    return Ok(nonce.to_string());
+                if let Ok(resp) = self.http.get(*endpoint).send().await {
+                    if let Some(nonce) = resp
+                        .headers()
+                        .get("replay-nonce")
+                        .and_then(|h| h.to_str().ok())
+                    {
+                        return Ok(nonce.to_string());
+                    }
                 }
             }
         }
@@ -1355,8 +1357,8 @@ async fn provision_acme_certificate_ca(
 pub async fn try_import_to_fly_edge(
     http: &reqwest::Client,
     domains: &[String],
-    cert_pem: &str,
-    key_pem: &str,
+    _cert_pem: &str,
+    _key_pem: &str,
 ) {
     let fly_token = std::env::var("FLY_API_TOKEN")
         .or_else(|_| std::env::var("FLY_AUTH_TOKEN"))
@@ -1369,12 +1371,10 @@ pub async fn try_import_to_fly_edge(
 
     for domain in domains {
         let query = serde_json::json!({
-            "query": "mutation($appId: String!, $hostname: String!, $fullchain: String!, $privateKey: String!) { importCertificate(input: { appId: $appId, hostname: $hostname, fullchain: $fullchain, privateKey: $privateKey }) { certificate { id hostname clientStatus } } }",
+            "query": "mutation($appId: ID!, $hostname: String!) { addCertificate(appId: $appId, hostname: $hostname) { certificate { id hostname } } }",
             "variables": {
                 "appId": app_name,
-                "hostname": domain,
-                "fullchain": cert_pem,
-                "privateKey": key_pem
+                "hostname": domain
             }
         });
 
@@ -1386,11 +1386,20 @@ pub async fn try_import_to_fly_edge(
             .send()
             .await
         {
-            if resp.status().is_success() {
-                info!(
-                    "[acme/fly-edge] Successfully synced/imported live certificate to Fly edge for '{}'",
-                    domain
-                );
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if json.get("data").and_then(|d| d.get("addCertificate")).is_some() {
+                    info!(
+                        "[acme/fly-edge] Successfully registered custom domain '{}' on Fly edge",
+                        domain
+                    );
+                } else if let Some(errors) = json.get("errors").and_then(|e| e.as_array()) {
+                    let msg = errors.first().and_then(|e| e.get("message")).and_then(|m| m.as_str()).unwrap_or("unknown");
+                    if msg.contains("already exists") {
+                        debug!("[acme/fly-edge] Domain '{}' already active on Fly edge", domain);
+                    } else {
+                        warn!("[acme/fly-edge] Fly edge registration note for '{}': {}", domain, msg);
+                    }
+                }
             }
         }
     }
@@ -1477,6 +1486,7 @@ pub async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -
 
     let http = match reqwest::Client::builder()
         .timeout(Duration::from_secs(4))
+        .danger_accept_invalid_certs(true)
         .build()
     {
         Ok(c) => c,
@@ -1489,6 +1499,14 @@ pub async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -
         .unwrap_or_else(|_| "sin".to_string());
 
     let mut peer_urls = vec![
+        format!(
+            "https://{}.{}.internal:443/internal/tls/bundle/{}",
+            primary_region, app_name, key
+        ),
+        format!(
+            "https://{}.internal:443/internal/tls/bundle/{}",
+            app_name, key
+        ),
         format!(
             "http://{}.{}.internal:443/internal/tls/bundle/{}",
             primary_region, app_name, key
@@ -1518,6 +1536,11 @@ pub async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -
     ] {
         if let Ok(addrs) = tokio::net::lookup_host(lookup).await {
             for addr in addrs {
+                peer_urls.push(format!(
+                    "https://[{}]:443/internal/tls/bundle/{}",
+                    addr.ip(),
+                    key
+                ));
                 peer_urls.push(format!(
                     "http://[{}]:443/internal/tls/bundle/{}",
                     addr.ip(),
@@ -1626,6 +1649,14 @@ async fn try_acquire_cluster_lock(
     // 2. Query peer nodes across Fly 6PN to acquire lock
     let mut lock_urls = vec![
         format!(
+            "https://{}.{}.internal:443/internal/acme/lock/{}",
+            primary_region, app_name, key
+        ),
+        format!(
+            "https://{}.internal:443/internal/acme/lock/{}",
+            app_name, key
+        ),
+        format!(
             "http://{}.{}.internal:443/internal/acme/lock/{}",
             primary_region, app_name, key
         ),
@@ -1642,6 +1673,11 @@ async fn try_acquire_cluster_lock(
     ] {
         if let Ok(addrs) = tokio::net::lookup_host(lookup).await {
             for addr in addrs {
+                lock_urls.push(format!(
+                    "https://[{}]:443/internal/acme/lock/{}",
+                    addr.ip(),
+                    key
+                ));
                 lock_urls.push(format!(
                     "http://[{}]:443/internal/acme/lock/{}",
                     addr.ip(),
@@ -1719,6 +1755,14 @@ async fn try_release_cluster_lock(
 
     let mut unlock_urls = vec![
         format!(
+            "https://{}.{}.internal:443/internal/acme/unlock/{}",
+            primary_region, app_name, key
+        ),
+        format!(
+            "https://{}.internal:443/internal/acme/unlock/{}",
+            app_name, key
+        ),
+        format!(
             "http://{}.{}.internal:443/internal/acme/unlock/{}",
             primary_region, app_name, key
         ),
@@ -1734,6 +1778,11 @@ async fn try_release_cluster_lock(
     ] {
         if let Ok(addrs) = tokio::net::lookup_host(lookup).await {
             for addr in addrs {
+                unlock_urls.push(format!(
+                    "https://[{}]:443/internal/acme/unlock/{}",
+                    addr.ip(),
+                    key
+                ));
                 unlock_urls.push(format!(
                     "http://[{}]:443/internal/acme/unlock/{}",
                     addr.ip(),
@@ -1800,6 +1849,7 @@ pub fn spawn_acme_supervisor(
 
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
+            .danger_accept_invalid_certs(true)
             .build()
             .unwrap_or_default();
 
@@ -1821,6 +1871,12 @@ pub fn spawn_acme_supervisor(
                     // Ensure live in-memory resolver is updated with the validated cert on disk
                     if let Some(ref resolver) = config.cert_resolver {
                         let _ = resolver.update_from_pem(&config.cert_path, &config.key_path);
+                    }
+                    if let (Ok(cert_pem), Ok(key_pem)) = (
+                        fs::read_to_string(&config.cert_path),
+                        fs::read_to_string(&config.key_path),
+                    ) {
+                        try_import_to_fly_edge(&http, &config.domains, &cert_pem, &key_pem).await;
                     }
                     false
                 }

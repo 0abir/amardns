@@ -129,16 +129,6 @@ impl Config {
 
         let shield_fly_dev = !platform_domain;
 
-        let tls_cert_path = env::var("TLS_CERT_PATH")
-            .ok()
-            .filter(|s| !s.trim().is_empty());
-        let tls_key_path = env::var("TLS_KEY_PATH")
-            .ok()
-            .filter(|s| !s.trim().is_empty());
-        let tls_enabled = env::var("TLS_ENABLED")
-            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-            .unwrap_or(false);
-
         let desec_token = env::var("DESEC_TOKEN")
             .or_else(|_| env::var("DEDYN_TOKEN"))
             .ok()
@@ -168,14 +158,27 @@ impl Config {
                     || zerossl_api_key.is_some(),
             );
 
+        let port = parse_port("PORT", 443);
+        let dot_port = parse_port("DOT_PORT", 853);
+
+        let tls_cert_path = env::var("TLS_CERT_PATH")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        let tls_key_path = env::var("TLS_KEY_PATH")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        let tls_enabled = env::var("TLS_ENABLED")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
+
         let host = env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
         let udp_host = env::var("UDP_HOST").unwrap_or_else(|_| host.clone());
         let plain53_host = env::var("PLAIN53_HOST").unwrap_or_else(|_| host.clone());
         let plain53_udp_host = env::var("PLAIN53_UDP_HOST").unwrap_or_else(|_| udp_host.clone());
 
         Self {
-            port: parse_port("PORT", 443),
-            dot_port: parse_port("DOT_PORT", 853),
+            port,
+            dot_port,
             host,
             udp_host,
             db_path: env::var("DB_PATH").unwrap_or_else(|_| "/data/amardns.wal".to_string()),
@@ -352,7 +355,7 @@ impl Config {
 
     /// Returns `true` when native TLS termination is configured and enabled.
     pub fn is_tls_enabled(&self) -> bool {
-        self.tls_enabled && self.tls_cert_path.is_some() && self.tls_key_path.is_some()
+        self.tls_enabled
     }
 
     /// Returns the effective TLS certificate and private key file paths if available on disk.

@@ -459,6 +459,18 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 6h. Initialize Hot-Reloadable Dynamic TLS Resolver for DoT
+    // Seed /data/cert.pem and /data/key.pem from embedded /certs image bundle on fresh volume boot
+    let seed_cert = std::path::Path::new("/certs/cert.pem");
+    let seed_key = std::path::Path::new("/certs/key.pem");
+    let target_cert = std::path::Path::new("/data/cert.pem");
+    let target_key = std::path::Path::new("/data/key.pem");
+    if (!target_cert.exists() || !target_key.exists()) && seed_cert.exists() && seed_key.exists() {
+        let _ = std::fs::create_dir_all("/data");
+        let _ = std::fs::copy(seed_cert, target_cert);
+        let _ = std::fs::copy(seed_key, target_key);
+        info!("[boot] Seeded genuine TLS certificate bundle from image into persistent storage (/data).");
+    }
+
     let cert_resolver = match config.get_effective_tls_paths() {
         Some((cert_path, key_path)) => {
             info!(
@@ -548,40 +560,40 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // 7. Load TCP TLS configuration for DoH (if configured)
+    // 7. Dynamic Hot-Reloadable TLS configuration for DoH (HTTPS / HTTP2 / HTTP1.1)
     let doh_tls_config = if config.is_tls_enabled() {
-        let cert_path = config.tls_cert_path.as_deref().unwrap();
-        let key_path = config.tls_key_path.as_deref().unwrap();
-        if std::path::Path::new(cert_path).exists() && std::path::Path::new(key_path).exists() {
-            info!(
-                "[tls] Native TLS enabled for TCP DoH from '{}' and '{}'",
-                cert_path, key_path
-            );
-            server::tls::create_doh_tls_config(cert_path, key_path).ok()
-        } else {
-            info!(
-                "[tls] Native TLS requested for DoH but cert files not found on disk yet. Running in edge TLS mode."
-            );
-            None
+        match server::tls::create_dynamic_doh_server_config(cert_resolver.clone()) {
+            Ok(cfg) => {
+                info!(
+                    "[doh] Native dynamic TLS termination enabled for DoH (ALPN: h2, http/1.1)"
+                );
+                Some(cfg)
+            }
+            Err(e) => {
+                warn!("[doh] Failed to create dynamic DoH TLS config: {}", e);
+                None
+            }
         }
     } else {
         None
     };
 
     // 7b. Dynamic Hot-Reloadable TLS configuration for DoT (DNS-over-TLS)
-    let dot_tls_config = match server::tls::create_dynamic_dot_server_config(
-        cert_resolver.clone(),
-    ) {
-        Ok(cfg) => {
-            info!(
-                "[dot] Native TLS termination enabled with dynamic hot-reloadable certificate resolver (ALPN: dot)"
-            );
-            Some(cfg)
+    let dot_tls_config = if config.is_tls_enabled() {
+        match server::tls::create_dynamic_dot_server_config(cert_resolver.clone()) {
+            Ok(cfg) => {
+                info!(
+                    "[dot] Native TLS termination enabled with dynamic hot-reloadable certificate resolver (ALPN: dot)"
+                );
+                Some(cfg)
+            }
+            Err(e) => {
+                warn!("[dot] Failed to create dynamic DoT TLS config: {}", e);
+                None
+            }
         }
-        Err(e) => {
-            warn!("[dot] Failed to create dynamic DoT TLS config: {}", e);
-            None
-        }
+    } else {
+        None
     };
 
     // 8. Shutdown coordination channels (derived from centralized AppState watch channel)

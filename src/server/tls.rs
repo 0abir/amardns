@@ -55,6 +55,7 @@ pub fn load_tls_config(
 }
 
 /// Creates TLS configuration optimized for DoH (HTTP/2 + HTTP/1.1 ALPN).
+#[allow(dead_code)]
 pub fn create_doh_tls_config(
     cert_path: &str,
     key_path: &str,
@@ -186,7 +187,6 @@ impl ResolvesServerCert for DynamicCertResolver {
     }
 }
 
-/// Creates a dynamic rustls ServerConfig backed by a hot-reloadable certificate resolver.
 /// Creates a dynamic rustls ServerConfig for DoT backed by a hot-reloadable certificate resolver.
 /// Uses flexible ALPN (accepts both ALPN "dot" and clients with no ALPN like Android/doggo).
 pub fn create_dynamic_dot_server_config(
@@ -199,7 +199,19 @@ pub fn create_dynamic_dot_server_config(
     Ok(Arc::new(config))
 }
 
-/// Serves Axum Router over native TLS using tokio-rustls and hyper-util with graceful shutdown.
+/// Creates a dynamic rustls ServerConfig for DoH/HTTPS backed by a hot-reloadable certificate resolver.
+/// Configures ALPN for HTTP/2 and HTTP/1.1.
+pub fn create_dynamic_doh_server_config(
+    resolver: Arc<DynamicCertResolver>,
+) -> Result<Arc<rustls::ServerConfig>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_cert_resolver(resolver);
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(Arc::new(config))
+}
+
+/// Serves Axum Router over native TLS using tokio-rustls and hyper-util with graceful shutdown and PROXY v2 support.
 pub async fn serve_axum_tls<F>(
     listener: TcpListener,
     app: axum::Router,
@@ -216,7 +228,7 @@ where
     loop {
         tokio::select! {
             accept_res = listener.accept() => {
-                let (tcp_stream, remote_addr) = match accept_res {
+                let (mut tcp_stream, remote_addr) = match accept_res {
                     Ok(conn) => conn,
                     Err(err) => {
                         tracing::warn!("[tls] TCP accept error: {}", err);
@@ -229,10 +241,18 @@ where
                 let app = app.clone();
 
                 tokio::spawn(async move {
-                    let tls_stream = match acceptor.accept(tcp_stream).await {
+                    let _ = tcp_stream.set_nodelay(true);
+                    // Extract real client IP if PROXY protocol v2 header is present (Fly Anycast proxy)
+                    let (real_client_addr, pre_read) = crate::server::dot::parse_proxy_v2_header(&mut tcp_stream, remote_addr).await;
+                    let stream = crate::server::dot::PrefixedStream::new(pre_read, tcp_stream);
+
+                    let tls_stream = match acceptor.accept(stream).await {
                         Ok(s) => s,
                         Err(e) => {
-                            tracing::debug!("[tls] Handshake error: {}", e);
+                            let err_str = e.to_string().to_lowercase();
+                            if !err_str.contains("eof") && !err_str.contains("unexpected eof") && !err_str.contains("connection reset") {
+                                tracing::debug!("[tls] Handshake error from {}: {}", real_client_addr, e);
+                            }
                             return;
                         }
                     };
@@ -240,13 +260,16 @@ where
                     let io = TokioIo::new(tls_stream);
                     let service = hyper::service::service_fn(move |mut req: axum::http::Request<hyper::body::Incoming>| {
                         let mut app_clone = app.clone();
-                        req.extensions_mut().insert(ConnectInfo(remote_addr));
+                        req.extensions_mut().insert(ConnectInfo(real_client_addr));
                         let req = req.map(axum::body::Body::new);
                         app_clone.call(req)
                     });
 
                     if let Err(err) = auto_builder.serve_connection_with_upgrades(io, service).await {
-                        tracing::debug!("[tls] Connection error: {}", err);
+                        let err_str = err.to_string().to_lowercase();
+                        if !err_str.contains("eof") && !err_str.contains("unexpected eof") && !err_str.contains("connection reset") && !err_str.contains("broken pipe") {
+                            tracing::debug!("[tls] Connection error from {}: {}", real_client_addr, err);
+                        }
                     }
                 });
             }
