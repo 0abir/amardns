@@ -768,11 +768,8 @@ pub fn extract_cert_domains(cert_path: &str) -> Vec<String> {
     extract_cert_sans_der(first_cert.as_ref())
 }
 
-/// Validates an existing certificate and private key pair on disk.
-/// Checks that the files exist, parse cleanly into valid DER, have valid signing keys,
-/// have at least `min_days_remaining` days remaining before expiration,
-/// and that ALL `expected_domains` are covered by the certificate's SANs.
-pub fn validate_existing_cert_and_key(
+/// Validates an individual certificate and private key file pair.
+pub fn validate_cert_key_pair(
     cert_path: &str,
     key_path: &str,
     expected_domains: &[String],
@@ -788,10 +785,6 @@ pub fn validate_existing_cert_and_key(
         for d in expected_domains {
             let dl = d.trim().to_ascii_lowercase();
             if !cert_domains.iter().any(|cd| cd == &dl) {
-                info!(
-                    "[acme-supervisor] Existing certificate missing domain '{}' (cert covers: {:?}). Re-provisioning required.",
-                    d, cert_domains
-                );
                 return None;
             }
         }
@@ -804,6 +797,53 @@ pub fn validate_existing_cert_and_key(
     let _signing_key = tokio_rustls::rustls::crypto::ring::sign::any_supported_type(&key).ok()?;
 
     Some(days)
+}
+
+/// Validates an existing certificate and private key pair on disk.
+/// Checks that the files exist, parse cleanly into valid DER, have valid signing keys,
+/// have at least `min_days_remaining` days remaining before expiration,
+/// and that ALL `expected_domains` are covered by the certificate's SANs.
+/// Checks specified paths and fallback candidate paths on disk.
+pub fn validate_existing_cert_and_key(
+    cert_path: &str,
+    key_path: &str,
+    expected_domains: &[String],
+    min_days_remaining: i64,
+) -> Option<i64> {
+    // 1. Check primary specified paths
+    if let Some(days) = validate_cert_key_pair(cert_path, key_path, expected_domains, min_days_remaining) {
+        return Some(days);
+    }
+
+    // 2. Check candidate fallback locations on disk
+    let candidates = [
+        ("/data/cert.pem", "/data/key.pem"),
+        ("cert.pem", "key.pem"),
+    ];
+    for (c_path, k_path) in &candidates {
+        if *c_path == cert_path && *k_path == key_path {
+            continue;
+        }
+        if let Some(days) = validate_cert_key_pair(c_path, k_path, expected_domains, min_days_remaining) {
+            if let (Ok(cert_content), Ok(key_content)) = (fs::read_to_string(c_path), fs::read_to_string(k_path)) {
+                if let Some(parent) = Path::new(cert_path).parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                if let Some(parent) = Path::new(key_path).parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                let _ = fs::write(cert_path, &cert_content);
+                let _ = fs::write(key_path, &key_content);
+                info!(
+                    "[acme-supervisor] Restored valid certificate and key from candidate '{}' -> '{}' ({} days remaining)",
+                    c_path, cert_path, days
+                );
+                return Some(days);
+            }
+        }
+    }
+
+    None
 }
 
 // ── ACME Provisioning Flow ──────────────────────────────────────────────────
@@ -1050,10 +1090,10 @@ async fn provision_acme_certificate_ca(
         );
         tokio::time::sleep(Duration::from_secs(35)).await;
 
-        // Check propagation via DoH
+        // Check propagation via DoH (spaced checks, max 3 attempts)
         for (domain, expected_val) in &expected_challenges {
             let mut propagated = false;
-            for _attempt in 1..=6 {
+            for _attempt in 1..=3 {
                 if check_txt_propagation(&http, domain, expected_val).await {
                     info!(
                         "[acme] Confirmed TXT propagation for '{}' (verified via DoH)",
@@ -1062,11 +1102,11 @@ async fn provision_acme_certificate_ca(
                     propagated = true;
                     break;
                 }
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                tokio::time::sleep(Duration::from_secs(10)).await;
             }
             if !propagated {
                 info!(
-                    "[acme] Direct DoH propagation check pending for '{}'; proceeding after grace period.",
+                    "[acme] Direct DoH propagation check pending for '{}'; proceeding with CA challenge.",
                     domain
                 );
             }
@@ -1091,18 +1131,45 @@ async fn provision_acme_certificate_ca(
         }
     }
 
-    // Poll order status until ready or all authorizations valid
+    // Poll order status until ready or all authorizations valid (non-hammering with progressive backoff)
     let order_url = finalize_url.replace("/finalize", "");
     let mut order_ready = false;
-    for attempt in 1..=60 {
-        tokio::time::sleep(Duration::from_secs(5)).await;
+    let mut verified_authz: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    for attempt in 1..=12 {
+        let sleep_secs = if attempt <= 2 { 10 } else { 15 };
+        tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+
+        // 1. Check overall order status first
+        let mut order_status_str = None;
+        if let Ok(order_resp) = client.post_jws(&order_url, &serde_json::Value::Null).await {
+            if let Ok(order_check) = order_resp.json::<serde_json::Value>().await {
+                let status = order_check["status"].as_str().unwrap_or("unknown").to_string();
+                info!(
+                    "[acme] Certificate order status: {} (attempt {}/{})",
+                    status, attempt, 12
+                );
+                if status == "ready" {
+                    order_ready = true;
+                    break;
+                } else if status == "invalid" {
+                    return Err(format!("ACME order invalid: {:?}", order_check).into());
+                }
+                order_status_str = Some(status);
+            }
+        }
+
+        // 2. Only poll pending authorizations that have not yet verified
         let mut all_valid = true;
         for authz_val in authz_urls {
             let authz_url = match authz_val.as_str() {
                 Some(u) => u,
                 None => continue,
             };
+            if verified_authz.contains(authz_url) {
+                continue;
+            }
+
             let authz_resp = match client.post_jws(authz_url, &serde_json::Value::Null).await {
                 Ok(r) => r,
                 Err(e) => {
@@ -1130,22 +1197,24 @@ async fn provision_acme_certificate_ca(
                 .unwrap_or("unknown");
             let status = authz_data["status"].as_str().unwrap_or("unknown");
             info!(
-                "[acme] Verification status for '{}': {} (attempt {})",
-                domain, status, attempt
+                "[acme] Verification status for '{}': {} (attempt {}/{})",
+                domain, status, attempt, 12
             );
             if status == "invalid" {
                 return Err(
                     format!("Domain '{}' validation failed: {:?}", domain, authz_data).into(),
                 );
             }
-            if status != "valid" {
+            if status == "valid" {
+                verified_authz.insert(authz_url.to_string());
+            } else {
                 all_valid = false;
-                // If still pending, re-notify the specific challenge every 4 attempts (every ~20s)
-                if attempt % 4 == 0 {
+                // Only re-notify challenge on attempt 3 and 6 to avoid hammering
+                if attempt == 3 || attempt == 6 {
                     if let Some(chals) = authz_data["challenges"].as_array() {
                         if let Some(dns_chal) = chals.iter().find(|c| c["type"] == "dns-01") {
                             if let Some(chal_url) = dns_chal["url"].as_str() {
-                                info!("[acme] Re-triggering verification for '{}'...", domain);
+                                info!("[acme] Re-notifying ACME challenge for '{}'...", domain);
                                 let _ = client.post_jws(chal_url, &serde_json::json!({})).await;
                             }
                         }
@@ -1154,37 +1223,9 @@ async fn provision_acme_certificate_ca(
             }
         }
 
-        let order_resp = match client.post_jws(&order_url, &serde_json::Value::Null).await {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(
-                    "[acme] Transient network error polling order status: {}. Continuing next tick...",
-                    e
-                );
-                continue;
-            }
-        };
-        let order_check: serde_json::Value = match order_resp.json().await {
-            Ok(j) => j,
-            Err(e) => {
-                warn!(
-                    "[acme] Error decoding order status JSON: {}. Continuing next tick...",
-                    e
-                );
-                continue;
-            }
-        };
-        let order_status = order_check["status"].as_str().unwrap_or("unknown");
-        info!(
-            "[acme] Certificate order status: {} (attempt {})",
-            order_status, attempt
-        );
-
-        if order_status == "ready" || all_valid {
+        if (all_valid && verified_authz.len() == authz_urls.len()) || order_status_str.as_deref() == Some("ready") {
             order_ready = true;
             break;
-        } else if order_status == "invalid" {
-            return Err(format!("ACME order invalid: {:?}", order_check).into());
         }
     }
 
@@ -1387,7 +1428,7 @@ async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -> bo
     };
 
     let http = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(4))
         .build()
     {
         Ok(c) => c,
@@ -1442,11 +1483,17 @@ async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -> bo
         }
     }
 
+    // Deduplicate peer URLs
+    let mut seen = std::collections::HashSet::new();
+    peer_urls.retain(|u| seen.insert(u.clone()));
+
     for url in &peer_urls {
         if let Ok(resp) = http
             .get(url)
             .header("x-master-key", key)
             .header("x-auth-key", key)
+            .header("Authorization", format!("Bearer {}", key))
+            .header("x-peer-sync", "1")
             .send()
             .await
         {
@@ -1555,6 +1602,9 @@ async fn try_acquire_cluster_lock(
         }
     }
 
+    let mut seen = std::collections::HashSet::new();
+    lock_urls.retain(|u| seen.insert(u.clone()));
+
     for url in &lock_urls {
         let body = serde_json::json!({
             "machine_id": machine_id,
@@ -1564,6 +1614,8 @@ async fn try_acquire_cluster_lock(
             .post(url)
             .header("x-master-key", key)
             .header("x-auth-key", key)
+            .header("Authorization", format!("Bearer {}", key))
+            .header("x-peer-sync", "1")
             .json(&body)
             .send()
             .await
@@ -1628,12 +1680,17 @@ async fn try_release_cluster_lock(
         }
     }
 
+    let mut seen = std::collections::HashSet::new();
+    unlock_urls.retain(|u| seen.insert(u.clone()));
+
     for url in &unlock_urls {
         let body = serde_json::json!({ "machine_id": machine_id });
         let _ = http
             .post(url)
             .header("x-master-key", key)
             .header("x-auth-key", key)
+            .header("Authorization", format!("Bearer {}", key))
+            .header("x-peer-sync", "1")
             .json(&body)
             .send()
             .await;
@@ -1796,8 +1853,8 @@ pub fn spawn_acme_supervisor(
                             "[acme-supervisor] ACME lock is held by a peer node. Waiting for peer to complete certificate provisioning..."
                         );
                         let mut synced = false;
-                        for _ in 1..=60 {
-                            tokio::time::sleep(Duration::from_secs(10)).await;
+                        for _ in 1..=30 {
+                            tokio::time::sleep(Duration::from_secs(15)).await;
                             if try_sync_from_peer(&config, master_key.as_deref()).await {
                                 info!(
                                     "[acme-supervisor] Successfully synced certificate bundle from peer."
@@ -1809,7 +1866,7 @@ pub fn spawn_acme_supervisor(
                         if synced {
                             tokio::time::sleep(Duration::from_secs(24 * 3600)).await;
                         } else {
-                            tokio::time::sleep(Duration::from_secs(30)).await;
+                            tokio::time::sleep(Duration::from_secs(300)).await;
                         }
                     }
                 } else {

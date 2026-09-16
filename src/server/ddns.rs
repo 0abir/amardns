@@ -339,6 +339,139 @@ pub async fn update_dynu_ip(
     }
 }
 
+/// Resolves current public A and AAAA records for a domain via Google and Cloudflare DoH.
+pub async fn resolve_current_ips(
+    http: &reqwest::Client,
+    domain: &str,
+) -> (Option<String>, Option<String>) {
+    let mut current_v4 = None;
+    let mut current_v6 = None;
+
+    // 1. Google DoH
+    let v4_url = format!("https://dns.google/resolve?name={}&type=A", domain);
+    if let Ok(resp) = http.get(&v4_url).send().await {
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            if let Some(answers) = json["Answer"].as_array() {
+                for a in answers {
+                    if let Some(data) = a["data"].as_str() {
+                        if let Ok(IpAddr::V4(v4)) = data.trim().parse::<IpAddr>() {
+                            current_v4 = Some(v4.to_string());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let v6_url = format!("https://dns.google/resolve?name={}&type=AAAA", domain);
+    if let Ok(resp) = http.get(&v6_url).send().await {
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            if let Some(answers) = json["Answer"].as_array() {
+                for a in answers {
+                    if let Some(data) = a["data"].as_str() {
+                        if let Ok(IpAddr::V6(v6)) = data.trim().parse::<IpAddr>() {
+                            current_v6 = Some(v6.to_string());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Cloudflare DoH Fallback
+    if current_v4.is_none() {
+        let cf_v4 = format!(
+            "https://cloudflare-dns.com/dns-query?name={}&type=A",
+            domain
+        );
+        if let Ok(resp) = http
+            .get(&cf_v4)
+            .header("Accept", "application/dns-json")
+            .send()
+            .await
+        {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let Some(answers) = json["Answer"].as_array() {
+                    for a in answers {
+                        if let Some(data) = a["data"].as_str() {
+                            if let Ok(IpAddr::V4(v4)) = data.trim().parse::<IpAddr>() {
+                                current_v4 = Some(v4.to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if current_v6.is_none() {
+        let cf_v6 = format!(
+            "https://cloudflare-dns.com/dns-query?name={}&type=AAAA",
+            domain
+        );
+        if let Ok(resp) = http
+            .get(&cf_v6)
+            .header("Accept", "application/dns-json")
+            .send()
+            .await
+        {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let Some(answers) = json["Answer"].as_array() {
+                    for a in answers {
+                        if let Some(data) = a["data"].as_str() {
+                            if let Ok(IpAddr::V6(v6)) = data.trim().parse::<IpAddr>() {
+                                current_v6 = Some(v6.to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    (current_v4, current_v6)
+}
+
+/// Checks whether a domain already points to the discovered public IPs.
+/// Returns true if no DDNS update is necessary, preventing unnecessary API hammering.
+pub async fn is_domain_ip_up_to_date(
+    http: &reqwest::Client,
+    domain: &str,
+    target_ips: &PublicIps,
+) -> bool {
+    let (cur_v4, cur_v6) = resolve_current_ips(http, domain).await;
+
+    let v4_match = match (&target_ips.ipv4, &cur_v4) {
+        (Some(target), Some(current)) => target == current,
+        (None, _) => true,
+        (Some(_), None) => false,
+    };
+
+    let v6_match = match (&target_ips.ipv6, &cur_v6) {
+        (Some(target), Some(current)) => target == current,
+        (None, _) => true,
+        (Some(_), None) => false,
+    };
+
+    if v4_match && v6_match {
+        info!(
+            "[ddns] Domain '{}' already resolves to target IP(s) (A: {:?}, AAAA: {:?}). Skipping redundant DDNS API call.",
+            domain, cur_v4, cur_v6
+        );
+        true
+    } else {
+        info!(
+            "[ddns] Domain '{}' requires IP update (Current -> A: {:?}, AAAA: {:?}; Target -> A: {:?}, AAAA: {:?})",
+            domain, cur_v4, cur_v6, target_ips.ipv4, target_ips.ipv6
+        );
+        false
+    }
+}
+
 /// Orchestrates automated public IP discovery and synchronizes DNS A/AAAA records across all configured DDNS providers.
 pub async fn sync_all_ddns_records(config: &Config) {
     if config.desec_token.is_none()
@@ -380,6 +513,9 @@ pub async fn sync_all_ddns_records(config: &Config) {
             }
         }
         for domain in &domains_to_sync {
+            if is_domain_ip_up_to_date(&http, domain, &ips).await {
+                continue;
+            }
             if let Err(e) = update_desec_ip(&http, token, domain, &ips).await {
                 warn!("[ddns/desec] Error updating '{}': {}", domain, e);
             }
@@ -395,6 +531,9 @@ pub async fn sync_all_ddns_records(config: &Config) {
             }
         }
         for domain in &domains_to_sync {
+            if is_domain_ip_up_to_date(&http, domain, &ips).await {
+                continue;
+            }
             if let Err(e) = update_duckdns_ip(&http, token, domain, &ips).await {
                 warn!("[ddns/duckdns] Error updating '{}': {}", domain, e);
             }
@@ -414,6 +553,9 @@ pub async fn sync_all_ddns_records(config: &Config) {
             }
         }
         for domain in &domains_to_sync {
+            if is_domain_ip_up_to_date(&http, domain, &ips).await {
+                continue;
+            }
             if let Err(e) = update_dynu_ip(&http, api_key, domain, &ips).await {
                 warn!("[ddns/dynu] Error updating '{}': {}", domain, e);
             }
