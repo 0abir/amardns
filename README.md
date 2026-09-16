@@ -28,8 +28,7 @@ AmarDNS is deployed across Anycast edge nodes with low-latency DNS resolution an
 | **DNS-over-HTTPS (DoH)** | `https://amardns.dedyn.io/dns-query` | `443` | Browsers, iOS/macOS Encrypted DNS profiles, `cloudflared`, `dnscrypt-proxy` |
 | **DoH JSON REST API** | `https://amardns.dedyn.io/resolve` | `443` | Web inspector, command-line scripts (`curl "https://amardns.dedyn.io/resolve?name=google.com&type=A"`) |
 | **DNS-over-TLS (DoT)** | `amardns.dedyn.io` | `853` | Android Private DNS, stubby, systemd-resolved |
-| **Plain DNS (IPv4)** | `66.241.124.24` | `53/udp`, `53/tcp` | Standard universal recursive DNS |
-| **Plain DNS (IPv6)** | `2a09:8280:1::18e:50e2:0` | `53/udp`, `53/tcp` | Standard IPv6 recursive DNS |
+| **Plain DNS (IPv6)** | `2a09:8280:1::190:863e:0` | `53/udp`, `53/tcp` | Standard IPv6 recursive DNS |
 | **Edge Dashboard & Console** | `https://amardns.dedyn.io/` | `443` | Live telemetry matrix, neural brain inspector, threat feeds |
 
 ---
@@ -284,7 +283,7 @@ AmarDNS features built-in, autonomous Dynamic DNS (DDNS) and ACME DNS-01 certifi
 ### Automated DDNS IP Synchronization
 
 Whenever AmarDNS boots (and automatically on every daily cron run at 00:00 UTC):
-1. **Public IP Discovery**: Resolves the application Anycast hostname (`{app}.fly.dev`) using DoH to detect the active public IPv4 (`66.241.124.24`) and IPv6 (`2a09:8280:1::18e:50e2:0`) addresses (with automatic fallbacks to public IP echo endpoints).
+1. **Public IP Discovery**: Resolves the application Anycast hostname (`{app}.fly.dev`) using DoH to detect the active public IPv4 (`66.241.125.35`) and IPv6 (`2a09:8280:1::190:863e:0`) addresses (with automatic fallbacks to public IP echo endpoints).
 2. **Provider Sync**:
    - Updates deSEC `A` and `AAAA` records via `PATCH https://desec.io/api/v1/domains/{domain}/rrsets/`.
    - Updates DuckDNS IPv4 and IPv6 via `https://www.duckdns.org/update`.
@@ -348,7 +347,7 @@ config https-dns-proxy 'amardns_1'
     option listen_port '5053'
     option user 'nobody'
     option group 'nogroup'
-    option bootstrap_dns '66.241.124.24'
+    option bootstrap_dns '2a09:8280:1::190:863e:0,9.9.9.9'
     option resolver_url 'https://amardns.dedyn.io/dns-query?client=router_primary'
 
 config https-dns-proxy 'amardns_2'
@@ -356,7 +355,7 @@ config https-dns-proxy 'amardns_2'
     option listen_port '5054'
     option user 'nobody'
     option group 'nogroup'
-    option bootstrap_dns '2a09:8280:1::18e:50e2:0,66.241.124.24'
+    option bootstrap_dns '2a09:8280:1::190:863e:0,149.112.112.112'
     option resolver_url 'https://amardns.dedyn.io/dns-query?client=router_secondary'
 ```
 
