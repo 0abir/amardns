@@ -257,7 +257,7 @@ impl AppState {
             custom_blocklist: RwLock::new(custom_blocklist),
             custom_whitelist: RwLock::new(custom_whitelist),
             custom_common: RwLock::new(custom_common),
-            cache: DnsCache::new(150_000), // 150k entries ≈ 70-100 MB — dynamic expansion, governed under 200 MB hard cap
+            cache: DnsCache::new(100_000), // 100k entries ≈ 45-70 MB — dynamic expansion, governed under 150 MB hard cap
             upstreams: UpstreamPool::new(),
             rate_limiter: RateLimiter::new(100.0, 50.0, 500.0, 200.0), // 100 capacity, 50/sec refill; 500 IP ceiling, 200/sec refill
             metrics: Metrics::new(),

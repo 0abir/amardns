@@ -1,0 +1,12 @@
+name = "dns"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+
+# Daily automated maintenance at 00:00 UTC
+[triggers]
+crons = ["0 0 * * *"]
+
+# Cloudflare KV Namespace (Auto-detected by code regardless of binding name)
+[[kv_namespaces]]
+binding = "KV"
+id = "1d40481389964e12a71dc54173c389d7"

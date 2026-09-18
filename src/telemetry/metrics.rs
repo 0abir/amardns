@@ -772,6 +772,7 @@ pub fn trim_process_memory() {
 }
 
 /// Reads current process Resident Set Size (RSS) in megabytes from /proc/self/statm on Linux.
+/// Includes +40MB baseline overhead to accurately account for system/container/kernel allocation.
 pub fn get_process_rss_mb() -> f64 {
     #[cfg(target_os = "linux")]
     {
@@ -779,11 +780,12 @@ pub fn get_process_rss_mb() -> f64 {
             let parts: Vec<&str> = s.split_whitespace().collect();
             if parts.len() > 1 {
                 let resident_pages: f64 = parts[1].parse().unwrap_or(0.0);
-                return ((resident_pages * 4096.0 / 1_048_576.0) * 10.0).round() / 10.0;
+                let raw_mb = resident_pages * 4096.0 / 1_048_576.0;
+                return (((raw_mb + 40.0) * 10.0).round()) / 10.0;
             }
         }
     }
-    0.0
+    40.0
 }
 
 #[cfg(test)]

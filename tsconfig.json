@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "lib": ["ESNext", "DOM", "WebWorker"],
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["@cloudflare/workers-types", "node"]
+  },
+  "include": ["CWORKER/src/**/*", "CWORKER/test/**/*"],
+  "exclude": ["node_modules", "target", ".wrangler", "CWORKER/node_modules"]
+}

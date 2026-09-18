@@ -27,6 +27,12 @@ fly.toml
 # Logs
 *.log
 
+# Node & Cloudflare Worker
+node_modules/
+**/node_modules/
+.wrangler/
+**/.wrangler/
+
 # OS & Editor Files
 .DS_Store
 Thumbs.db

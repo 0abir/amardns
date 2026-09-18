@@ -1,4 +1,5 @@
 use moka::future::Cache;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -24,26 +25,48 @@ pub struct DnsCache {
     neg_cache: Cache<String, (Instant, u32)>,
     neg_hits: AtomicU64,
     swr_hits: AtomicU64,
-    compressed_bytes: AtomicU64,
-    uncompressed_bytes: AtomicU64,
+    compressed_bytes: Arc<AtomicU64>,
+    uncompressed_bytes: Arc<AtomicU64>,
     max_capacity: u64,
 }
 
 impl DnsCache {
     pub fn new(max_capacity: u64) -> Self {
+        let compressed_bytes = Arc::new(AtomicU64::new(0));
+        let uncompressed_bytes = Arc::new(AtomicU64::new(0));
+
+        let comp_listener = Arc::clone(&compressed_bytes);
+        let uncomp_listener = Arc::clone(&uncompressed_bytes);
+
+        let cache = Cache::builder()
+            .max_capacity(max_capacity)
+            .time_to_idle(Duration::from_secs(3600))
+            .eviction_listener(move |_key, entry: CachedResponse, _cause| {
+                let stored_len = entry.wire.len() as u64;
+                let uncomp_len = entry.uncompressed_len as u64;
+                comp_listener
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                        Some(v.saturating_sub(stored_len))
+                    })
+                    .ok();
+                uncomp_listener
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                        Some(v.saturating_sub(uncomp_len))
+                    })
+                    .ok();
+            })
+            .build();
+
         Self {
-            cache: Cache::builder()
-                .max_capacity(max_capacity)
-                .time_to_idle(Duration::from_secs(3600))
-                .build(),
+            cache,
             neg_cache: Cache::builder()
                 .max_capacity(50_000) // 50k negative entries ≈ 8 MB
                 .time_to_idle(Duration::from_secs(300))
                 .build(),
             neg_hits: AtomicU64::new(0),
             swr_hits: AtomicU64::new(0),
-            compressed_bytes: AtomicU64::new(0),
-            uncompressed_bytes: AtomicU64::new(0),
+            compressed_bytes,
+            uncompressed_bytes,
             max_capacity,
         }
     }
@@ -343,9 +366,12 @@ impl DnsCache {
     pub async fn clear(&self) {
         self.cache.invalidate_all();
         self.neg_cache.invalidate_all();
+        self.cache.run_pending_tasks().await;
+        self.neg_cache.run_pending_tasks().await;
         self.neg_hits.store(0, Ordering::Relaxed);
         self.compressed_bytes.store(0, Ordering::Relaxed);
         self.uncompressed_bytes.store(0, Ordering::Relaxed);
+        crate::telemetry::metrics::trim_process_memory();
     }
 
     /// Flushes pending maintenance tasks and evicts expired entries immediately.
@@ -363,7 +389,9 @@ impl DnsCache {
         let count = self.cache.entry_count() as usize;
         let compressed = self.compressed_bytes.load(Ordering::Relaxed);
         let uncompressed = self.uncompressed_bytes.load(Ordering::Relaxed);
-        let bytes = if compressed > 0 {
+        let bytes = if count == 0 {
+            0
+        } else if compressed > 0 {
             compressed
         } else {
             (count as u64) * 256
@@ -392,6 +420,9 @@ impl DnsCache {
     pub fn flush(&self) {
         self.cache.invalidate_all();
         self.neg_cache.invalidate_all();
+        self.compressed_bytes.store(0, Ordering::Relaxed);
+        self.uncompressed_bytes.store(0, Ordering::Relaxed);
+        crate::telemetry::metrics::trim_process_memory();
     }
 
     #[allow(dead_code)]
@@ -459,5 +490,26 @@ mod tests {
         assert_eq!(wire.len(), sample_dns.len());
         assert_eq!(wire[0..2], [0x99, 0x99]);
         assert_eq!(&wire[12..], &sample_dns[12..]);
+    }
+
+    #[tokio::test]
+    async fn test_cache_clear_and_eviction_byte_tracking() {
+        let cache = DnsCache::new(2);
+        let dummy = vec![0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
+
+        cache.insert("a.com", 1, dummy.clone(), 300).await;
+        cache.insert("b.com", 1, dummy.clone(), 300).await;
+        cache.run_pending_tasks().await;
+
+        let (count, bytes, _, _) = cache.get_stats();
+        assert_eq!(count, 2);
+        assert!(bytes > 0);
+
+        // Clear cache and verify bytes drop to 0
+        cache.clear().await;
+        let (count_cleared, bytes_cleared, mb_cleared, _) = cache.get_stats();
+        assert_eq!(count_cleared, 0);
+        assert_eq!(bytes_cleared, 0);
+        assert_eq!(mb_cleared, 0.0);
     }
 }

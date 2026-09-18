@@ -611,7 +611,7 @@ pub fn render_security_page(host: &str, region: &str, machine_id: &str) -> Strin
 
 <h2 class="sec-heading">3. Memory Governor &amp; Rate Limiter Architecture</h2>
 <ul class="feat-list">
-  <li><strong>Dynamic Memory Governor:</strong> Operates under a 200MB hard RSS ceiling. At 140MB, proactive eviction runs; at 175MB, emergency cache shedding instantly resets memory to ~30MB.</li>
+  <li><strong>Dynamic Memory Governor:</strong> Operates under a 150MB hard RSS ceiling. At 110MB, proactive eviction runs; at 135MB, emergency cache shedding instantly resets memory to ~45MB.</li>
   <li><strong>Token-Bucket Rate Limiter:</strong> Enforces per-IP and per-device burst limits with automatic CIDR exemptions for private RFC 1918 networks and Carrier-Grade NAT.</li>
   <li><strong>Singleflight Concurrency Coalescing:</strong> Merges identical concurrent queries into a single upstream request, eliminating thundering-herd surges.</li>
 </ul>

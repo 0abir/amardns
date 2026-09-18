@@ -1,0 +1,27 @@
+{
+  "name": "dns",
+  "version": "1.0.0",
+  "description": "Standalone DNS-over-HTTPS (DoH) security resolver and real-time dashboard for Cloudflare Workers",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node test/worker.test.js"
+  },
+  "keywords": [
+    "dns",
+    "doh",
+    "cloudflare-worker",
+    "security",
+    "adblock",
+    "resolver"
+  ],
+  "author": "0abir",
+  "license": "MIT",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@types/node": "^22.20.3",
+    "wrangler": "^3.114.0"
+  }
+}
