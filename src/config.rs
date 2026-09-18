@@ -32,6 +32,8 @@ pub struct Config {
     pub plain53_enabled: bool,
     pub plain53_host: String,
     pub plain53_udp_host: String,
+    pub total_mem_cap: f64,
+    pub base_mem: f64,
 }
 
 /// Parse a port number from the named environment variable.  If the variable
@@ -176,6 +178,22 @@ impl Config {
         let plain53_host = env::var("PLAIN53_HOST").unwrap_or_else(|_| host.clone());
         let plain53_udp_host = env::var("PLAIN53_UDP_HOST").unwrap_or_else(|_| udp_host.clone());
 
+        let total_mem_cap = env::var("TOTAL_MEM_CAP")
+            .or_else(|_| env::var("TOTAL_CAP_MB"))
+            .or_else(|_| env::var("MAX_RAM_MB"))
+            .ok()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|&v| v >= 50.0 && v <= 16384.0)
+            .unwrap_or(200.0);
+
+        let base_mem = env::var("BASE_MEM")
+            .or_else(|_| env::var("BASE_MEM_MB"))
+            .or_else(|_| env::var("BASELINE_RAM_MB"))
+            .ok()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|&v| v >= 0.0 && v <= 8192.0)
+            .unwrap_or(40.0);
+
         Self {
             port,
             dot_port,
@@ -208,6 +226,8 @@ impl Config {
                 .unwrap_or(false),
             plain53_host,
             plain53_udp_host,
+            total_mem_cap,
+            base_mem,
         }
     }
 

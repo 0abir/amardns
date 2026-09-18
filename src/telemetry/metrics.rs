@@ -771,9 +771,27 @@ pub fn trim_process_memory() {
     }
 }
 
+static BASE_MEM_TENTHS: AtomicU64 = AtomicU64::new(400); // 40.0 MB default
+static TOTAL_CAP_TENTHS: AtomicU64 = AtomicU64::new(2000); // 200.0 MB default
+
+/// Configures dynamic memory baseline and ceiling from application configuration
+pub fn init_memory_config(base_mem: f64, total_cap: f64) {
+    BASE_MEM_TENTHS.store((base_mem * 10.0).round().max(0.0) as u64, Ordering::Relaxed);
+    TOTAL_CAP_TENTHS.store((total_cap * 10.0).round().max(100.0) as u64, Ordering::Relaxed);
+}
+
+pub fn get_base_mem_mb() -> f64 {
+    BASE_MEM_TENTHS.load(Ordering::Relaxed) as f64 / 10.0
+}
+
+pub fn get_total_mem_cap_mb() -> f64 {
+    TOTAL_CAP_TENTHS.load(Ordering::Relaxed) as f64 / 10.0
+}
+
 /// Reads current process Resident Set Size (RSS) in megabytes from /proc/self/statm on Linux.
-/// Includes +40MB baseline overhead to accurately account for system/container/kernel allocation.
+/// Includes configurable BASE_MEM baseline overhead (default 40MB) to accurately account for system/container/kernel allocation.
 pub fn get_process_rss_mb() -> f64 {
+    let base = get_base_mem_mb();
     #[cfg(target_os = "linux")]
     {
         if let Ok(s) = std::fs::read_to_string("/proc/self/statm") {
@@ -781,11 +799,11 @@ pub fn get_process_rss_mb() -> f64 {
             if parts.len() > 1 {
                 let resident_pages: f64 = parts[1].parse().unwrap_or(0.0);
                 let raw_mb = resident_pages * 4096.0 / 1_048_576.0;
-                return (((raw_mb + 40.0) * 10.0).round()) / 10.0;
+                return (((raw_mb + base) * 10.0).round()) / 10.0;
             }
         }
     }
-    40.0
+    base
 }
 
 #[cfg(test)]

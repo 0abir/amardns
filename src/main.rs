@@ -132,6 +132,7 @@ fn write_cron_stamp(path: &str) {
 async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Load Configuration first
     let config = Config::from_env();
+    crate::telemetry::metrics::init_memory_config(config.base_mem, config.total_mem_cap);
 
     // 2. Initialize structured logging
     tracing_subscriber::registry()
@@ -388,24 +389,28 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // 6f. Dynamic Memory Governor (Linux Principle: use free RAM, free it under pressure)
     //
     // Monitors process RSS via /proc/self/statm every 5 seconds.
-    // - Normal Zone (< 140 MB): Cache runs dynamically at peak capacity (150k entries)
+    // - Normal Zone (< Yellow Zone): Cache runs dynamically at peak capacity (150k entries)
     //   maximizing cache hits and eliminating upstream latency.
-    // - Yellow Zone (>= 140 MB): Proactively evicts expired/idle cache entries and
+    // - Yellow Zone (>= 70% of TOTAL_MEM_CAP): Proactively evicts expired/idle cache entries and
     //   prunes stale rate-limiter buckets and returns freed pages via malloc_trim.
-    // - Red Zone (>= 175 MB): Emergency cache shedding to guarantee the 200 MB hard ceiling
-    //   is never breached, resetting RSS down to ~45 MB immediately.
+    // - Red Zone (>= 87.5% of TOTAL_MEM_CAP): Emergency cache shedding to guarantee the TOTAL_MEM_CAP hard ceiling
+    //   is never breached, resetting RSS down to ~BASE_MEM immediately.
     let mem_gov_state = state.clone();
+    let total_cap = config.total_mem_cap;
+    let red_zone = (total_cap * 0.875 * 10.0).round() / 10.0;
+    let yellow_zone = (total_cap * 0.70 * 10.0).round() / 10.0;
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
         let mut last_warning_time = std::time::Instant::now();
         loop {
             interval.tick().await;
             let rss_mb = crate::telemetry::metrics::get_process_rss_mb();
-            if rss_mb >= 175.0 {
+            if rss_mb >= red_zone {
                 // RED ZONE: Emergency shedding
                 tracing::warn!(
-                    "[mem-governor] RED ZONE REACHED: RSS = {:.1} MB (>= 175 MB). Executing emergency memory shedding!",
-                    rss_mb
+                    "[mem-governor] RED ZONE REACHED: RSS = {:.1} MB (>= {:.1} MB). Executing emergency memory shedding!",
+                    rss_mb,
+                    red_zone
                 );
                 mem_gov_state.cache.clear().await;
                 mem_gov_state.fast_neg_filter.invalidate_all();
@@ -420,15 +425,17 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 crate::telemetry::metrics::trim_process_memory();
                 let post_rss = crate::telemetry::metrics::get_process_rss_mb();
                 tracing::info!(
-                    "[mem-governor] Emergency shedding complete. RSS dropped to {:.1} MB. 200 MB ceiling preserved.",
-                    post_rss
+                    "[mem-governor] Emergency shedding complete. RSS dropped to {:.1} MB. {:.1} MB ceiling preserved.",
+                    post_rss,
+                    total_cap
                 );
-            } else if rss_mb >= 140.0 {
+            } else if rss_mb >= yellow_zone {
                 // YELLOW ZONE: Proactive maintenance
                 if last_warning_time.elapsed().as_secs() >= 30 {
                     tracing::info!(
-                        "[mem-governor] Yellow zone (RSS = {:.1} MB >= 140 MB). Running maintenance eviction sweep.",
-                        rss_mb
+                        "[mem-governor] Yellow zone (RSS = {:.1} MB >= {:.1} MB). Running maintenance eviction sweep.",
+                        rss_mb,
+                        yellow_zone
                     );
                     last_warning_time = std::time::Instant::now();
                 }

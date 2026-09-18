@@ -684,12 +684,16 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "deviceList": devices_list,
             "memory": {
                 "rssMB": rss_mb,
-                "engine": "Rust (Zero GC)"
+                "engine": "Rust (Zero GC)",
+                "totalCapMB": state.config.total_mem_cap,
+                "baseMemMB": state.config.base_mem
             }
         },
         "memory": {
             "rssMB": rss_mb,
-            "engine": "Rust (Zero GC)"
+            "engine": "Rust (Zero GC)",
+            "totalCapMB": state.config.total_mem_cap,
+            "baseMemMB": state.config.base_mem
         },
         "devices": devices_list,
         "dnsRequestsTotal": reqs,
@@ -886,11 +890,11 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "recentAnomalies": state.recent_anomalies.read().clone(),
             "panicCount": 0,
             "authFails": state.metrics.auth_fails.load(Ordering::Relaxed),
-            "emergencyMode": rss_mb >= 175.0,
+            "emergencyMode": rss_mb >= (state.config.total_mem_cap * 0.875),
             "dailyLimits": "None (Uncapped Dedicated)",
             "throttled": state.rate_limiter.get_blocked_count() > 0,
             "gcCycles": 0,
-            "memPressure": rss_mb >= 140.0
+            "memPressure": rss_mb >= (state.config.total_mem_cap * 0.70)
         },
         "storage": {
             "engine": "PulseDB (WAL) + AeroCache (W-TinyLFU)",
