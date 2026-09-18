@@ -30,12 +30,16 @@ echo "[4/6] Creating persistent storage volumes in regions: ${PRIMARY_REGION}, $
 flyctl volumes create amardns_data --region "${PRIMARY_REGION}" --size 1 --yes --app "${APP_NAME}"
 flyctl volumes create amardns_data --region "${SECONDARY_REGION}" --size 1 --yes --app "${APP_NAME}"
 
-# 5. Deploy application
-echo "[5/6] Building and deploying application to Fly.io..."
-flyctl deploy --remote-only --yes --app "${APP_NAME}"
+# 5. Deploy application to primary region
+echo "[5/7] Building and deploying application to primary region (${PRIMARY_REGION})..."
+flyctl deploy --ha=false --remote-only --yes --app "${APP_NAME}"
+
+# 5b. Scale to exactly 1 machine in sin and 1 machine in fra (attaches pre-created 1GB volume in fra)
+echo "[6/7] Scaling to 1 machine in ${PRIMARY_REGION} and 1 machine in ${SECONDARY_REGION} (2GB total storage)..."
+flyctl scale count 2 --region "${PRIMARY_REGION},${SECONDARY_REGION}" --max-per-region 1 --yes --app "${APP_NAME}"
 
 # 6. Import custom certificates to Fly Edge
-echo "[6/6] Importing and verifying TLS certificates on Fly Edge..."
+echo "[7/7] Importing and verifying TLS certificates on Fly Edge..."
 if [[ -f "certs/cert.pem" && -f "certs/key.pem" ]]; then
   for domain in "amardns.dedyn.io" "amardns.duckdns.org" "amardns.ddnsfree.com"; do
     echo "  -> Importing certificate for '${domain}'..."
