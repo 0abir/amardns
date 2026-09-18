@@ -886,11 +886,11 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "recentAnomalies": state.recent_anomalies.read().clone(),
             "panicCount": 0,
             "authFails": state.metrics.auth_fails.load(Ordering::Relaxed),
-            "emergencyMode": rss_mb >= 135.0,
+            "emergencyMode": rss_mb >= 175.0,
             "dailyLimits": "None (Uncapped Dedicated)",
             "throttled": state.rate_limiter.get_blocked_count() > 0,
             "gcCycles": 0,
-            "memPressure": rss_mb >= 110.0
+            "memPressure": rss_mb >= 140.0
         },
         "storage": {
             "engine": "PulseDB (WAL) + AeroCache (W-TinyLFU)",
