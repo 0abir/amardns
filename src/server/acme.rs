@@ -1354,6 +1354,69 @@ async fn provision_acme_certificate_ca(
     Ok(())
 }
 
+async fn auto_sync_desec_ownership(
+    http: &reqwest::Client,
+    desec_token: &str,
+    domain: &str,
+    target: &str,
+) {
+    if desec_token.is_empty() || domain.is_empty() || target.is_empty() {
+        return;
+    }
+    let target_clean = target.trim().trim_end_matches('.');
+    // Extract app ID token from target (e.g., amardns.dedyn.io.d62jozd.flydns.net -> d62jozd)
+    let parts: Vec<&str> = target_clean.split('.').collect();
+    let app_id_token = if parts.len() >= 3 && parts[parts.len() - 2] == "flydns" {
+        parts[parts.len() - 3]
+    } else {
+        ""
+    };
+
+    // 1. Update _acme-challenge CNAME on deSEC
+    let cname_url = format!(
+        "https://desec.io/api/v1/domains/{}/rrsets/_acme-challenge/CNAME/",
+        domain
+    );
+    let cname_payload = serde_json::json!({
+        "subname": "_acme-challenge",
+        "type": "CNAME",
+        "records": [format!("{}.", target_clean)],
+        "ttl": 900
+    });
+    let _ = http
+        .put(&cname_url)
+        .header("Authorization", format!("Token {}", desec_token))
+        .header("Content-Type", "application/json")
+        .json(&cname_payload)
+        .send()
+        .await;
+
+    // 2. Update _fly-ownership TXT on deSEC if token extracted
+    if !app_id_token.is_empty() {
+        let txt_url = format!(
+            "https://desec.io/api/v1/domains/{}/rrsets/_fly-ownership/TXT/",
+            domain
+        );
+        let txt_payload = serde_json::json!({
+            "subname": "_fly-ownership",
+            "type": "TXT",
+            "records": [format!("\"app-{}\"", app_id_token)],
+            "ttl": 900
+        });
+        let _ = http
+            .put(&txt_url)
+            .header("Authorization", format!("Token {}", desec_token))
+            .header("Content-Type", "application/json")
+            .json(&txt_payload)
+            .send()
+            .await;
+        info!(
+            "[acme/fly-edge] Automatically synchronized deSEC verification records (_fly-ownership: app-{}, _acme-challenge: {})",
+            app_id_token, target_clean
+        );
+    }
+}
+
 pub async fn try_import_to_fly_edge(
     http: &reqwest::Client,
     domains: &[String],
@@ -1368,40 +1431,114 @@ pub async fn try_import_to_fly_edge(
         _ => return,
     };
     let app_name = std::env::var("FLY_APP_NAME").unwrap_or_else(|_| "amardns".to_string());
+    let desec_token = std::env::var("DESEC_TOKEN")
+        .or_else(|_| std::env::var("DEDYN_TOKEN"))
+        .unwrap_or_default();
 
     for domain in domains {
-        let query = serde_json::json!({
-            "query": "mutation($appId: ID!, $hostname: String!) { addCertificate(appId: $appId, hostname: $hostname) { certificate { id hostname } } }",
+        // 1. Add certificate registration on Fly edge
+        let add_query = serde_json::json!({
+            "query": "mutation($appId: ID!, $hostname: String!) { addCertificate(appId: $appId, hostname: $hostname) { certificate { id hostname clientStatus dnsValidationHostname dnsValidationTarget } } }",
             "variables": {
                 "appId": app_name,
                 "hostname": domain
             }
         });
 
+        let mut validation_target = String::new();
+
         if let Ok(resp) = http
             .post("https://api.fly.io/graphql")
             .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json")
-            .json(&query)
+            .json(&add_query)
             .send()
             .await
         {
             if let Ok(json) = resp.json::<serde_json::Value>().await {
-                if json.get("data").and_then(|d| d.get("addCertificate")).is_some() {
+                if let Some(cert) = json
+                    .get("data")
+                    .and_then(|d| d.get("addCertificate"))
+                    .and_then(|c| c.get("certificate"))
+                {
                     info!(
                         "[acme/fly-edge] Successfully registered custom domain '{}' on Fly edge",
                         domain
                     );
+                    if let Some(target) = cert.get("dnsValidationTarget").and_then(|t| t.as_str()) {
+                        validation_target = target.to_string();
+                    }
                 } else if let Some(errors) = json.get("errors").and_then(|e| e.as_array()) {
-                    let msg = errors.first().and_then(|e| e.get("message")).and_then(|m| m.as_str()).unwrap_or("unknown");
+                    let msg = errors
+                        .first()
+                        .and_then(|e| e.get("message"))
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("unknown");
                     if msg.contains("already exists") {
                         debug!("[acme/fly-edge] Domain '{}' already active on Fly edge", domain);
                     } else {
-                        warn!("[acme/fly-edge] Fly edge registration note for '{}': {}", domain, msg);
+                        warn!(
+                            "[acme/fly-edge] Fly edge registration note for '{}': {}",
+                            domain, msg
+                        );
                     }
                 }
             }
         }
+
+        // 2. Query certificate details if target wasn't in add response
+        if validation_target.is_empty() {
+            let check_query = serde_json::json!({
+                "query": "query($appId: String!, $hostname: String!) { app(name: $appId) { certificate(hostname: $hostname) { clientStatus dnsValidationTarget } } }",
+                "variables": {
+                    "appId": app_name,
+                    "hostname": domain
+                }
+            });
+            if let Ok(resp) = http
+                .post("https://api.fly.io/graphql")
+                .header("Authorization", format!("Bearer {}", token))
+                .header("Content-Type", "application/json")
+                .json(&check_query)
+                .send()
+                .await
+            {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if let Some(target) = json
+                        .get("data")
+                        .and_then(|d| d.get("app"))
+                        .and_then(|a| a.get("certificate"))
+                        .and_then(|c| c.get("dnsValidationTarget"))
+                        .and_then(|t| t.as_str())
+                    {
+                        validation_target = target.to_string();
+                    }
+                }
+            }
+        }
+
+        // 3. Auto-sync deSEC records if domain belongs to deSEC
+        if domain.contains("dedyn.io") || domain.contains("desec") {
+            if !validation_target.is_empty() && !desec_token.is_empty() {
+                auto_sync_desec_ownership(http, &desec_token, domain, &validation_target).await;
+            }
+        }
+
+        // 4. Trigger validation check on Fly edge
+        let trigger_check = serde_json::json!({
+            "query": "mutation($appId: ID!, $hostname: String!) { checkCertificate(appId: $appId, hostname: $hostname) { certificate { clientStatus } } }",
+            "variables": {
+                "appId": app_name,
+                "hostname": domain
+            }
+        });
+        let _ = http
+            .post("https://api.fly.io/graphql")
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(&trigger_check)
+            .send()
+            .await;
     }
 }
 
