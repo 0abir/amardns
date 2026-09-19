@@ -784,6 +784,7 @@ pub fn get_base_mem_mb() -> f64 {
     BASE_MEM_TENTHS.load(Ordering::Relaxed) as f64 / 10.0
 }
 
+#[allow(dead_code)]
 pub fn get_total_mem_cap_mb() -> f64 {
     TOTAL_CAP_TENTHS.load(Ordering::Relaxed) as f64 / 10.0
 }

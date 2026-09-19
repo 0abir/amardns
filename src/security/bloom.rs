@@ -207,7 +207,7 @@ impl BloomFilter {
                 if offset + 1 >= wire.len() {
                     return false;
                 }
-                let ptr = (((len & 0x3f) as usize) << 8) | (wire[offset + 1] as usize);
+                let ptr = ((len & 0x3f) << 8) | (wire[offset + 1] as usize);
                 jumps += 1;
                 if jumps > 16 || ptr >= wire.len() {
                     return false;
@@ -292,7 +292,7 @@ impl BloomFilter {
                 if scan + 1 >= wire.len() {
                     return false;
                 }
-                let ptr = (((len & 0x3f) as usize) << 8) | (wire[scan + 1] as usize);
+                let ptr = ((len & 0x3f) << 8) | (wire[scan + 1] as usize);
                 jumps += 1;
                 if jumps > 16 || ptr >= wire.len() {
                     return false;

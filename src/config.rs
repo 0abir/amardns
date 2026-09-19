@@ -183,7 +183,7 @@ impl Config {
             .or_else(|_| env::var("MAX_RAM_MB"))
             .ok()
             .and_then(|v| v.trim().parse::<f64>().ok())
-            .filter(|&v| v >= 50.0 && v <= 16384.0)
+            .filter(|&v| (50.0..=16384.0).contains(&v))
             .unwrap_or(200.0);
 
         let base_mem = env::var("BASE_MEM")
@@ -191,7 +191,7 @@ impl Config {
             .or_else(|_| env::var("BASELINE_RAM_MB"))
             .ok()
             .and_then(|v| v.trim().parse::<f64>().ok())
-            .filter(|&v| v >= 0.0 && v <= 8192.0)
+            .filter(|&v| (0.0..=8192.0).contains(&v))
             .unwrap_or(40.0);
 
         Self {
