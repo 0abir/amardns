@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 ///    avalanche-grade 64-bit mixers (FNV-1a golden ratio + Wyhash-style rotated multiplier) followed by SplitMix64.
 /// 3. Coprime Step Guarantee: Ensures h2 is always odd (| 1) so it is mathematically coprime with any power-of-two bitset (gcd(h2, 2^B) = 1),
 ///    preventing short cycles and guaranteeing full bitset probe coverage across all k hashes.
-/// 4. Differentiated Memory Profiles:
+/// 4. Bounds-Check Elimination: Proved by bit_mask invariance, eliminating branch instructions in inner query loops.
+/// 5. Differentiated Memory Profiles:
 ///    - Threat Feed (~900k-1.5M entries): 33,554,432 bits (4MB RAM) with k=12 probes, yielding ~4.15e-7 false positive rate (~1 in 2,400,000) at 973k entries.
 ///    - Whitelist (~3k-20k entries): 262,144 bits (32KB RAM) with k=7 probes, fitting entirely within CPU L1/L2 data cache with ~1e-8 false positive rate.
 pub struct BloomFilter {
@@ -48,8 +49,8 @@ impl BloomFilter {
 
     /// Profile engineered for the global threat blocklist (~900,000 to 1,500,000 domains).
     /// Uses 33,554,432 bits (4MB RAM) with 12 hash probes:
-    /// - For 973,001 domains: m/n = 34.49 bits/item.
-    /// - Theoretical false positive rate p ~ 4.15e-7 (~1 in 2,410,000).
+    /// - For 973,001 domains: m/n = 34.49 bits/item, p ~ 4.15e-7 (~1 in 2,410,000).
+    /// - For 1,000,000 domains: m/n = 33.55 bits/item, p ~ 5.56e-7 (~1 in 1,800,000).
     /// - At 1,500,000 domains: p ~ 2.6e-5 (~1 in 38,000).
     /// - Early exit on the first 0-bit keeps a miss at ~1.4 memory probes on average.
     pub fn for_threat_feed() -> Self {
@@ -65,8 +66,8 @@ impl BloomFilter {
     /// Profile engineered for the whitelist feed (~2,800 to 20,000 domains).
     /// Uses 262,144 bits (32KB RAM) with 7 optimal hash probes:
     /// - Fits 100% inside CPU L1/L2 data cache.
-    /// - For 2,811 domains: m/n = 93.25 bits/item.
-    /// - Theoretical false positive rate p ~ 1.0e-8 (virtually zero).
+    /// - For 2,811 domains: m/n = 93.25 bits/item, p ~ 1.01e-8 (~1 in 99,000,000).
+    /// - For 3,000 domains: m/n = 87.38 bits/item, p ~ 1.45e-8 (~1 in 69,000,000).
     /// - Cuts memory by 99.2% compared to a uniform 4MB allocation.
     pub fn for_whitelist() -> Self {
         let bits = 262_144usize; // 2^18 bits = 32KB RAM = 4,096 u64 words
@@ -121,44 +122,64 @@ impl BloomFilter {
         Self::dual_hash_bytes(key.trim().trim_end_matches('.').bytes())
     }
 
-    /// Inserts a domain into the Bloom filter using bitwise power-of-two masking (zero heap allocation)
-    pub fn insert(&mut self, key: &str) {
-        let clean = key.trim().trim_end_matches('.');
+    /// Inserts a raw byte slice domain into the Bloom filter using bitwise power-of-two masking
+    #[inline]
+    pub fn insert_bytes(&mut self, key: &[u8]) {
+        let clean = clean_domain_bytes(key);
         if clean.is_empty() {
             return;
         }
 
-        let (h1, h2) = Self::dual_hash_bytes(clean.bytes());
+        let (h1, h2) = Self::dual_hash_bytes(clean.iter().copied());
         let mask = self.bit_mask;
         for i in 0..self.num_hashes {
             let bit_idx = (h1.wrapping_add((i as u64).wrapping_mul(h2)) as usize) & mask;
             let word_idx = bit_idx >> 6;
             let bit_pos = bit_idx & 63;
-            self.words[word_idx] |= 1u64 << bit_pos;
+            // Invariant: bit_idx <= bit_mask < words.len() * 64, hence word_idx < words.len()
+            debug_assert!(word_idx < self.words.len());
+            unsafe {
+                *self.words.get_unchecked_mut(word_idx) |= 1u64 << bit_pos;
+            }
         }
         self.count.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Checks whether a domain may be in the filter with ZERO heap allocations.
-    /// Exits early on the very first 0-bit encountered (typically 1-2 memory probes on miss).
+    /// Inserts a string domain into the Bloom filter using bitwise power-of-two masking (zero heap allocation)
     #[inline(always)]
-    pub fn contains(&self, key: &str) -> bool {
-        let clean = key.trim().trim_end_matches('.');
+    pub fn insert(&mut self, key: &str) {
+        self.insert_bytes(key.as_bytes());
+    }
+
+    /// Checks whether a byte slice domain may be in the filter with ZERO heap allocations.
+    /// Exits early on the very first 0-bit encountered (typically 1-2 memory probes on miss).
+    #[inline]
+    pub fn contains_bytes(&self, key: &[u8]) -> bool {
+        let clean = clean_domain_bytes(key);
         if clean.is_empty() {
             return false;
         }
 
-        let (h1, h2) = Self::dual_hash_bytes(clean.bytes());
+        let (h1, h2) = Self::dual_hash_bytes(clean.iter().copied());
         let mask = self.bit_mask;
         for i in 0..self.num_hashes {
             let bit_idx = (h1.wrapping_add((i as u64).wrapping_mul(h2)) as usize) & mask;
             let word_idx = bit_idx >> 6;
             let bit_pos = bit_idx & 63;
-            if (self.words[word_idx] & (1u64 << bit_pos)) == 0 {
+            // Invariant: bit_idx <= bit_mask < words.len() * 64, hence word_idx < words.len()
+            debug_assert!(word_idx < self.words.len());
+            let word = unsafe { *self.words.get_unchecked(word_idx) };
+            if (word & (1u64 << bit_pos)) == 0 {
                 return false;
             }
         }
         true
+    }
+
+    /// Checks whether a domain string may be in the filter with ZERO heap allocations.
+    #[inline(always)]
+    pub fn contains(&self, key: &str) -> bool {
+        self.contains_bytes(key.as_bytes())
     }
 
     /// Zero-allocation DNS wire format domain lookup in the Bloom filter.
@@ -239,7 +260,9 @@ impl BloomFilter {
                 (h1_mixed.wrapping_add((i as u64).wrapping_mul(h2_mixed)) as usize) & mask;
             let word_idx = bit_idx >> 6;
             let bit_pos = bit_idx & 63;
-            if (self.words[word_idx] & (1u64 << bit_pos)) == 0 {
+            debug_assert!(word_idx < self.words.len());
+            let word = unsafe { *self.words.get_unchecked(word_idx) };
+            if (word & (1u64 << bit_pos)) == 0 {
                 return false;
             }
         }
@@ -310,6 +333,20 @@ impl BloomFilter {
         false
     }
 
+    /// Merges another Bloom filter into this one using high-throughput bitwise OR.
+    /// Both filters must have identical capacity and hash probe counts.
+    pub fn union_with(&mut self, other: &BloomFilter) -> Result<(), &'static str> {
+        if self.bit_mask != other.bit_mask || self.num_hashes != other.num_hashes {
+            return Err("BloomFilter parameters mismatch: bit_mask or num_hashes differ");
+        }
+        for (w_self, &w_other) in self.words.iter_mut().zip(other.words.iter()) {
+            *w_self |= w_other;
+        }
+        self.count
+            .fetch_add(other.count.load(Ordering::Relaxed), Ordering::Relaxed);
+        Ok(())
+    }
+
     /// Clears all bits in the bitset and resets counter
     #[allow(dead_code)]
     pub fn clear(&mut self) {
@@ -317,9 +354,23 @@ impl BloomFilter {
         self.count.store(0, Ordering::Relaxed);
     }
 
-    /// Number of inserted items
+    /// Number of inserted items recorded by counter
     pub fn count(&self) -> usize {
         self.count.load(Ordering::Relaxed)
+    }
+
+    /// Mathematically estimates the distinct number of elements in the filter
+    /// based on bit saturation (Swamidass-Baldi formula), accurate even after Bloom unions or duplicates.
+    pub fn estimated_distinct_count(&self) -> usize {
+        let m = self.capacity_bits() as f64;
+        let k = self.num_hashes as f64;
+        let set_bits: u64 = self.words.iter().map(|&w| w.count_ones() as u64).sum();
+        let x = set_bits as f64;
+        if x >= m || x == 0.0 {
+            return self.count.load(Ordering::Relaxed);
+        }
+        let est = -(m / k) * (1.0 - (x / m)).ln();
+        est.round().max(0.0) as usize
     }
 
     /// Total capacity in bits
@@ -360,6 +411,26 @@ impl BloomFilter {
     }
 }
 
+/// Helper to trim leading/trailing ASCII whitespace and trailing dots from raw byte slices
+#[inline(always)]
+fn clean_domain_bytes(mut bytes: &[u8]) -> &[u8] {
+    while let Some((&first, rest)) = bytes.split_first() {
+        if first.is_ascii_whitespace() {
+            bytes = rest;
+        } else {
+            break;
+        }
+    }
+    while let Some((&last, rest)) = bytes.split_last() {
+        if last.is_ascii_whitespace() || last == b'.' {
+            bytes = rest;
+        } else {
+            break;
+        }
+    }
+    bytes
+}
+
 impl Clone for BloomFilter {
     fn clone(&self) -> Self {
         Self {
@@ -391,6 +462,8 @@ mod tests {
         assert!(filter.contains("doubleclick.net"));
         assert!(filter.contains("analytics.google.com"));
         assert!(filter.contains("track.ads.com"));
+        assert!(filter.contains("doubleclick.net."));
+        assert!(filter.contains_bytes(b"doubleclick.net"));
         assert!(!filter.contains("wikipedia.org"));
         assert!(!filter.contains("github.com"));
         assert_eq!(filter.count(), 3);
@@ -523,5 +596,28 @@ mod tests {
         let truncated_ptr_wire = vec![0u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xc0];
         assert!(!filter.contains_wire(&truncated_ptr_wire, 12));
         assert!(!filter.contains_wire_with_subdomains(&truncated_ptr_wire, 12));
+    }
+
+    #[test]
+    fn test_bloom_filter_union_and_estimated_distinct_count() {
+        let mut f1 = BloomFilter::with_capacity(1000, 0.01);
+        let mut f2 = BloomFilter::with_capacity(1000, 0.01);
+
+        f1.insert("alpha.com");
+        f1.insert("beta.com");
+
+        f2.insert("beta.com"); // Duplicate
+        f2.insert("gamma.com");
+
+        f1.union_with(&f2).expect("Union should succeed");
+
+        assert!(f1.contains("alpha.com"));
+        assert!(f1.contains("beta.com"));
+        assert!(f1.contains("gamma.com"));
+        assert!(!f1.contains("delta.com"));
+
+        // Estimated count should be ~3 unique items
+        let est = f1.estimated_distinct_count();
+        assert!((2..=4).contains(&est), "Estimated count should be around 3, got {}", est);
     }
 }
