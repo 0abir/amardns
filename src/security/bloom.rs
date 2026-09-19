@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// 3. Coprime Step Guarantee: Ensures h2 is always odd (| 1) so it is mathematically coprime with any power-of-two bitset (gcd(h2, 2^B) = 1),
 ///    preventing short cycles and guaranteeing full bitset probe coverage across all k hashes.
 /// 4. Differentiated Memory Profiles:
-///    - Threat Feed (~900k-1.5M entries): 33,554,432 bits (4MB RAM) with k=7 probes, yielding <0.00005% false positive rate (< 1 in 2,000,000).
+///    - Threat Feed (~900k-1.5M entries): 33,554,432 bits (4MB RAM) with k=12 probes, yielding ~4e-7 false positive rate (~1 in 2,400,000) at 973k entries.
 ///    - Whitelist (~3k-20k entries): 262,144 bits (32KB RAM) with k=7 probes, fitting entirely within CPU L1/L2 data cache with ~0% false positive rate.
 pub struct BloomFilter {
     words: Vec<u64>,
@@ -50,14 +50,16 @@ impl BloomFilter {
     }
 
     /// Profile engineered for the global threat blocklist (~900,333 to 1,500,000 domains).
-    /// Uses 33,554,432 bits (4MB RAM) with 7 optimal hash probes:
-    /// - For 900,333 domains: m/n = 37.26 bits/item.
-    /// - Theoretical false positive rate p < 0.00005% (< 1 in 2,000,000).
+    /// Uses 33,554,432 bits (4MB RAM) with 12 hash probes:
+    /// - For 973,001 domains: m/n = 34.49 bits/item.
+    /// - Theoretical false positive rate p ~ 4.2e-7 (~1 in 2,400,000).
+    /// - At 1,500,000 domains: p ~ 2.6e-5 (~1 in 38,000).
+    /// - Early exit on the first 0-bit keeps a miss at ~1.4 probes on average.
     pub fn for_threat_feed() -> Self {
         let bits = 33_554_432usize; // 2^25 bits = 4MB RAM = 524,288 u64 words
         Self {
             words: vec![0u64; bits / 64],
-            num_hashes: 7,
+            num_hashes: 12,
             bit_mask: bits - 1,
             count: AtomicUsize::new(0),
         }
@@ -375,7 +377,7 @@ mod tests {
         let filter = BloomFilter::for_threat_feed();
         assert_eq!(filter.memory_bytes(), 4_194_304); // Exactly 4MB
         assert_eq!(filter.capacity_bits(), 33_554_432);
-        assert_eq!(filter.num_hashes(), 7);
+        assert_eq!(filter.num_hashes(), 12);
     }
 
     #[test]
