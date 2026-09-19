@@ -520,13 +520,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 ("cert.pem".to_string(), "key.pem".to_string())
             };
 
-        let mut acme_domains = config.custom_domains.clone();
-        if acme_domains.is_empty() {
-            acme_domains = vec![
-                "amardns.dedyn.io".to_string(),
-                "amardns.duckdns.org".to_string(),
-            ];
-        }
+        let acme_domains = config.custom_domains.clone();
 
         info!(
             "[boot] Spawning ACME DNS-01 supervisor for domains: {:?}",

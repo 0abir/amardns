@@ -19,17 +19,17 @@ Engineered with a **zero garbage-collection architecture**, AmarDNS indexes over
 
 ---
 
-## Public Edge Endpoints (`amardns.dedyn.io`)
+## Public Edge Endpoints
 
 AmarDNS is deployed across Anycast edge nodes with low-latency DNS resolution and real-time telemetry:
 
 | Protocol | Endpoint / Hostname | Port | Usage / Client Configuration |
 | :--- | :--- | :--- | :--- |
-| **DNS-over-HTTPS (DoH)** | `https://amardns.dedyn.io/dns-query` | `443` | Browsers, iOS/macOS Encrypted DNS profiles, `cloudflared`, `dnscrypt-proxy` |
-| **DoH JSON REST API** | `https://amardns.dedyn.io/resolve` | `443` | Web inspector, command-line scripts (`curl "https://amardns.dedyn.io/resolve?name=google.com&type=A"`) |
-| **DNS-over-TLS (DoT)** | `amardns.dedyn.io` | `853` | Android Private DNS, stubby, systemd-resolved |
-| **Plain DNS (IPv6)** | `2a09:8280:1::190:863e:0` | `53/udp`, `53/tcp` | Standard IPv6 recursive DNS |
-| **Edge Dashboard & Console** | `https://amardns.dedyn.io/` | `443` | Live telemetry matrix, neural brain inspector, threat feeds |
+| **DNS-over-HTTPS (DoH)** | `https://<your-domain>/dns-query` | `443` | Browsers, iOS/macOS Encrypted DNS profiles, `cloudflared`, `dnscrypt-proxy` |
+| **DoH JSON REST API** | `https://<your-domain>/resolve` | `443` | Web inspector, command-line scripts (`curl "https://<your-domain>/resolve?name=google.com&type=A"`) |
+| **DNS-over-TLS (DoT)** | `<your-domain>` | `853` | Android Private DNS, stubby, systemd-resolved |
+| **Plain DNS (IPv6)** | `<your-ipv6-address>` | `53/udp`, `53/tcp` | Standard IPv6 recursive DNS |
+| **Edge Dashboard & Console** | `https://<your-domain>/` | `443` | Live telemetry matrix, neural brain inspector, threat feeds |
 
 ---
 
@@ -226,9 +226,9 @@ All settings are configured via environment variables matching `src/config.rs` a
 | `DNS_ACCESS_MODE` | `public` | Access policy: `public` (open resolver) or `private` (key/token enforced). |
 | `DNSSEC_ENABLED` | `true` | Enables RFC 4034/4035/5155 cryptographic DNSSEC validation. |
 | `PLATFORM_DOMAIN` | `true` | Controls access via platform domain (`*.fly.dev`). Set `false` to restrict to custom domains only. Overridden to `true` if no custom domains are defined. |
-| `DESEC_DOMAIN` | *(empty)* | Optional deSEC domain name(s), comma-separated (e.g. `amardns.dedyn.io`). |
-| `DUCKDNS_DOMAIN` | *(empty)* | Optional DuckDNS domain name(s), comma-separated (e.g. `amardns.duckdns.org`). |
-| `DYNU_DOMAIN` | *(empty)* | Optional Dynu domain name(s), comma-separated (e.g. `amardns.ddnsfree.com`). |
+| `DESEC_DOMAIN` | *(empty)* | Optional deSEC domain name(s), comma-separated (e.g. `your-app.dedyn.io`). |
+| `DUCKDNS_DOMAIN` | *(empty)* | Optional DuckDNS domain name(s), comma-separated (e.g. `your-app.duckdns.org`). |
+| `DYNU_DOMAIN` | *(empty)* | Optional Dynu domain name(s), comma-separated (e.g. `your-app.ddnsfree.com`). |
 | `CUSTOM_DOMAINS` | *(empty)* | Additional custom domain name(s), comma-separated. |
 | `SAFE_BROWSING_KEYS` | *(empty)* | Optional comma-separated Google Safe Browsing v4 API keys. |
 | `DESEC_TOKEN` | *(empty)* | Optional deSEC API token for automated ACME DNS-01 challenges. |
@@ -263,9 +263,9 @@ AmarDNS features built-in, autonomous Dynamic DNS (DDNS) and ACME DNS-01 certifi
   PLATFORM_DOMAIN = "false"
 
   # Domain Configurations (supports single or comma-separated multiple domains)
-  DESEC_DOMAIN = "amardns.dedyn.io"
-  DUCKDNS_DOMAIN = "amardns.duckdns.org"
-  DYNU_DOMAIN = "amardns.ddnsfree.com"
+  DESEC_DOMAIN = "your-app.dedyn.io"
+  DUCKDNS_DOMAIN = "your-app.duckdns.org"
+  DYNU_DOMAIN = "your-app.ddnsfree.com"
 
   # API Credentials for Automated DDNS & ACME DNS-01
   DESEC_TOKEN = "your_desec_api_token"
@@ -348,7 +348,7 @@ config https-dns-proxy 'amardns_1'
     option user 'nobody'
     option group 'nogroup'
     option bootstrap_dns '2a09:8280:1::190:863e:0,9.9.9.9'
-    option resolver_url 'https://amardns.dedyn.io/dns-query?client=router_primary'
+    option resolver_url 'https://<your-domain>/dns-query?client=router_primary'
 
 config https-dns-proxy 'amardns_2'
     option listen_addr '127.0.0.1'
@@ -356,15 +356,15 @@ config https-dns-proxy 'amardns_2'
     option user 'nobody'
     option group 'nogroup'
     option bootstrap_dns '2a09:8280:1::190:863e:0,149.112.112.112'
-    option resolver_url 'https://amardns.dedyn.io/dns-query?client=router_secondary'
+    option resolver_url 'https://<your-domain>/dns-query?client=router_secondary'
 ```
 
 ### Android (Private DNS / DoT)
 - Navigate to: **Settings** $\rightarrow$ **Network & internet** $\rightarrow$ **Private DNS**.
-- Select **Private DNS provider hostname** and enter: `amardns.dedyn.io`
+- Select **Private DNS provider hostname** and enter: `<your-domain>`
 
 ### Apple iOS / macOS (DoH Profile)
-- Configure Encrypted DNS via configuration profile targeting: `https://amardns.dedyn.io/dns-query`
+- Configure Encrypted DNS via configuration profile targeting: `https://<your-domain>/dns-query`
 
 ---
 

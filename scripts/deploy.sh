@@ -41,7 +41,8 @@ flyctl scale count 2 --region "${PRIMARY_REGION},${SECONDARY_REGION}" --max-per-
 # 6. Import custom certificates to Fly Edge
 echo "[7/7] Importing and verifying TLS certificates on Fly Edge..."
 if [[ -f "certs/cert.pem" && -f "certs/key.pem" ]]; then
-  for domain in "amardns.dedyn.io" "amardns.duckdns.org" "amardns.ddnsfree.com"; do
+  DOMAINS=$(openssl x509 -in certs/cert.pem -text -noout | grep -A1 "Subject Alternative Name:" | tail -n1 | tr ',' '\n' | grep "DNS:" | sed 's/.*DNS://' | tr -d ' ')
+  for domain in $DOMAINS; do
     echo "  -> Importing certificate for '${domain}'..."
     flyctl certs import "${domain}" --app "${APP_NAME}" --fullchain "certs/cert.pem" --private-key "certs/key.pem" || true
   done

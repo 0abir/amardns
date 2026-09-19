@@ -303,12 +303,14 @@ impl AcmeClient {
 async fn set_duckdns_txt(
     http: &reqwest::Client,
     token: &str,
+    domain: &str,
     txt_val: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    info!("[acme/duckdns] Publishing TXT record for amardns.duckdns.org...");
+    let sub = domain.trim_end_matches(".duckdns.org");
+    info!("[acme/duckdns] Publishing TXT record for {}...", domain);
     let url = format!(
-        "https://www.duckdns.org/update?domains=amardns&token={}&txt={}",
-        token, txt_val
+        "https://www.duckdns.org/update?domains={}&token={}&txt={}",
+        sub, token, txt_val
     );
     let resp = http.get(&url).send().await?.text().await?;
     if resp.trim() == "OK" {
@@ -322,10 +324,12 @@ async fn set_duckdns_txt(
 async fn clear_duckdns_txt(
     http: &reqwest::Client,
     token: &str,
+    domain: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let sub = domain.trim_end_matches(".duckdns.org");
     let url = format!(
-        "https://www.duckdns.org/update?domains=amardns&token={}&txt=",
-        token
+        "https://www.duckdns.org/update?domains={}&token={}&txt=",
+        sub, token
     );
     let _ = http.get(&url).send().await;
     Ok(())
@@ -1066,7 +1070,7 @@ async fn provision_acme_certificate_ca(
             }
         } else if config.duckdns_domains.contains(&domain) || domain.ends_with(".duckdns.org") {
             if let Some(ref dtoken) = config.duckdns_token {
-                set_duckdns_txt(&http, dtoken, &digest_b64).await?;
+                set_duckdns_txt(&http, dtoken, &domain, &digest_b64).await?;
             } else {
                 warn!(
                     "[acme] DUCKDNS_TOKEN not configured for domain '{}'",
@@ -1329,7 +1333,7 @@ async fn provision_acme_certificate_ca(
             }
         } else if config.duckdns_domains.contains(domain) || domain.ends_with(".duckdns.org") {
             if let Some(ref dtoken) = config.duckdns_token {
-                let _ = clear_duckdns_txt(&http, dtoken).await;
+                let _ = clear_duckdns_txt(&http, dtoken, domain).await;
             }
         } else if config.dynu_domains.contains(domain)
             || is_dynu_domain(domain)
@@ -1364,7 +1368,7 @@ async fn auto_sync_desec_ownership(
         return;
     }
     let target_clean = target.trim().trim_end_matches('.');
-    // Extract app ID token from target (e.g., amardns.dedyn.io.d62jozd.flydns.net -> d62jozd)
+    // Extract app ID token from target (e.g., myapp.dedyn.io.d62jozd.flydns.net -> d62jozd)
     let parts: Vec<&str> = target_clean.split('.').collect();
     let app_id_token = if parts.len() >= 3 && parts[parts.len() - 2] == "flydns" {
         parts[parts.len() - 3]
@@ -2229,21 +2233,21 @@ mod tests {
 
     #[test]
     fn test_is_dynu_domain() {
-        assert!(is_dynu_domain("amardns.dynu.net"));
+        assert!(is_dynu_domain("example.dynu.net"));
         assert!(is_dynu_domain("sub.test.freeddns.org"));
         assert!(is_dynu_domain("myhost.ddnsfree.com"));
-        assert!(!is_dynu_domain("amardns.dedyn.io"));
-        assert!(!is_dynu_domain("amardns.duckdns.org"));
+        assert!(!is_dynu_domain("example.dedyn.io"));
+        assert!(!is_dynu_domain("example.duckdns.org"));
     }
 
     #[test]
     fn test_compute_dynu_node_name() {
         assert_eq!(
-            compute_dynu_node_name("amardns.dynu.net", "amardns.dynu.net"),
+            compute_dynu_node_name("example.dynu.net", "example.dynu.net"),
             "_acme-challenge"
         );
         assert_eq!(
-            compute_dynu_node_name("sub.amardns.dynu.net", "amardns.dynu.net"),
+            compute_dynu_node_name("sub.example.dynu.net", "example.dynu.net"),
             "_acme-challenge.sub"
         );
     }
@@ -2252,9 +2256,7 @@ mod tests {
     fn test_extract_cert_domains_live() {
         if Path::new("live_cert.pem").exists() {
             let domains = extract_cert_domains("live_cert.pem");
-            assert!(domains.contains(&"amardns.dedyn.io".to_string()));
-            assert!(domains.contains(&"amardns.duckdns.org".to_string()));
-            assert!(domains.contains(&"amardns.ddnsfree.com".to_string()));
+            assert!(!domains.is_empty());
         }
     }
 }

@@ -408,17 +408,17 @@ mod tests {
     fn test_is_host_allowed_shield_fly_dev() {
         let mut cfg = Config::from_env();
         cfg.custom_domains = vec![
-            "amardns.dedyn.io".to_string(),
-            "amardns.duckdns.org".to_string(),
-            "amardns.ddnsfree.com".to_string(),
+            "custom1.example.com".to_string(),
+            "custom2.example.com".to_string(),
+            "custom3.example.com".to_string(),
         ];
         cfg.platform_domain = false;
         cfg.shield_fly_dev = true;
 
-        assert!(cfg.is_host_allowed(Some("amardns.dedyn.io")));
-        assert!(cfg.is_host_allowed(Some("amardns.dedyn.io:443")));
-        assert!(cfg.is_host_allowed(Some("amardns.duckdns.org")));
-        assert!(cfg.is_host_allowed(Some("amardns.ddnsfree.com")));
+        assert!(cfg.is_host_allowed(Some("custom1.example.com")));
+        assert!(cfg.is_host_allowed(Some("custom1.example.com:443")));
+        assert!(cfg.is_host_allowed(Some("custom2.example.com")));
+        assert!(cfg.is_host_allowed(Some("custom3.example.com")));
         assert!(cfg.is_host_allowed(Some("localhost:8443")));
         assert!(cfg.is_host_allowed(Some("127.0.0.1:8443")));
         assert!(cfg.is_host_allowed(Some("[::1]:8443")));
@@ -435,11 +435,11 @@ mod tests {
     #[test]
     fn test_platform_domain_allowed() {
         let mut cfg = Config::from_env();
-        cfg.custom_domains = vec!["amardns.dedyn.io".to_string()];
+        cfg.custom_domains = vec!["custom1.example.com".to_string()];
         cfg.platform_domain = true;
         cfg.shield_fly_dev = false;
 
-        assert!(cfg.is_host_allowed(Some("amardns.dedyn.io")));
+        assert!(cfg.is_host_allowed(Some("custom1.example.com")));
         assert!(cfg.is_host_allowed(Some("amardns.fly.dev")));
         assert!(!cfg.is_host_allowed(Some("unauthorized.com")));
     }

@@ -124,9 +124,10 @@ impl DynamicCertResolver {
             "localhost".to_string(),
             "127.0.0.1".to_string(),
             "::1".to_string(),
-            "amardns.fly.dev".to_string(),
-            "169.155.58.173".to_string(),
         ];
+        if let Ok(app_name) = std::env::var("FLY_APP_NAME") {
+            subject_alt_names.push(format!("{}.fly.dev", app_name));
+        }
         for d in domains {
             if !subject_alt_names.contains(d) {
                 subject_alt_names.push(d.clone());
@@ -308,7 +309,7 @@ mod tests {
     #[test]
     fn test_create_dynamic_dot_server_config() {
         let resolver = Arc::new(
-            DynamicCertResolver::from_self_signed(&["amardns.duckdns.org".to_string()]).unwrap(),
+            DynamicCertResolver::from_self_signed(&["dns.example.com".to_string()]).unwrap(),
         );
         let cfg = create_dynamic_dot_server_config(resolver);
         assert!(cfg.is_ok());
