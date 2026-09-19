@@ -333,19 +333,6 @@ impl BloomFilter {
         false
     }
 
-    /// Merges another Bloom filter into this one using high-throughput bitwise OR.
-    /// Both filters must have identical capacity and hash probe counts.
-    pub fn union_with(&mut self, other: &BloomFilter) -> Result<(), &'static str> {
-        if self.bit_mask != other.bit_mask || self.num_hashes != other.num_hashes {
-            return Err("BloomFilter parameters mismatch: bit_mask or num_hashes differ");
-        }
-        for (w_self, &w_other) in self.words.iter_mut().zip(other.words.iter()) {
-            *w_self |= w_other;
-        }
-        self.count
-            .fetch_add(other.count.load(Ordering::Relaxed), Ordering::Relaxed);
-        Ok(())
-    }
 
     /// Clears all bits in the bitset and resets counter
     #[allow(dead_code)]
@@ -357,20 +344,6 @@ impl BloomFilter {
     /// Number of inserted items recorded by counter
     pub fn count(&self) -> usize {
         self.count.load(Ordering::Relaxed)
-    }
-
-    /// Mathematically estimates the distinct number of elements in the filter
-    /// based on bit saturation (Swamidass-Baldi formula), accurate even after Bloom unions or duplicates.
-    pub fn estimated_distinct_count(&self) -> usize {
-        let m = self.capacity_bits() as f64;
-        let k = self.num_hashes as f64;
-        let set_bits: u64 = self.words.iter().map(|&w| w.count_ones() as u64).sum();
-        let x = set_bits as f64;
-        if x >= m || x == 0.0 {
-            return self.count.load(Ordering::Relaxed);
-        }
-        let est = -(m / k) * (1.0 - (x / m)).ln();
-        est.round().max(0.0) as usize
     }
 
     /// Total capacity in bits
@@ -598,26 +571,5 @@ mod tests {
         assert!(!filter.contains_wire_with_subdomains(&truncated_ptr_wire, 12));
     }
 
-    #[test]
-    fn test_bloom_filter_union_and_estimated_distinct_count() {
-        let mut f1 = BloomFilter::with_capacity(1000, 0.01);
-        let mut f2 = BloomFilter::with_capacity(1000, 0.01);
-
-        f1.insert("alpha.com");
-        f1.insert("beta.com");
-
-        f2.insert("beta.com"); // Duplicate
-        f2.insert("gamma.com");
-
-        f1.union_with(&f2).expect("Union should succeed");
-
-        assert!(f1.contains("alpha.com"));
-        assert!(f1.contains("beta.com"));
-        assert!(f1.contains("gamma.com"));
-        assert!(!f1.contains("delta.com"));
-
-        // Estimated count should be ~3 unique items
-        let est = f1.estimated_distinct_count();
-        assert!((2..=4).contains(&est), "Estimated count should be around 3, got {}", est);
-    }
 }
+
