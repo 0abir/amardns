@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// 3. Coprime Step Guarantee: Ensures h2 is always odd (| 1) so it is mathematically coprime with any power-of-two bitset (gcd(h2, 2^B) = 1),
 ///    preventing short cycles and guaranteeing full bitset probe coverage across all k hashes.
 /// 4. Differentiated Memory Profiles:
-///    - Threat Feed (~900k-1.5M entries): 33,554,432 bits (4MB RAM) with k=12 probes, yielding ~4e-7 false positive rate (~1 in 2,400,000) at 973k entries.
-///    - Whitelist (~3k-20k entries): 262,144 bits (32KB RAM) with k=7 probes, fitting entirely within CPU L1/L2 data cache with ~0% false positive rate.
+///    - Threat Feed (~900k-1.5M entries): 33,554,432 bits (4MB RAM) with k=12 probes, yielding ~4.15e-7 false positive rate (~1 in 2,400,000) at 973k entries.
+///    - Whitelist (~3k-20k entries): 262,144 bits (32KB RAM) with k=7 probes, fitting entirely within CPU L1/L2 data cache with ~1e-8 false positive rate.
 pub struct BloomFilter {
     words: Vec<u64>,
     num_hashes: u32,
@@ -30,15 +30,12 @@ impl BloomFilter {
         let m_ideal = (-(n * p.ln()) / ln2_sq).ceil() as usize;
 
         // Round up to the nearest power of 2, with minimum 512 bits (1 cache line = 64 bytes = 8 u64s)
-        let mut bits = 512usize;
-        while bits < m_ideal {
-            bits <<= 1;
-        }
+        let bits = m_ideal.max(512).next_power_of_two();
 
         // Optimal number of hash functions: k = (m / n) * ln(2)
         let bits_per_elem = (bits as f64) / n;
         let k_ideal = (bits_per_elem * std::f64::consts::LN_2).round() as u32;
-        let k = k_ideal.clamp(3, 12);
+        let k = k_ideal.clamp(3, 16);
 
         let num_words = bits / 64;
         Self {
@@ -49,12 +46,12 @@ impl BloomFilter {
         }
     }
 
-    /// Profile engineered for the global threat blocklist (~900,333 to 1,500,000 domains).
+    /// Profile engineered for the global threat blocklist (~900,000 to 1,500,000 domains).
     /// Uses 33,554,432 bits (4MB RAM) with 12 hash probes:
     /// - For 973,001 domains: m/n = 34.49 bits/item.
-    /// - Theoretical false positive rate p ~ 4.2e-7 (~1 in 2,400,000).
+    /// - Theoretical false positive rate p ~ 4.15e-7 (~1 in 2,410,000).
     /// - At 1,500,000 domains: p ~ 2.6e-5 (~1 in 38,000).
-    /// - Early exit on the first 0-bit keeps a miss at ~1.4 probes on average.
+    /// - Early exit on the first 0-bit keeps a miss at ~1.4 memory probes on average.
     pub fn for_threat_feed() -> Self {
         let bits = 33_554_432usize; // 2^25 bits = 4MB RAM = 524,288 u64 words
         Self {
@@ -65,11 +62,11 @@ impl BloomFilter {
         }
     }
 
-    /// Profile engineered for the whitelist feed (~2,818 to 20,000 domains).
+    /// Profile engineered for the whitelist feed (~2,800 to 20,000 domains).
     /// Uses 262,144 bits (32KB RAM) with 7 optimal hash probes:
     /// - Fits 100% inside CPU L1/L2 data cache.
-    /// - For 2,818 domains: m/n = 93.0 bits/item.
-    /// - Theoretical false positive rate p ~ 10^-8 (virtually zero).
+    /// - For 2,811 domains: m/n = 93.25 bits/item.
+    /// - Theoretical false positive rate p ~ 1.0e-8 (virtually zero).
     /// - Cuts memory by 99.2% compared to a uniform 4MB allocation.
     pub fn for_whitelist() -> Self {
         let bits = 262_144usize; // 2^18 bits = 32KB RAM = 4,096 u64 words
@@ -166,6 +163,7 @@ impl BloomFilter {
 
     /// Zero-allocation DNS wire format domain lookup in the Bloom filter.
     /// Traverses raw RFC 1035 labels directly from wire[offset..],
+    /// following compression pointers (0xc0) with loop protection,
     /// hashing lowercased bytes on the fly without heap String allocation.
     pub fn contains_wire(&self, wire: &[u8], mut offset: usize) -> bool {
         if offset >= wire.len() {
@@ -176,15 +174,29 @@ impl BloomFilter {
         let mut h2 = 0x517cc1b727220a95u64;
         let mut first = true;
         let mut total_len = 0;
+        let mut jumps = 0;
 
         while offset < wire.len() {
             let len = wire[offset] as usize;
             if len == 0 {
                 break;
             }
-            if len & 0xc0 == 0xc0 {
-                // Compression pointer
-                break;
+            if (len & 0xc0) == 0xc0 {
+                // RFC 1035 compression pointer (14-bit offset)
+                if offset + 1 >= wire.len() {
+                    return false;
+                }
+                let ptr = (((len & 0x3f) as usize) << 8) | (wire[offset + 1] as usize);
+                jumps += 1;
+                if jumps > 16 || ptr >= wire.len() {
+                    return false;
+                }
+                offset = ptr;
+                continue;
+            }
+            if (len & 0xc0) != 0 {
+                // Reserved or invalid RFC 1035 label type
+                return false;
             }
             if len > 63 || offset + 1 + len > wire.len() {
                 return false;
@@ -235,21 +247,39 @@ impl BloomFilter {
     }
 
     /// Checks the wire domain and all parent subdomains (e.g. a.b.c.com -> b.c.com -> c.com)
-    /// completely in-place with zero heap allocations.
+    /// completely in-place with zero heap allocations, following compression pointers.
     pub fn contains_wire_with_subdomains(&self, wire: &[u8], offset: usize) -> bool {
         if offset >= wire.len() {
             return false;
         }
 
-        // Count total labels
-        let mut label_offsets = [0usize; 16];
+        // Collect offsets of each label
+        const MAX_LABELS: usize = 64;
+        let mut label_offsets = [0usize; MAX_LABELS];
         let mut label_count = 0;
         let mut scan = offset;
+        let mut jumps = 0;
 
-        while scan < wire.len() && label_count < 16 {
+        while scan < wire.len() && label_count < MAX_LABELS {
             let len = wire[scan] as usize;
-            if len == 0 || (len & 0xc0 == 0xc0) {
+            if len == 0 {
                 break;
+            }
+            if (len & 0xc0) == 0xc0 {
+                if scan + 1 >= wire.len() {
+                    return false;
+                }
+                let ptr = (((len & 0x3f) as usize) << 8) | (wire[scan + 1] as usize);
+                jumps += 1;
+                if jumps > 16 || ptr >= wire.len() {
+                    return false;
+                }
+                scan = ptr;
+                continue;
+            }
+            if (len & 0xc0) != 0 {
+                // Reserved or invalid RFC 1035 label type
+                return false;
             }
             if len > 63 || scan + 1 + len > wire.len() {
                 return false;
@@ -263,10 +293,17 @@ impl BloomFilter {
             return false;
         }
 
-        // Check each subdomain starting from full domain down to 2nd-level domain
-        // (stop before checking TLD alone, so skip last label)
-        for &offset in label_offsets.iter().take(label_count.saturating_sub(1)) {
-            if self.contains_wire(wire, offset) {
+        // Check each subdomain starting from full domain down to 2nd-level domain.
+        // If domain has >= 2 labels, skip the last label (TLD alone, e.g. "com", "net").
+        // If domain has 1 label, check that single label.
+        let check_count = if label_count <= 1 {
+            label_count
+        } else {
+            label_count - 1
+        };
+
+        for &lbl_offset in &label_offsets[..check_count] {
+            if self.contains_wire(wire, lbl_offset) {
                 return true;
             }
         }
@@ -402,7 +439,6 @@ mod tests {
         filter.insert("track.adserver.com");
 
         // Construct raw DNS wire bytes for "sub.track.adserver.com"
-        // Wire: [3, 's', 'u', 'b', 5, 't', 'r', 'a', 'c', 'k', 8, 'a', 'd', 's', 'e', 'r', 'v', 'e', 'r', 3, 'c', 'o', 'm', 0]
         let mut wire = vec![0u8; 12]; // 12-byte header
         wire.extend_from_slice(&[3, b's', b'u', b'b']);
         wire.extend_from_slice(&[5, b't', b'r', b'a', b'c', b'k']);
@@ -423,5 +459,69 @@ mod tests {
         ]);
         assert!(!filter.contains_wire(&clean_wire, 12));
         assert!(!filter.contains_wire_with_subdomains(&clean_wire, 12));
+    }
+
+    #[test]
+    fn test_bloom_filter_wire_compression_pointer() {
+        let mut filter = BloomFilter::with_capacity(1000, 0.001);
+        filter.insert("bad-domain.com");
+        filter.insert("sub.bad-domain.com");
+
+        // Construct wire buffer:
+        // Offset 12: "bad-domain.com" -> [10, b'b','a','d','-','d','o','m','a','i','n', 3, b'c','o','m', 0]
+        // Offset 28: "sub" + compression pointer to 12 -> [3, b's','u','b', 0xc0, 12]
+        let mut wire = vec![0u8; 12]; // DNS header
+        let bad_domain_offset = wire.len();
+        wire.extend_from_slice(&[10, b'b', b'a', b'd', b'-', b'd', b'o', b'm', b'a', b'i', b'n']);
+        wire.extend_from_slice(&[3, b'c', b'o', b'm', 0]);
+
+        let compressed_sub_offset = wire.len();
+        wire.extend_from_slice(&[3, b's', b'u', b'b', 0xc0, bad_domain_offset as u8]);
+
+        // Exact wire match on pointer-compressed domain
+        assert!(filter.contains_wire(&wire, compressed_sub_offset));
+        assert!(filter.contains_wire(&wire, bad_domain_offset));
+
+        // Subdomain lookup on pointer-compressed domain
+        assert!(filter.contains_wire_with_subdomains(&wire, compressed_sub_offset));
+    }
+
+    #[test]
+    fn test_bloom_filter_wire_subdomain_deep_nesting() {
+        let mut filter = BloomFilter::with_capacity(1000, 0.001);
+        filter.insert("target.com");
+
+        // Construct 20-level deeply nested domain: a1.a2.a3....a19.target.com
+        let mut wire = vec![0u8; 12];
+        for i in 0..19 {
+            let label = format!("l{}", i);
+            wire.push(label.len() as u8);
+            wire.extend_from_slice(label.as_bytes());
+        }
+        wire.extend_from_slice(&[6, b't', b'a', b'r', b'g', b'e', b't', 3, b'c', b'o', b'm', 0]);
+
+        // Wire subdomain check should detect "target.com" despite >16 levels of labels
+        assert!(filter.contains_wire_with_subdomains(&wire, 12));
+    }
+
+    #[test]
+    fn test_bloom_filter_wire_safety_and_cycles() {
+        let filter = BloomFilter::with_capacity(1000, 0.001);
+
+        // 1. Pointer cycle (offset 12 points to offset 12)
+        let mut cyclic_wire = vec![0u8; 12];
+        cyclic_wire.extend_from_slice(&[0xc0, 12]);
+        assert!(!filter.contains_wire(&cyclic_wire, 12));
+        assert!(!filter.contains_wire_with_subdomains(&cyclic_wire, 12));
+
+        // 2. Out-of-bounds offset
+        let empty_wire = vec![0u8; 12];
+        assert!(!filter.contains_wire(&empty_wire, 100));
+        assert!(!filter.contains_wire_with_subdomains(&empty_wire, 100));
+
+        // 3. Truncated compression pointer
+        let truncated_ptr_wire = vec![0u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xc0];
+        assert!(!filter.contains_wire(&truncated_ptr_wire, 12));
+        assert!(!filter.contains_wire_with_subdomains(&truncated_ptr_wire, 12));
     }
 }
