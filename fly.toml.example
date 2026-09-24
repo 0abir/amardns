@@ -74,7 +74,7 @@ kill_timeout = 10
   protocol = "tcp"
   auto_stop_machines = false
   auto_start_machines = true
-  min_machines_running = 2
+  min_machines_running = 1
 
   [[services.ports]]
     port = 80
@@ -99,7 +99,7 @@ kill_timeout = 10
   protocol = "tcp"
   auto_stop_machines = false
   auto_start_machines = true
-  min_machines_running = 2
+  min_machines_running = 1
 
   [[services.ports]]
     port = 853
@@ -117,7 +117,7 @@ kill_timeout = 10
   protocol = "udp"
   auto_stop_machines = false
   auto_start_machines = true
-  min_machines_running = 2
+  min_machines_running = 1
 
   [[services.ports]]
     port = 53
@@ -129,7 +129,7 @@ kill_timeout = 10
   protocol = "tcp"
   auto_stop_machines = false
   auto_start_machines = true
-  min_machines_running = 2
+  min_machines_running = 1
 
   [[services.ports]]
     port = 53

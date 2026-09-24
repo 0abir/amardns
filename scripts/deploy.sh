@@ -36,7 +36,15 @@ flyctl deploy --ha=false --remote-only --yes --app "${APP_NAME}"
 
 # 5b. Scale to exactly 1 machine in sin and 1 machine in fra (attaches pre-created 1GB volume in fra)
 echo "[6/7] Scaling to 1 machine in ${PRIMARY_REGION} and 1 machine in ${SECONDARY_REGION} (2GB total storage)..."
-flyctl scale count 2 --region "${PRIMARY_REGION},${SECONDARY_REGION}" --max-per-region 1 --yes --app "${APP_NAME}"
+flyctl scale count 2 --region "${PRIMARY_REGION},${SECONDARY_REGION}" --max-per-region 1 --yes --app "${APP_NAME}" || true
+
+FRA_COUNT=$(flyctl machines list --app "${APP_NAME}" | grep -c "${SECONDARY_REGION}" || true)
+if [ "${FRA_COUNT}" -eq 0 ]; then
+  echo "Cloning primary machine into secondary region (${SECONDARY_REGION})..."
+  PRIMARY_ID=$(flyctl machines list --app "${APP_NAME}" --json | grep -o '"id":"[^"]*' | head -n1 | cut -d'"' -f4)
+  FRA_VOL_ID=$(flyctl volumes list --app "${APP_NAME}" | grep "${SECONDARY_REGION}" | awk '{print $1}')
+  flyctl machine clone "${PRIMARY_ID}" --region "${SECONDARY_REGION}" --attach-volume "${FRA_VOL_ID}:/data" --app "${APP_NAME}"
+fi
 
 # 6. Import custom certificates to Fly Edge
 echo "[7/7] Importing and verifying TLS certificates on Fly Edge..."

@@ -35,6 +35,9 @@ LICENSE
 *.pem
 *.key
 *.cert
+!certs/
+!certs/*.pem
+!certs/*.key
 
 # Editor & OS files
 .DS_Store
