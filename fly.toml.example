@@ -11,6 +11,10 @@ kill_timeout = 10
   dockerfile = "Dockerfile"
 
 [env]
+  # Multi-region Configuration
+  PRIMARY_REGION = "sin"
+  SECONDARY_REGION = "fra"
+
   # Network Listeners
   PORT = "443"
   DOT_PORT = "853"
