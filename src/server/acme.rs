@@ -1445,8 +1445,8 @@ async fn auto_sync_desec_ownership(
 pub async fn try_import_to_fly_edge(
     http: &reqwest::Client,
     domains: &[String],
-    _cert_pem: &str,
-    _key_pem: &str,
+    cert_pem: &str,
+    key_pem: &str,
 ) {
     let fly_token = std::env::var("FLY_API_TOKEN")
         .or_else(|_| std::env::var("FLY_AUTH_TOKEN"))
@@ -1476,6 +1476,7 @@ pub async fn try_import_to_fly_edge(
             .post("https://api.fly.io/graphql")
             .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json")
+            .timeout(Duration::from_secs(15))
             .json(&add_query)
             .send()
             .await
@@ -1524,6 +1525,7 @@ pub async fn try_import_to_fly_edge(
                 .post("https://api.fly.io/graphql")
                 .header("Authorization", format!("Bearer {}", token))
                 .header("Content-Type", "application/json")
+                .timeout(Duration::from_secs(15))
                 .json(&check_query)
                 .send()
                 .await
@@ -1549,7 +1551,48 @@ pub async fn try_import_to_fly_edge(
             }
         }
 
-        // 4. Trigger validation check on Fly edge
+        // 4. Upload custom certificate directly to Fly edge proxy
+        if !cert_pem.is_empty() && !key_pem.is_empty() {
+            let custom_cert_payload = serde_json::json!({
+                "hostname": domain,
+                "fullchain": cert_pem,
+                "private_key": key_pem,
+            });
+            let custom_url = format!("https://api.machines.dev/v1/apps/{}/certificates/custom", app_name);
+            match http
+                .post(&custom_url)
+                .header("Authorization", format!("Bearer {}", token))
+                .header("Content-Type", "application/json")
+                .timeout(Duration::from_secs(15))
+                .json(&custom_cert_payload)
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        info!(
+                            "[acme/fly-edge] Successfully imported custom TLS certificate for '{}' to Fly edge proxy ({})",
+                            domain, status
+                        );
+                    } else {
+                        let body = resp.text().await.unwrap_or_default();
+                        warn!(
+                            "[acme/fly-edge] Fly edge custom certificate import for '{}' returned {}: {}",
+                            domain, status, body
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "[acme/fly-edge] Network error importing custom TLS certificate for '{}' to Fly edge: {}",
+                        domain, e
+                    );
+                }
+            }
+        }
+
+        // 5. Trigger validation check on Fly edge
         let trigger_check = serde_json::json!({
             "query": "mutation($appId: ID!, $hostname: String!) { checkCertificate(appId: $appId, hostname: $hostname) { certificate { clientStatus } } }",
             "variables": {
@@ -1561,6 +1604,7 @@ pub async fn try_import_to_fly_edge(
             .post("https://api.fly.io/graphql")
             .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json")
+            .timeout(Duration::from_secs(15))
             .json(&trigger_check)
             .send()
             .await;
@@ -1990,7 +2034,7 @@ pub fn spawn_acme_supervisor(
         tokio::time::sleep(Duration::from_secs(stagger_secs)).await;
 
         let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(30))
             .build()
             .unwrap_or_default();
 
