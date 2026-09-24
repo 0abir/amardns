@@ -1,4 +1,3 @@
-# Stage 1: Build ultra-optimized static binary using latest patched Alpine musl
 FROM rust:alpine AS builder
 RUN apk update && apk upgrade --no-cache && \
     apk add --no-cache musl-dev build-base ca-certificates
