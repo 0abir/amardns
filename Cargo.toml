@@ -16,7 +16,7 @@ path = "src/main.rs"
 [dependencies]
 # Async runtime & networking
 tokio = { version = "1.39", features = ["full"] }
-axum = { version = "0.7", default-features = false, features = ["http1", "http2", "json", "tokio", "query"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "http2", "json", "tokio", "query"] }
 hyper = { version = "1.4", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server-auto", "tokio", "service"] }
 tower-service = "0.3"
