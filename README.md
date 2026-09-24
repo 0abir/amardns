@@ -4,10 +4,12 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-2024_Edition-orange.svg)](https://www.rust-lang.org/)
-[![Platform](https://img.shields.io/badge/Platform-Fly.io%20%7C%20Linux%20%7C%20Docker-purple.svg)](https://fly.io/)
-[![Memory](https://img.shields.io/badge/Memory-Zero_GC_~13MB-green.svg)](#zero-allocation-memory-architecture)
+[![Security Policy](https://img.shields.io/badge/Security-Policy_Active-brightgreen.svg)](SECURITY.md)
+[![Security Audit](https://github.com/0abir/amardns/actions/workflows/security-audit.yml/badge.svg)](https://github.com/0abir/amardns/actions/workflows/security-audit.yml)
+[![Docker](https://github.com/0abir/amardns/actions/workflows/build-and-publish.yml/badge.svg)](https://github.com/0abir/amardns/actions/workflows/build-and-publish.yml)
+[![Memory](https://img.shields.io/badge/Memory-Zero_GC_~12MB-green.svg)](#zero-allocation-memory-architecture)
 [![Latency](https://img.shields.io/badge/Latency-P95_<5ms-brightgreen.svg)](#singleflight-coalescing--hedged-upstream-racing)
-[![Tests](https://img.shields.io/badge/Tests-146%20Passed%20(100%25)-success.svg)](#testing--verification)
+[![Tests](https://img.shields.io/badge/Tests-145%20Passed%20(100%25)-success.svg)](#testing--verification)
 
 ---
 
@@ -15,7 +17,14 @@
 
 **AmarDNS v1.0** is an enterprise-grade, asynchronous recursive DNS security resolver written in pure **Rust** (Edition 2024). It delivers high-throughput **DNS-over-HTTPS (DoH, RFC 8484)**, **DNS-over-TLS (DoT, RFC 7858)**, and standard **UDP/TCP Port 53 (RFC 1035)** endpoints.
 
-Engineered with a **zero garbage-collection architecture**, AmarDNS indexes over **900,000 malicious domains in just 4 MB of RAM** and delivers sub-millisecond in-memory cache resolutions with automatic upstream hedging, cryptographic DNSSEC validation, singleflight deduplication, and an 8D online neural threat engine.
+Engineered with a **zero garbage-collection architecture**, AmarDNS indexes over **900,000 malicious domains in just 4 MB of RAM** and delivers sub-millisecond in-memory cache resolutions with automatic upstream hedging, cryptographic DNSSEC validation, singleflight deduplication, zstd-compressed response caching, and an 8D online neural threat engine.
+
+Powered by modern async infrastructure:
+- **Axum 0.8** high-performance HTTP/1.1 & HTTP/2 engine with zero-copy stream processing.
+- **Rustls 0.23** memory-safe edge TLS termination with ALPN and PROXY protocol v2 support.
+- **rcgen 0.14** automated X.509 certificate generation and CSR serialization.
+- **Zstandard (zstd) 0.14** level-1 wireformat compression cache for instant (~1µs) decompression.
+- **Tokio 1.39** multi-threaded asynchronous runtime.
 
 ---
 
@@ -28,8 +37,8 @@ AmarDNS is deployed across Anycast edge nodes with low-latency DNS resolution an
 | **DNS-over-HTTPS (DoH)** | `https://<your-domain>/dns-query` | `443` | Browsers, iOS/macOS Encrypted DNS profiles, `cloudflared`, `dnscrypt-proxy` |
 | **DoH JSON REST API** | `https://<your-domain>/resolve` | `443` | Web inspector, command-line scripts (`curl "https://<your-domain>/resolve?name=google.com&type=A"`) |
 | **DNS-over-TLS (DoT)** | `<your-domain>` | `853` | Android Private DNS, stubby, systemd-resolved |
-| **Plain DNS (IPv6)** | `<your-ipv6-address>` | `53/udp`, `53/tcp` | Standard IPv6 recursive DNS |
-| **Edge Dashboard & Console** | `https://<your-domain>/` | `443` | Live telemetry matrix, neural brain inspector, threat feeds |
+| **Plain DNS (IPv6/IPv4)** | `<your-ip-address>` | `53/udp`, `53/tcp` | Standard recursive DNS forwarding with EDNS(0) cookies |
+| **Edge Dashboard & Console** | `https://<your-domain>/` or `/{key}` | `443` | Live telemetry matrix, neural brain inspector, threat feeds |
 
 ---
 
@@ -68,7 +77,7 @@ Incoming Query (DoH / DoT / Plain 53)
  └─────────────────────────────┬─────────────────────────────┘
                                ▼ No Match
  ┌───────────────────────────────────────────────────────────┐
- │ 8. AeroCache & Fast-Negative Filter                       │── Hit ────► Instant In-Memory Serve (Sub-ms)
+ │ 8. AeroCache & Zstd Fast-Negative Filter                  │── Hit ────► Instant In-Memory Serve (Sub-ms)
  └─────────────────────────────┬─────────────────────────────┘
                                ▼ Cache Miss
  ┌───────────────────────────────────────────────────────────┐
@@ -98,26 +107,28 @@ Incoming Query (DoH / DoT / Plain 53)
 ### 1. Multi-Protocol Edge Ingestion
 - **DNS-over-HTTPS (DoH, RFC 8484)**: Binary wireformat queries over HTTP/2 and HTTP/1.1 via `POST /dns-query` and `GET /dns-query?dns=...`.
 - **DoH JSON REST API (RFC 8427)**: Browser-testable JSON endpoint via `GET /resolve?name=example.com&type=A`.
-- **DNS-over-TLS (DoT, RFC 7858)**: Strict TLS on port `853` with ALPN `dot` negotiation and PROXY protocol v2 support.
-- **Plain UDP/TCP Port 53 (RFC 1035)**: Standard recursive forwarding with EDNS(0) Cookie (RFC 7873) spoof protection and seamless TCP fallback for oversized responses.
+- **DNS-over-TLS (DoT, RFC 7858)**: Strict TLS on port `853` with ALPN `dot` negotiation and PROXY protocol v2 support for client IP preservation behind Anycast proxies.
+- **Plain UDP/TCP Port 53 (RFC 1035)**: Standard recursive forwarding with EDNS(0) Cookie (RFC 7873) spoof protection and seamless TCP fallback for responses exceeding 512 bytes.
 
-### 2. Zero-Allocation Memory Architecture
-- **Custom Zero-Copy Wire Parser**: Direct bit-level RFC 1035 parsing and serialization in `src/dns/parser.rs` with zero allocations on query hot paths.
+### 2. Zero-Allocation Memory Architecture & Resource Optimization
+- **Custom Zero-Copy Wire Parser**: Direct bit-level RFC 1035 parsing and serialization in `src/dns/parser.rs` with zero heap allocations on query hot paths.
 - **Dual-Hash Threat Bloom Filter**: Indexes **900,000+ domains** in **4 MB of RAM** ($2^{25}$ bits, $k=7$ probes). False-positive probability is mathematically capped at $< 0.00005\%$ ($< 1 \text{ in } 2,000,000$).
 - **Dual-Hash Whitelist Bloom Filter**: Indexes **2,800+ authoritative domains** in **32 KB of RAM**, fitting entirely inside CPU L1/L2 data cache.
 - **Kirsch-Mitzenmacher Double-Hashing**: Dual independent 64-bit mixers (FNV-1a prime mixer + Wyhash rotated multiplier) finished with SplitMix64 and odd coprime stepping (`h2 | 1`).
-- **Power-of-Two Masking**: Bitset dimensions are constrained to $2^B$, replacing slow CPU division (`%`) with single-cycle bitwise masking (`&`).
+- **Power-of-Two Masking**: Bitset dimensions are constrained to $2^B$, replacing CPU division (`%`) with single-cycle bitwise masking (`&`).
+- **Response Compression Cache (Zstd level-1)**: Compresses multi-record answers using `zstd 0.14` level-1, reducing RAM consumption by 40-60% while decompressing in ~1µs.
+- **Minimal Container Footprint**: Compiles to a static musl binary housed in a **Docker Scratch container (< 12 MB)** with peak runtime memory usage of **~12-14 MB**.
 
 ### 3. Strict Hole-Punching Rule Hierarchy
 1. **Exact Whitelist (Priority 1)**: Explicit domain approvals always take absolute precedence.
 2. **Exact Block Hole-Punch (Priority 2)**: Explicit subdomain blocks punch directly through broad wildcard whitelists (e.g., `*.apple.com` is whitelisted, but `analytics.apple.com` is explicitly blocked, while `apple.com` and `icloud.com` remain allowed).
 3. **Wildcard Whitelist (Priority 3)**: Approves all remaining subdomains under an authorized apex domain.
 4. **Custom Wildcard Blocklist (Priority 4)**: User-defined blocking rules.
-5. **AI Heuristics & Neural Brain (Priority 5)**: Real-time DGA Shannon entropy ($H > 3.65$), homoglyph Levenshtein distance, and 8-feature neural classification.
-6. **Global Threat Feed Bloom Filter (Priority 6)**: Suffix-walking verification against 400k+ malicious domains.
+5. **AI Heuristics & Neural Brain (Priority 5)**: Real-time DGA Shannon entropy ($H > 3.65$), homoglyph Levenshtein distance, and 8-feature online neural classification.
+6. **Global Threat Feed Bloom Filter (Priority 6)**: Suffix-walking verification against 900,000+ malicious domains.
 
 ### 4. Singleflight Coalescing & Hedged Upstream Racing
-- **Singleflight Deduplication**: When multiple clients concurrently request the same cache-miss domain, AmarDNS coalesces the requests into a single in-flight upstream lookup. All waiting clients share the single response, preventing upstream stampedes.
+- **Singleflight Deduplication**: When multiple clients concurrently request the same cache-miss domain, AmarDNS coalesces the requests into a single in-flight upstream lookup. All waiting clients share the single response, eliminating upstream stampedes (thundering herd).
 - **Speculative Hedged Racing**: Resolves queries against top-ranked providers (Cloudflare, Google, Quad9, Mullvad, CleanBrowsing, ControlD). The primary resolver is fired at $0\text{ms}$; if unanswered by $10\text{ms}$, a secondary hedged race begins in parallel to eliminate tail latency.
 - **Dynamic EWMA Ranking & Circuit Breakers**: Upstreams are ranked continuously by exponentially weighted moving average latency. Nodes exhibiting consecutive errors or timeouts are isolated automatically and self-healed upon recovery.
 
@@ -127,15 +138,29 @@ Incoming Query (DoH / DoT / Plain 53)
 - **Automated Root Anchor Sync with PKCS#7 Verification**: Periodically syncs root trust anchors directly from IANA with S/MIME PKCS#7 cryptographic signature validation (`src/dns/pkcs7.rs`).
 - **EDNS(0) Signaling**: Correctly negotiates the `DO` (DNSSEC OK) bit and emits the `AD` (Authenticated Data) flag.
 
-### 6. Dynamic Operating & Load-Balancing Modes
+### 6. Security & Hardening Architecture
+- **DNS Rebinding Sanitizer**: Strips upstream responses resolving to RFC 1918 private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), Carrier-Grade NAT (`100.64.0.0/10`), loopback (`127.0.0.0/8`), link-local, and IPv4-mapped IPv6 ranges to prevent internal intranet pivoting.
+- **Host Header Shielding**: Enforces strict RFC 7230 §5.4 host validation, preventing host header spoofing and cache poisoning attacks.
+- **Constant-Time HMAC Authentication**: Uses `ring::hmac` for constant-time token comparison, preventing timing side-channel attacks on master keys and access tokens.
+- **Security Headers**: All HTTP responses emit strict security headers:
+  - `Content-Security-Policy`: Disallows unsafe inline scripts and frames.
+  - `Strict-Transport-Security`: `max-age=63072000; includeSubDomains; preload`.
+  - `X-Content-Type-Options: nosniff`.
+  - `X-Frame-Options: DENY`.
+- **Zero-Vulnerability Supply Chain**:
+  - 0 open CodeQL security vulnerabilities.
+  - 0 RustSec CVE advisory warnings.
+  - Minimal unprivileged scratch container without shell or package manager.
+
+### 7. Dynamic Operating & Load-Balancing Modes
 - **FAST MODE** ($\text{Stress} < 0.3$): Direct single-path resolution to the lowest-latency upstream node, zero racing overhead, instant SWR cache delivery.
 - **BALANCED MODE** ($0.3 \le \text{Stress} \le 0.8$): Dual hedged upstream racing with EWMA load spreading across multiple providers.
 - **RELIABLE / STRESS MODE** ($\text{Stress} > 0.8$ or $\text{RPS} > 100$): Parallel fan-out racing with singleflight deduplication and aggressive circuit breaking.
-- **Access Modes**: `PRIVATE` (Enforces Master Key or HMAC token validation) vs. `PUBLIC` (Open resolution with rate-limiting).
+- **Access Modes**: `PUBLIC` (Open resolution with rate-limiting) vs. `PRIVATE` (Enforces Master Key or HMAC token validation).
 - **Filtering Modes**: `ACTIVE` (Enforces threat blocking) vs. `DEACTIVE` (Audit/telemetry mode only).
 
-### 7. Glassmorphic Real-Time Dashboard & Error Diagnostics
-- **Zero-Dependency Web UI**: Real-time telemetry dashboard rendered directly from edge memory at `/dashboard` (or `/:key`).
+### 8. Glassmorphic Real-Time Dashboard & Error Diagnostics
+- **Zero-Dependency Web UI**: Real-time telemetry dashboard rendered directly from edge memory at `/` or `/{key}`.
 - **Live Metrics**: Real-time RPS and peak RPS, latency histogram distribution ($<1\text{ms}$, $1\text{--}5\text{ms}$, $5\text{--}15\text{ms}$, $15\text{--}50\text{ms}$, $>50\text{ms}$), active client devices, threat heatmap, upstream health metrics, dynamic RAM allocation, singleflight coalescing count, and AI neural weights.
 - **Modern Cyberpunk Error Pages**: Dark glassmorphic error pages for `404 Not Found`, `401 Unauthorized`, `403 Forbidden`, `405 Method Not Allowed`, and `500 Internal Error` with live node diagnostics (Client IP, Edge Region, Node UID, Requested Path).
 - **Zero Emojis**: Clean typography, vector status indicators, and SVG icons.
@@ -145,7 +170,7 @@ Incoming Query (DoH / DoT / Plain 53)
 ## Getting Started
 
 ### Prerequisites
-- [Rust 1.98+](https://www.rust-lang.org/tools/install) (Edition 2024)
+- [Rust 1.80+](https://www.rust-lang.org/tools/install) (Edition 2024)
 - *Optional*: Docker or Podman for containerized deployment
 
 ### Build & Run Locally
@@ -155,7 +180,7 @@ Incoming Query (DoH / DoT / Plain 53)
 git clone https://github.com/0abir/amardns.git
 cd amardns
 
-# Run full test suite (146 tests)
+# Run full test suite (145 tests)
 cargo test
 
 # Run in release mode (binds default ports 443, 853, 53)
@@ -174,7 +199,7 @@ Local default listener endpoints:
 
 ## Docker Deployment
 
-The multi-stage `Dockerfile` compiles AmarDNS with full Link-Time Optimization (LTO) against Alpine musl and outputs a minimal **Scratch container (< 12 MB)** with zero package managers, zero shells, and non-root/root binding capabilities for low privileged ports:
+The multi-stage `Dockerfile` compiles AmarDNS with full Link-Time Optimization (LTO) against Alpine musl and outputs a minimal **Scratch container (< 12 MB)** with zero package managers, zero shells, and unprivileged port binding capabilities:
 
 ```bash
 # Build Docker image
@@ -198,7 +223,7 @@ docker run -d \
 
 ## Deploy to Fly.io
 
-AmarDNS deploys seamlessly to Fly.io with multi-region Anycast, persistent storage volumes, and custom TLS termination:
+AmarDNS deploys to Fly.io with multi-region Anycast, persistent storage volumes, and custom TLS termination:
 
 ```bash
 # Deploy to Fly.io
@@ -209,7 +234,7 @@ fly deploy --ha=false
 
 ## Configuration Reference
 
-All settings are configured via environment variables matching `src/config.rs` and `Dockerfile`:
+All settings are configured via environment variables matching `src/config.rs`:
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
@@ -252,7 +277,7 @@ AmarDNS features built-in, autonomous Dynamic DNS (DDNS) and ACME DNS-01 certifi
 | :--- | :--- | :--- | :--- | :--- |
 | **deSEC** | `*.dedyn.io` or custom deSEC domains | `DESEC_DOMAIN` | `DESEC_TOKEN` | Automated `A` & `AAAA` IP sync + ACME DNS-01 challenge TXT records |
 | **DuckDNS** | `*.duckdns.org` | `DUCKDNS_DOMAIN` | `DUCKDNS_TOKEN` | Automated `A` & `AAAA` IP sync + ACME DNS-01 challenge TXT records |
-| **Dynu** | `*.dynu.net`, `*.ddnsfree.com`, `*.freeddns.org`, `*.mywire.org`, `*.accesscam.org`, `*.camdvr.org`, `*.kozow.com`, `*.webhop.me`, `*.dns-cloud.net`, `*.blogdns.com`, `*.dynu.email` | `DYNU_DOMAIN` | `DYNU_API_KEY` | Automated `A` & `AAAA` IP sync via REST API v2 + ACME DNS-01 challenge TXT records |
+| **Dynu** | `*.dynu.net`, `*.ddnsfree.com`, `*.freeddns.org`, `*.mywire.org`, etc. | `DYNU_DOMAIN` | `DYNU_API_KEY` | Automated `A` & `AAAA` IP sync via REST API v2 + ACME DNS-01 challenge TXT records |
 
 #### Configuration Example (`fly.toml`):
 ```toml
@@ -283,7 +308,7 @@ AmarDNS features built-in, autonomous Dynamic DNS (DDNS) and ACME DNS-01 certifi
 ### Automated DDNS IP Synchronization
 
 Whenever AmarDNS boots (and automatically on every daily cron run at 00:00 UTC):
-1. **Public IP Discovery**: Resolves the application Anycast hostname (`{app}.fly.dev`) using DoH to detect the active public IPv4 (`66.241.125.35`) and IPv6 (`2a09:8280:1::190:863e:0`) addresses (with automatic fallbacks to public IP echo endpoints).
+1. **Public IP Discovery**: Resolves the application Anycast hostname (`{app}.fly.dev`) using DoH to detect the active public IPv4 and IPv6 addresses with automatic fallback to public IP echo endpoints.
 2. **Provider Sync**:
    - Updates deSEC `A` and `AAAA` records via `PATCH https://desec.io/api/v1/domains/{domain}/rrsets/`.
    - Updates DuckDNS IPv4 and IPv6 via `https://www.duckdns.org/update`.
@@ -347,7 +372,7 @@ config https-dns-proxy 'amardns_1'
     option listen_port '5053'
     option user 'nobody'
     option group 'nogroup'
-    option bootstrap_dns '2a09:8280:1::190:863e:0,9.9.9.9'
+    option bootstrap_dns '9.9.9.9,1.1.1.1'
     option resolver_url 'https://<your-domain>/dns-query?client=router_primary'
 
 config https-dns-proxy 'amardns_2'
@@ -355,7 +380,7 @@ config https-dns-proxy 'amardns_2'
     option listen_port '5054'
     option user 'nobody'
     option group 'nogroup'
-    option bootstrap_dns '2a09:8280:1::190:863e:0,149.112.112.112'
+    option bootstrap_dns '149.112.112.112,8.8.8.8'
     option resolver_url 'https://<your-domain>/dns-query?client=router_secondary'
 ```
 
@@ -368,26 +393,59 @@ config https-dns-proxy 'amardns_2'
 
 ---
 
-## API Endpoints Reference
+## REST API Endpoints Reference
+
+All endpoints support authentication via `X-Master-Key` / `Authorization: Bearer <token>` headers or via `{key}` path parameter:
 
 | Endpoint | Method | Role | Description |
 | :--- | :--- | :--- | :--- |
-| `/dns-query` | `GET`, `POST` | Public / Private | Standard DoH wireformat endpoint (RFC 8484). |
+| `/dns-query` | `GET`, `POST` | Public / Private | Standard DoH wireformat query (RFC 8484). |
 | `/resolve` | `GET` | Public / Private | RFC 8427 DoH JSON query endpoint. |
-| `/health` | `GET` | Public | Zero-allocation edge health status payload. |
-| `/metrics` | `GET` | Admin | Prometheus exposition metrics. |
-| `/` or `/:key` | `GET` | Public / View / Admin | Glassmorphic dashboard and telemetry console. |
-| `/api/status` | `GET` | View / Admin | Real-time system telemetry and node diagnostics. |
-| `/api/intelligence` | `GET` | View / Admin | Threat feeds, Bloom filter metrics, and domain IQ. |
-| `/api/rules` | `GET`, `POST` | Admin | Manage custom blocklists and whitelists. |
-| `/api/logs/stream` | `GET` | View / Admin | Real-time Server-Sent Events (SSE) telemetry log stream. |
-| `/api/settings/blocking` | `POST` | Admin | Toggle blocking mode (`active` / `deactive`). |
-| `/api/settings/dns-mode` | `POST` | Admin | Toggle server access mode (`public` / `private`). |
-| `/api/admin/flush-cache` | `POST` | Admin | Flush in-memory AeroCache entries. |
-| `/api/admin/circuit-breakers` | `POST` | Admin | Reset upstream circuit breakers to nominal state. |
-| `/api/ai/nuke-memory` | `POST` | Admin | Reset online AI Neural & Markov weights. |
-| `/api/ai/export` | `GET` | Admin | Export AI brain model weights JSON. |
-| `/api/ai/import` | `POST` | Admin | Import pre-trained AI brain model weights JSON. |
+| `/` or `/{key}` | `GET` | Public / View / Admin | Glassmorphic telemetry dashboard & console. |
+| `/health` | `GET` | Public | Zero-allocation health status check. |
+| `/metrics` | `GET` | Admin | Prometheus metrics exposition. |
+| `/robots.txt`, `/sitemap.xml` | `GET` | Public | Dynamic robots and sitemap generation. |
+| `/manifest.json`, `/site.webmanifest`| `GET` | Public | Progressive Web App (PWA) web manifests. |
+| `/help`, `/docs`, `/security`, `/privacy`, `/terms` | `GET` | Public | Documentation and policy pages. |
+| `/api/status`, `/api/status/{key}` | `GET` | View / Admin | Real-time system telemetry and node diagnostics. |
+| `/api/intelligence`, `/api/intelligence/{key}` | `GET` | View / Admin | Threat feeds, Bloom filter metrics, and domain IQ. |
+| `/api/logs`, `/api/logs/{key}` | `GET` | View / Admin | Query log history with filtering and pagination. |
+| `/api/logs/stream`, `/api/logs/stream/{key}` | `GET` | View / Admin | Real-time Server-Sent Events (SSE) log stream. |
+| `/api/passive-dns`, `/api/passive-dns/{key}` | `GET` | View / Admin | Passive DNS resolution history. |
+| `/api/passive-dns/drifts`, `/api/passive-dns/drifts/{key}` | `GET` | View / Admin | IP drift anomaly detection. |
+| `/api/canary`, `/api/canary/{key}` | `GET` | View / Admin | DNS canary domain intrusion detection. |
+| `/api/cache/stats`, `/api/cache/stats/{key}` | `GET` | View / Admin | AeroCache metrics and zstd compression savings. |
+| `/api/ttl/volatile`, `/api/ttl/volatile/{key}` | `GET` | View / Admin | Volatile TTL domain tracking. |
+| `/api/blocklist`, `/api/blocklist/{key}` | `GET`, `POST`, `DELETE` | Admin | Query, add, or remove custom blocklist rules. |
+| `/api/blocklist/clear`, `/api/blocklist/clear/{key}` | `POST` | Admin | Purge all custom blocklist rules. |
+| `/api/whitelist`, `/api/whitelist/{key}` | `GET`, `POST`, `DELETE` | Admin | Query, add, or remove custom whitelist rules. |
+| `/api/whitelist/clear`, `/api/whitelist/clear/{key}` | `POST` | Admin | Purge all custom whitelist rules. |
+| `/api/common`, `/api/common/{key}` | `GET`, `POST`, `DELETE` | Admin | Query, add, or remove common trusted domains. |
+| `/api/common/clear`, `/api/common/clear/{key}` | `POST` | Admin | Purge all common trusted domains. |
+| `/api/auto-block`, `/api/auto-block/{key}` | `POST`, `DELETE` | Admin | Add or delete automated heuristic block rules. |
+| `/api/schedule`, `/api/schedule/{id}`, `/api/schedule/{id}/{key}` | `GET`, `POST`, `DELETE` | Admin | Manage scheduled time-based blocking rules. |
+| `/api/heatmap/top`, `/api/heatmap/top/{key}` | `GET` | View / Admin | Top queried and blocked domains heatmap. |
+| `/api/heatmap/lookup`, `/api/heatmap/lookup/{key}` | `GET` | View / Admin | Domain frequency lookup in threat heatmap. |
+| `/api/dga-test`, `/api/dga-test/{key}` | `POST` | View / Admin | Test domain against Shannon entropy & Markov DGA model. |
+| `/api/settings/blocking`, `/api/settings/blocking/{key}` | `GET`, `POST` | Admin | Inspect or set blocking mode (`active` / `deactive`). |
+| `/api/settings/dns-mode`, `/api/settings/dns-mode/{key}` | `GET`, `POST` | Admin | Inspect or set server access mode (`public` / `private`). |
+| `/api/settings/ttl-guard`, `/api/settings/ttl-guard/{key}` | `GET`, `POST` | Admin | Inspect or set TTL guard boundaries (min/max). |
+| `/api/upstreams/ranked`, `/api/upstreams/ranked/{key}` | `GET` | View / Admin | Inspect EWMA-ranked upstream resolvers. |
+| `/api/upstreams/sync`, `/api/upstreams/sync/{key}` | `POST` | Admin | Trigger immediate upstream health probe and ranking. |
+| `/api/reset-cb`, `/api/reset-cb/{key}` | `POST` | Admin | Reset tripped circuit breakers to nominal state. |
+| `/api/self-heal`, `/api/self-heal/{key}` | `DELETE` | Admin | Clear self-healing statistics. |
+| `/api/incident`, `/api/incident/{key}` | `DELETE` | Admin | Clear incident history. |
+| `/api/nuclear-wipe`, `/api/nuclear-wipe/{key}` | `POST` | Admin | Emergency purge of WAL and cached state. |
+| `/api/nuke-token`, `/api/nuke-token/{key}` | `GET` | Admin | Generate single-use time-bound nuclear wipe token. |
+| `/api/token`, `/api/token/{key}` | `GET` | Admin | Generate HMAC-signed view-only access token. |
+| `/api/ai/brain`, `/api/ai/brain/{key}` | `GET` | View / Admin | Inspect 8D neural network weights and telemetry. |
+| `/api/ai/export`, `/api/ai/export/{key}` | `GET` | Admin | Export trained neural weights JSON. |
+| `/api/ai/import`, `/api/ai/import/{key}` | `POST` | Admin | Import pre-trained neural weights JSON. |
+| `/api/ai/prune`, `/api/ai/prune/{key}` | `POST` | Admin | Prune stale neural weights and domain counters. |
+| `/api/console/commands`, `/api/console/commands/{key}` | `GET` | Admin | List available interactive console commands. |
+| `/api/console/exec`, `/api/console/exec/{key}` | `POST` | Admin | Execute administrative console command. |
+| `/internal/tls/bundle/{key}` | `GET` | Admin | Peer Anycast replica TLS certificate bundle sync. |
+| `/internal/acme/lock/{key}`, `/internal/acme/unlock/{key}` | `POST` | Admin | Distributed ACME renewal coordination locks. |
 
 ---
 
@@ -396,12 +454,18 @@ config https-dns-proxy 'amardns_2'
 AmarDNS includes an exhaustive unit and integration test suite covering RFC 1035 wire parsing, S/MIME PKCS#7 verification, DNSSEC validation, rate limiting, and singleflight deduplication:
 
 ```bash
-# Execute test suite
+# Execute test suite (145 tests)
 cargo test --all-targets
 
 # Execute strict linter verification
 cargo clippy --all-targets -- -D warnings
 ```
+
+---
+
+## Security Policy
+
+For security policy information and reporting vulnerabilities, please consult [SECURITY.md](SECURITY.md).
 
 ---
 
