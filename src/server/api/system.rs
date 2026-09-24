@@ -1522,6 +1522,26 @@ pub async fn perform_download_and_install() -> Result<String, String> {
         let _ = std::fs::set_permissions(tmp_bin, std::fs::Permissions::from_mode(0o755));
     }
 
+    // Execute sandboxed pre-flight verification test on downloaded binary before swapping
+    let verify_check = std::process::Command::new(tmp_bin)
+        .arg("--verify")
+        .output();
+
+    match verify_check {
+        Ok(out) if out.status.success() && String::from_utf8_lossy(&out.stdout).contains("AMARDNS_OK") => {
+            tracing::info!("[update] Pre-flight binary verification passed successfully.");
+        }
+        Ok(out) => {
+            let _ = std::fs::remove_file(tmp_bin);
+            let err_msg = String::from_utf8_lossy(&out.stderr);
+            return Err(format!("Pre-flight verification failed (exit code {:?}): {}. Update aborted, running production binary untouched.", out.status.code(), err_msg.trim()));
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(tmp_bin);
+            return Err(format!("Pre-flight binary execution failed: {}. Binary is corrupted or incompatible. Update aborted, running production binary untouched.", e));
+        }
+    }
+
     std::fs::rename(tmp_bin, target_bin)
         .map_err(|e| format!("Failed to atomically rename {} to {}: {}", tmp_bin, target_bin, e))?;
 

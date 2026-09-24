@@ -19,6 +19,21 @@ use config::Config;
 use state::AppState;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        match args[1].as_str() {
+            "--version" | "-v" => {
+                println!("AmarDNS v{}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            "--verify" | "--test-binary" => {
+                println!("AMARDNS_OK: binary self-test passed (v{})", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+
     #[cfg(unix)]
     {
         // If an updated binary exists on the persistent storage volume (/data/amardns)

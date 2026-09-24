@@ -55,6 +55,8 @@ jobs:
           docker cp "$CID":/amardns ./amardns
           docker rm -v "$CID"
           chmod +x ./amardns
+          # Pre-release automated verification test
+          ./amardns --verify
           tar -czvf amardns-linux-amd64.tar.gz amardns
           sha256sum amardns > amardns.sha256
           sha256sum amardns-linux-amd64.tar.gz > amardns-linux-amd64.tar.gz.sha256
