@@ -40,7 +40,7 @@ rustls-pemfile = "2.1"
 rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
 
 # Compression (Response Compression Cache — Feature 11)
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }
 
 # Async stream helpers (SSE /api/logs/stream — Feature 8)
 async-stream = "0.3"
