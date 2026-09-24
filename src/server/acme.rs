@@ -1435,8 +1435,8 @@ async fn auto_sync_desec_ownership(
             .json(&txt_payload)
             .send()
             .await;
-        info!(
-            "[acme/fly-edge] Automatically synchronized deSEC verification records (_fly-ownership: app-{}, _acme-challenge: {})",
+        debug!(
+            "[acme/fly-edge] Synchronized deSEC verification records (_fly-ownership: app-{}, _acme-challenge: {})",
             app_id_token, target_clean
         );
     }

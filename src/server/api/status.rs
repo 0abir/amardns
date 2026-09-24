@@ -748,6 +748,7 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "brainLoading": false,
             "brainUtilization": brain_util,
             "brainVersion": brain_version,
+            "machineLogs": crate::telemetry::machine_logs::get_machine_logs(),
             "learningCycles": brain_cycles,
             "domainIQSize": domain_iq_size,
             "markovSize": markov_size,
@@ -841,7 +842,9 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "upstreamCandidates": state.upstreams.candidate_count(),
             "upstreamLastSync": upstream_last_sync_val
         },
+        "machineLogs": crate::telemetry::machine_logs::get_machine_logs(),
         "intelligence": {
+            "machineLogs": crate::telemetry::machine_logs::get_machine_logs(),
             "cfgOverride": serde_json::json!({
                 "blockingEnabled": state.blocking_enabled.load(Ordering::Relaxed),
                 "ttlGuardEnabled": state.ttl_guard_enabled.load(Ordering::Relaxed)

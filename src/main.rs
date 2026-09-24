@@ -173,11 +173,19 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     crate::telemetry::metrics::init_memory_config(config.base_mem, config.total_mem_cap);
 
     // 2. Initialize structured logging
+    let filter = tracing_subscriber::EnvFilter::new(
+        std::env::var("RUST_LOG").unwrap_or_else(|_| config.log_level.clone()),
+    );
+
+    let stdout_layer = tracing_subscriber::fmt::layer()
+        .without_time()
+        .with_target(false)
+        .compact();
+
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| config.log_level.clone()),
-        ))
-        .with(tracing_subscriber::fmt::layer())
+        .with(filter)
+        .with(stdout_layer)
+        .with(crate::telemetry::machine_logs::DashboardLogLayer)
         .init();
 
     let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();

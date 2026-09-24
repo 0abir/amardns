@@ -1012,11 +1012,18 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
     <button class="btn btn-g" id="btn-add-com">+ Common</button>
   </div>
 
-  <div class="sh" style="color:var(--acc3)">Auto-Config Decision</div>
-  <div class="ap" style="margin-bottom:20px"><div class="apb"><div id="cfg-decision-box" style="min-height:52px;background:var(--bg2);border:1px solid var(--acc3);border-radius:6px;padding:10px 12px;font-family:var(--fm);font-size:11px;color:var(--fg)"><span style="color:var(--mut);font-size:9px">No config decisions yet.</span></div></div></div>
-
-  <div class="sh">Decision Logbox</div>
-  <div class="ap" style="margin-bottom:20px"><div class="apb"><textarea id="ai-logbox" readonly style="width:100%;height:120px;background:var(--bg2);color:var(--acc);border:1px solid var(--brd2);font-family:var(--fm);font-size:10px;padding:8px;resize:none;outline:none"></textarea></div></div>
+  <div class="sh" style="color:var(--acc3)">Machine LOG</div>
+  <div class="ap" style="margin-bottom:20px">
+    <div class="apb">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-size:10px;color:var(--mut);font-family:var(--fm)">LIVE EDGE MACHINE LOGS (FLY.IO / SYSTEM RUNTIME)</span>
+        <button class="btn btn-sm btn-d" id="btn-clear-machinelog" style="font-size:9px;padding:2px 8px" title="Clear log viewer">Clear View</button>
+      </div>
+      <div id="machine-logbox" style="width:100%;height:220px;background:#060a12;border:1px solid var(--brd2);border-radius:6px;font-family:var(--fm);font-size:10px;padding:10px;overflow-y:auto;white-space:pre-wrap;line-height:1.45;box-shadow:inset 0 2px 8px rgba(0,0,0,0.6)">
+        <span style="color:var(--mut)">Connecting to live machine logs…</span>
+      </div>
+    </div>
+  </div>
 
   <div class="sh">Brain Management</div>
   <div class="brow-c" style="margin-bottom:20px">
@@ -2687,28 +2694,19 @@ function renderIntelligence(d){
   // AI decisions
   
 
-  var logbox = document.getElementById('ai-logbox');
-  if(logbox&&!isNodeSelected(logbox)&&document.activeElement!==logbox&&!_isMouseDown) {
-    var newLogVal = (((ai.recentDecisions||[]).concat(ai.configDecisions||[])).sort(function(a,b){return a.t-b.t})).map(function(e){ 
-      return '[' + new Date(e.t).toLocaleTimeString() + '] ' + e.decision + ' -> ' + JSON.stringify(e.factors||e.changed||{}); 
-    }).join(String.fromCharCode(10));
-    if(logbox.value!==newLogVal){
-      logbox.value=newLogVal;
-      logbox.scrollTop=logbox.scrollHeight;
-    }
-  }
-  var cfgBox = document.getElementById('cfg-decision-box');
-  if(cfgBox){
-    var cfgDecs=(ai.configDecisions||[]);
-    if(!cfgDecs.length){cfgBox.innerHTML='<span style="color:var(--mut);font-size:9px">No config decisions yet.</span>';}
-    else{
-      var last=cfgDecs[cfgDecs.length-1];
-      var age=Math.floor((Date.now()-last.t)/1000);
-      var ageStr=age<60?age+'s ago':Math.floor(age/60)+'m ago';
-      var pc=last.profile==='HIGH_STRESS'?'var(--bad)':last.profile==='MED_STRESS'?'var(--warn)':last.decision==='lb_mode_change'?'var(--acc2)':'var(--good)';
-      var cks=last.changed?Object.keys(last.changed):[];
-      var chHtml=cks.map(function(k){var c=last.changed[k];return '<span style="font-size:10px;color:var(--fg)">'+k+': <span style="color:var(--mut)">'+c.from+'</span> → <span style="color:var(--acc)">'+c.to+'</span></span>';}).join(' | ');
-      cfgBox.innerHTML='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="font-size:10px;font-weight:700;color:'+pc+';text-transform:uppercase">'+last.decision+(last.profile?' · '+last.profile:'')+'</span><span style="font-size:9px;color:var(--mut);margin-left:auto">'+ageStr+'</span></div>'+(chHtml?'<div style="display:flex;flex-wrap:wrap;gap:4px 0">'+chHtml+'</div>':'')+'<div style="margin-top:5px;font-size:9px;color:var(--mut)">stress: '+(last.stress||0)+' · rps: '+(last.rps||0)+(last.userEst?' · users: '+last.userEst:'')+'   <span style="color:var(--acc5)">'+cfgDecs.length+' total decisions</span></div>';
+  // Live Machine Logs
+  var mLog = d.machineLogs || (d.intelligence && d.intelligence.machineLogs) || (d.ai && d.ai.machineLogs) || [];
+  var mlBox = document.getElementById('machine-logbox');
+  if (mlBox && mLog.length) {
+    if (!mlBox._userScrolled && document.activeElement !== mlBox && !_isMouseDown) {
+      mlBox.innerHTML = mLog.map(function(line) {
+        var cls = 'color:var(--txt)';
+        if (line.indexOf(' ERROR ') !== -1 || line.indexOf('[ERROR]') !== -1) cls = 'color:var(--bad);font-weight:700';
+        else if (line.indexOf(' WARN ') !== -1 || line.indexOf('[WARN]') !== -1) cls = 'color:var(--warn)';
+        else if (line.indexOf(' INFO ') !== -1 || line.indexOf('[INFO]') !== -1) cls = 'color:var(--acc)';
+        return '<div style="' + cls + ';font-size:9.5px;font-family:var(--fm);white-space:pre-wrap;word-break:break-all;line-height:1.4">' + escapeHtml(line) + '</div>';
+      }).join('');
+      mlBox.scrollTop = mlBox.scrollHeight;
     }
   }
 }
@@ -3831,6 +3829,9 @@ on('btn-clear-inc','click',clearInc);
 on('btn-check-update','click',checkBinaryUpdate);
 on('btn-apply-update','click',applyBinaryUpdate);
 on('btn-rollback-update','click',rollbackBinaryUpdate);
+on('btn-clear-machinelog','click',function(){var b=$('machine-logbox');if(b)b.innerHTML='<span style="color:var(--mut)">Log view cleared.</span>';});
+var _mlb=document.getElementById('machine-logbox');
+if(_mlb){_mlb.addEventListener('scroll',function(){_mlb._userScrolled=(_mlb.scrollTop+_mlb.clientHeight<_mlb.scrollHeight-20);});}
 on('btn-nuke','click',nuclearWipe);
 $('btags').addEventListener('click',function(e){
   var x=e.target.closest('.btag-x');

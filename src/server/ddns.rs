@@ -1,6 +1,6 @@
 use std::net::IpAddr;
 use std::time::Duration;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
 use crate::server::acme::is_dynu_domain;
@@ -458,8 +458,8 @@ pub async fn is_domain_ip_up_to_date(
     };
 
     if v4_match && v6_match {
-        info!(
-            "[ddns] Domain '{}' already resolves to target IP(s) (A: {:?}, AAAA: {:?}). Skipping redundant DDNS API call.",
+        debug!(
+            "[ddns] Domain '{}' already resolves to target IP(s) (A: {:?}, AAAA: {:?})",
             domain, cur_v4, cur_v6
         );
         true
