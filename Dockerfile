@@ -14,7 +14,7 @@ COPY src ./src
 RUN rm -f target/release/deps/amardns* target/release/amardns && cargo build --release
 
 # Setup minimal filesystem essentials for the scratch container
-RUN mkdir -p /empty-tmp /empty-data && chmod 1777 /empty-tmp
+RUN mkdir -p /empty-tmp /empty-data /empty-certs && chmod 1777 /empty-tmp
 
 # Stage 2: Minimal Scratch container (< 12MB). Runs as root (UID 0) —
 # no USER directive — so the binary can bind privileged ports 53/443/853
@@ -32,8 +32,8 @@ COPY --from=builder /empty-data /data
 # 3. Ultra-optimized static binary
 COPY --from=builder /app/target/release/amardns /amardns
 
-# 4. Seed TLS certificates bundle
-COPY certs /certs
+# 4. Certificates mount point
+COPY --from=builder /empty-certs /certs
 
 ENV PORT=443 \
     DOT_PORT=853 \

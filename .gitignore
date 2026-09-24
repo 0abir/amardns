@@ -6,8 +6,6 @@
 # Fly.io Deployment & Secrets
 fly.toml
 
-# GitHub Actions (requires separate workflow token scope)
-.github/
 
 # Environment & Secrets
 .env
