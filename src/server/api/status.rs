@@ -39,11 +39,7 @@ pub async fn health_handler(State(state): State<Arc<AppState>>) -> Response {
     let bloom_ready = state.threat_bloom.read().count() > 0;
 
     let (wal_bytes, _) = state.wal.get_stats();
-    let wal_ok = wal_bytes > 0
-        || std::path::Path::new(state.config.db_path.as_str())
-            .parent()
-            .map(|p| p.exists())
-            .unwrap_or(false);
+    let wal_ok = wal_bytes > 0 || state.wal.is_open();
 
     let is_healthy = healthy_upstreams > 0 && wal_ok;
 

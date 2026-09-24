@@ -213,6 +213,9 @@ impl AcmeClient {
         payload_json: &serde_json::Value,
         is_retry: bool,
     ) -> Result<reqwest::Response, Box<dyn std::error::Error + Send + Sync>> {
+        if !url.starts_with("https://") {
+            return Err(format!("Insecure ACME URL '{}': HTTPS is strictly required by RFC 8555", url).into());
+        }
         let nonce = self.get_nonce().await?;
 
         let mut protected = serde_json::json!({
@@ -1627,7 +1630,6 @@ pub async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -
 
     let http = match reqwest::Client::builder()
         .timeout(Duration::from_secs(4))
-        .danger_accept_invalid_certs(true)
         .build()
     {
         Ok(c) => c,
@@ -1641,16 +1643,12 @@ pub async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -
 
     let mut peer_urls = vec![
         format!(
-            "https://{}.{}.internal:443/internal/tls/bundle/{}",
-            primary_region, app_name, key
-        ),
-        format!(
-            "https://{}.internal:443/internal/tls/bundle/{}",
-            app_name, key
-        ),
-        format!(
             "http://{}.{}.internal:443/internal/tls/bundle/{}",
             primary_region, app_name, key
+        ),
+        format!(
+            "http://{}.internal:443/internal/tls/bundle/{}",
+            app_name, key
         ),
         format!(
             "http://{}.{}.internal:443/internal/tls/bundle",
@@ -1677,11 +1675,6 @@ pub async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -
     ] {
         if let Ok(addrs) = tokio::net::lookup_host(lookup).await {
             for addr in addrs {
-                peer_urls.push(format!(
-                    "https://[{}]:443/internal/tls/bundle/{}",
-                    addr.ip(),
-                    key
-                ));
                 peer_urls.push(format!(
                     "http://[{}]:443/internal/tls/bundle/{}",
                     addr.ip(),
@@ -1815,11 +1808,6 @@ async fn try_acquire_cluster_lock(
         if let Ok(addrs) = tokio::net::lookup_host(lookup).await {
             for addr in addrs {
                 lock_urls.push(format!(
-                    "https://[{}]:443/internal/acme/lock/{}",
-                    addr.ip(),
-                    key
-                ));
-                lock_urls.push(format!(
                     "http://[{}]:443/internal/acme/lock/{}",
                     addr.ip(),
                     key
@@ -1920,11 +1908,6 @@ async fn try_release_cluster_lock(
         if let Ok(addrs) = tokio::net::lookup_host(lookup).await {
             for addr in addrs {
                 unlock_urls.push(format!(
-                    "https://[{}]:443/internal/acme/unlock/{}",
-                    addr.ip(),
-                    key
-                ));
-                unlock_urls.push(format!(
                     "http://[{}]:443/internal/acme/unlock/{}",
                     addr.ip(),
                     key
@@ -1990,7 +1973,6 @@ pub fn spawn_acme_supervisor(
 
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
-            .danger_accept_invalid_certs(true)
             .build()
             .unwrap_or_default();
 
@@ -2215,7 +2197,6 @@ mod tests {
             let days = get_cert_days_remaining("cert.pem");
             assert!(days.is_some());
             let days_val = days.unwrap();
-            println!("Local cert.pem days remaining: {}", days_val);
             assert!(days_val > 0);
         }
     }

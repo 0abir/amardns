@@ -407,17 +407,28 @@ impl WalStorage {
         (custom_blocks, custom_whitelists, custom_common)
     }
 
-    pub fn get_stats(&self) -> (u64, f64) {
-        if self.file_path.as_str() == ":memory:" || self.file_path.is_empty() {
-            return (0, 0.0);
+    pub fn is_open(&self) -> bool {
+        if self.file_path.as_str() == ":memory:" {
+            return true;
         }
-        if let Ok(meta) = std::fs::metadata(self.file_path.as_str()) {
-            let bytes = meta.len();
-            let mb = (bytes as f64 / (1024.0 * 1024.0) * 1000.0).round() / 1000.0;
-            (bytes, mb)
+        if let Ok(lock) = self.writer.lock() {
+            lock.is_some()
         } else {
-            (0, 0.0)
+            false
         }
+    }
+
+    pub fn get_stats(&self) -> (u64, f64) {
+        if let Ok(lock) = self.writer.lock() {
+            if let Some(f) = lock.as_ref() {
+                if let Ok(meta) = f.metadata() {
+                    let bytes = meta.len();
+                    let mb = (bytes as f64 / (1024.0 * 1024.0) * 1000.0).round() / 1000.0;
+                    return (bytes, mb);
+                }
+            }
+        }
+        (0, 0.0)
     }
 
     pub fn maybe_compact(&self) {
@@ -580,14 +591,12 @@ impl WalStorage {
 
     pub fn clear(&self) {
         if let Ok(mut lock) = self.writer.lock() {
-            *lock = None;
-            let _ = std::fs::write(self.file_path.as_str(), "");
-            *lock = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .read(true)
-                .open(self.file_path.as_str())
-                .ok();
+            if let Some(f) = lock.as_mut() {
+                let _ = f.set_len(0);
+                use std::io::Seek;
+                let _ = f.seek(std::io::SeekFrom::Start(0));
+                let _ = f.flush();
+            }
             self.total_records.store(0, Ordering::Relaxed);
         }
     }
