@@ -17,6 +17,81 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Determine & Bump Release Version
+        id: versioning
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST_RELEASE_TAG=$(gh release list --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || git tag -l "v[0-9]*" --sort=-v:refname | head -n1 || echo "")
+          echo "Latest GitHub Release: '$LATEST_RELEASE_TAG'"
+
+          CARGO_VERSION=$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)
+          echo "Cargo.toml declared version: '$CARGO_VERSION'"
+
+          TARGET_VERSION="$CARGO_VERSION"
+
+          # If the version in Cargo.toml has already been released on GitHub, auto-increment patch
+          if [ -n "$CARGO_VERSION" ] && gh release view "v$CARGO_VERSION" >/dev/null 2>&1; then
+            echo "Release v$CARGO_VERSION already exists on GitHub! Auto-incrementing patch version..."
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CARGO_VERSION"
+            NEW_PATCH=$((PATCH + 1))
+            TARGET_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+            echo "Auto-computed next patch version: $TARGET_VERSION"
+
+            sed -i "s/^version = \".*\"/version = \"$TARGET_VERSION\"/" Cargo.toml
+            if [ -f Cargo.lock ]; then
+              sed -i "0,/^name = \"amardns\"/{n;s/^version = \".*\"/version = \"$TARGET_VERSION\"/}" Cargo.lock
+            fi
+
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git commit -am "chore(release): bump version to v${TARGET_VERSION} [skip ci]" || true
+            git push origin main || true
+          fi
+
+          TARGET_TAG="v$TARGET_VERSION"
+          echo "version=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+          echo "prev_tag=$LATEST_RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "Final target release tag: $TARGET_TAG"
+
+      - name: Generate Release Notes & Changelog
+        id: changelog
+        run: |
+          PREV_TAG="${{ steps.versioning.outputs.prev_tag }}"
+          TARGET_TAG="${{ steps.versioning.outputs.version }}"
+
+          echo "Generating changelog from '$PREV_TAG' to '$TARGET_TAG'..."
+
+          CHANGES=""
+          if [ -n "$PREV_TAG" ] && git rev-parse "$PREV_TAG" >/dev/null 2>&1; then
+            CHANGES=$(git log "${PREV_TAG}..HEAD" --no-merges --pretty=format:"* %s (%h)")
+          fi
+
+          if [ -z "$CHANGES" ]; then
+            CHANGES=$(git log -n 10 --no-merges --pretty=format:"* %s (%h)")
+          fi
+
+          if [ -z "$CHANGES" ]; then
+            CHANGES="* Routine maintenance, security hardening, and performance optimizations."
+          fi
+
+          cat << 'EOF' > release_notes.md
+## What's Changed
+EOF
+          echo "" >> release_notes.md
+          echo "$CHANGES" >> release_notes.md
+          cat << EOF >> release_notes.md
+
+---
+**Release Tag**: \`$TARGET_TAG\`
+**Built for**: Linux x86_64 (Musl static, zero-GC, Z+ security)
+**OTA Hot-Deploy Ready**: Compatible with in-place \`execve\` dashboard firmware updater.
+EOF
+          echo "--- Generated Release Notes ---"
+          cat release_notes.md
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -35,6 +110,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=latest
+            type=raw,value=${{ steps.versioning.outputs.version }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v7
@@ -65,17 +141,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="v$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)"
-          echo "Target Release Version: $VERSION"
+          VERSION="${{ steps.versioning.outputs.version }}"
+          echo "Publishing GitHub Release: $VERSION"
+
           if gh release view "$VERSION" >/dev/null 2>&1; then
-            echo "Release $VERSION already exists. Uploading and overwriting release assets..."
+            echo "Release $VERSION already exists. Uploading assets and updating notes..."
             gh release upload "$VERSION" ./amardns ./amardns-linux-amd64.tar.gz ./amardns.sha256 ./amardns-linux-amd64.tar.gz.sha256 --clobber
-            gh release edit "$VERSION" --latest
+            gh release edit "$VERSION" --title "AmarDNS $VERSION" --notes-file release_notes.md --latest
           else
             echo "Creating release $VERSION..."
             gh release create "$VERSION" ./amardns ./amardns-linux-amd64.tar.gz ./amardns.sha256 ./amardns-linux-amd64.tar.gz.sha256 \
               --title "AmarDNS $VERSION" \
-              --notes "Production static binary release for AmarDNS (x86_64 Musl). Built with zero-GC memory safety and zero embedded secrets. Over-the-air hot update ready." \
+              --notes-file release_notes.md \
+              --generate-notes \
               --latest
           fi
 
@@ -97,4 +175,3 @@ jobs:
               echo "Preserving latest package version $ID."
             fi
           done || true
-
