@@ -92,12 +92,22 @@ struct AcmeClient {
     dir: Directory,
     key_pair: Arc<EcdsaKeyPair>,
     jwk_thumbprint: String,
-    jwk_json: serde_json::Value,
+    public_x: String,
+    public_y: String,
     account_url: Option<String>,
     next_nonce: Mutex<Option<String>>,
 }
 
 impl AcmeClient {
+    pub fn public_jwk(&self) -> serde_json::Value {
+        serde_json::json!({
+            "crv": "P-256",
+            "kty": "EC",
+            "x": &self.public_x,
+            "y": &self.public_y,
+        })
+    }
+
     async fn new(
         http: reqwest::Client,
         dir_url: &str,
@@ -140,13 +150,6 @@ impl AcmeClient {
         let x = b64url(&pub_key_bytes[1..33]);
         let y = b64url(&pub_key_bytes[33..65]);
 
-        let jwk_json = serde_json::json!({
-            "crv": "P-256",
-            "kty": "EC",
-            "x": x,
-            "y": y,
-        });
-
         // RFC 7638 canonical JWK ordering: crv, kty, x, y
         let jwk_canonical = format!(r#"{{"crv":"P-256","kty":"EC","x":"{}","y":"{}"}}"#, x, y);
         let thumb_hash = ring::digest::digest(&ring::digest::SHA256, jwk_canonical.as_bytes());
@@ -157,7 +160,8 @@ impl AcmeClient {
             dir,
             key_pair: Arc::new(key_pair),
             jwk_thumbprint,
-            jwk_json,
+            public_x: x,
+            public_y: y,
             account_url: None,
             next_nonce: Mutex::new(None),
         })
@@ -213,21 +217,35 @@ impl AcmeClient {
         payload_json: &serde_json::Value,
         is_retry: bool,
     ) -> Result<reqwest::Response, Box<dyn std::error::Error + Send + Sync>> {
-        if !url.starts_with("https://") {
+        let parsed_url: reqwest::Url = url
+            .parse()
+            .map_err(|e| format!("Invalid ACME URL '{}': {}", url, e))?;
+        if parsed_url.scheme() != "https" {
             return Err(format!("Insecure ACME URL '{}': HTTPS is strictly required by RFC 8555", url).into());
         }
+        let host_port = match (parsed_url.host_str(), parsed_url.port()) {
+            (Some(h), Some(p)) if p != 443 => format!("{}:{}", h, p),
+            (Some(h), _) => h.to_string(),
+            _ => return Err("Invalid host in ACME URL".into()),
+        };
+        let path_and_query = match parsed_url.query() {
+            Some(q) => format!("{}?{}", parsed_url.path(), q),
+            None => parsed_url.path().to_string(),
+        };
+        let https_url = format!("https://{}{}", host_port, path_and_query);
+
         let nonce = self.get_nonce().await?;
 
         let mut protected = serde_json::json!({
             "alg": "ES256",
             "nonce": nonce,
-            "url": url,
+            "url": &https_url,
         });
 
         if let Some(ref kid) = self.account_url {
-            protected["kid"] = serde_json::Value::String(kid.clone());
+            protected["kid"] = serde_json::Value::String(kid.to_string());
         } else {
-            protected["jwk"] = self.jwk_json.clone();
+            protected["jwk"] = self.public_jwk();
         }
 
         let protected_b64 = b64url(protected.to_string().as_bytes());
@@ -259,7 +277,7 @@ impl AcmeClient {
 
         let resp = self
             .http
-            .post(url)
+            .post(&https_url)
             .headers(headers)
             .body(body.to_string())
             .send()
@@ -286,7 +304,7 @@ impl AcmeClient {
                 if !is_retry && err_type.contains("badNonce") {
                     let mut lock = self.next_nonce.lock().await;
                     *lock = None;
-                    return Box::pin(self.post_jws_internal(url, payload_json, true)).await;
+                    return Box::pin(self.post_jws_internal(&https_url, payload_json, true)).await;
                 }
 
                 return Err(
@@ -948,7 +966,7 @@ async fn provision_acme_certificate_ca(
                 "url": client.dir.new_account.clone(),
             });
             let eab_protected_b64 = b64url(eab_protected.to_string().as_bytes());
-            let eab_payload_b64 = b64url(client.jwk_json.to_string().as_bytes());
+            let eab_payload_b64 = b64url(client.public_jwk().to_string().as_bytes());
             let eab_signing_input = format!("{}.{}", eab_protected_b64, eab_payload_b64);
 
             let hmac_key_bytes = b64url_decode(eab_hmac_key)
