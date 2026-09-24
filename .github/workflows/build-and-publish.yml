@@ -78,18 +78,17 @@ jobs:
             CHANGES="* Routine maintenance, security hardening, and performance optimizations."
           fi
 
-          cat << 'EOF' > release_notes.md
-## What's Changed
-EOF
-          echo "" >> release_notes.md
-          echo "$CHANGES" >> release_notes.md
-          cat << EOF >> release_notes.md
+          {
+            echo "## What's Changed"
+            echo ""
+            echo "$CHANGES"
+            echo ""
+            echo "---"
+            echo "**Release Tag**: \`$TARGET_TAG\`"
+            echo "**Built for**: Linux x86_64 (Musl static, zero-GC, Z+ security)"
+            echo "**OTA Hot-Deploy Ready**: Compatible with in-place \`execve\` dashboard firmware updater."
+          } > release_notes.md
 
----
-**Release Tag**: \`$TARGET_TAG\`
-**Built for**: Linux x86_64 (Musl static, zero-GC, Z+ security)
-**OTA Hot-Deploy Ready**: Compatible with in-place \`execve\` dashboard firmware updater.
-EOF
           echo "--- Generated Release Notes ---"
           cat release_notes.md
 
