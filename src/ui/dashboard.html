@@ -1026,16 +1026,6 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
     <button class="btn btn-g" id="btn-add-wl">+ Whitelist</button>
   </div>
 
-  <div class="sh">Common Domains</div>
-  <div style="color:var(--sub);font-size:11px;margin-bottom:8px">Common domains bypass DGA and entropy checks.</div>
-  <div class="ap" style="margin-bottom:6px"><div class="apb"><div class="btags" id="comtags"><span style="color:var(--mut);font-size:8px">Loading…</span></div></div></div>
-  <div id="comtags-paging" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-size:10px;color:var(--sub);min-height:22px"></div>
-  <div class="action-input-row">
-    <button class="btn btn-d" id="btn-clear-com" style="white-space:nowrap;flex-shrink:0"> Clean</button>
-    <input class="fld" id="com-in" aria-label="Domain for common list" placeholder="domain.com (comma-sep)" style="flex:1;min-width:0">
-    <button class="btn btn-g" id="btn-add-com">+ Common</button>
-  </div>
-
   <div class="sh" style="color:var(--acc3)">Machine LOG</div>
   <div class="ap" style="margin-bottom:20px">
     <div class="apb">
@@ -1285,7 +1275,6 @@ if(typeof window!=='undefined'){
 var _expandedGroups=new Set();
 var _blockPage=1, _blockPageSize=25;
 var _wlPage=1, _wlPageSize=25;
-var _comPage=1, _comPageSize=25;
 var _lastBlkCount=null;
 var _lastWlCount=null;
 function isNodeSelected(node){
@@ -1320,7 +1309,7 @@ function renderTab(id){
   if(id==='logs')renderLogs(_D);
   if(id==='brain')renderBrain(_D);
   if(id==='heatmap')loadHeatmap();
-  if(id==='intelligence'){renderIntelligence(_D);loadBlock();loadWhitelist();loadCommon();}
+  if(id==='intelligence'){renderIntelligence(_D);loadBlock();loadWhitelist();}
   if(id==='security')renderSecurity(_D);
   if(id==='admin')renderAdmin(_D);
 }
@@ -1384,7 +1373,7 @@ function render(d){
         hdr.parentNode.insertBefore(vb,hdr.nextSibling);
       }
     }
-    ['btn-add-block','btn-clear-block','btn-add-wl','btn-clear-wl','btn-add-com','btn-clear-com','btn-block-active','btn-block-deactive','btn-mode-public','btn-mode-private','btn-reset-cb','btn-clear-sh','btn-clear-inc','btn-nuke','btn-prune-noise','btn-import-brain','btn-apply-update','btn-rollback-update'].forEach(function(id){
+    ['btn-add-block','btn-clear-block','btn-add-wl','btn-clear-wl','btn-block-active','btn-block-deactive','btn-mode-public','btn-mode-private','btn-reset-cb','btn-clear-sh','btn-clear-inc','btn-nuke','btn-prune-noise','btn-import-brain','btn-apply-update','btn-rollback-update'].forEach(function(id){
       var b=document.getElementById(id);
       if(b){b.disabled=true;b.style.opacity='0.4';b.style.cursor='not-allowed';b.title='Locked in View-Only Mode';}
     });
@@ -1396,7 +1385,7 @@ function render(d){
   var ai=d.ai||{},sh=d.selfHeal||{},cfg=d.config||{},nn=(d.perpetualAI&&d.perpetualAI.nn)||{};
   var now=Date.now();
   // Autoload lists once on first data
-  if(!_listsLoaded){_listsLoaded=true;loadBlock();loadWhitelist();loadCommon();}
+  if(!_listsLoaded){_listsLoaded=true;loadBlock();loadWhitelist();}
 
   // Header
   var iso=document.getElementById('iso-lbl');
@@ -3260,126 +3249,6 @@ function clearWhitelist(){
   });
 }
 
-// Common
-function setComPage(p){
-  _comPage=p;
-  loadCommon();
-}
-function loadCommon(){
-  api('/api/common').then(function(d){
-    var tags=document.getElementById('comtags');
-    if(!d.domains||!d.domains.length){
-      tags.innerHTML='<span style="color:var(--mut);font-size:8px">Common list empty.</span>';
-      renderPagination('comtags-paging',1,1,0,0,'setComPage');
-      return;
-    }
-    var grouped=groupDomainsByRoot(d.domains);
-    var totalPages=Math.max(1,Math.ceil(grouped.order.length/_comPageSize));
-    if(_comPage>totalPages)_comPage=totalPages;
-    if(_comPage<1)_comPage=1;
-    var start=(_comPage-1)*_comPageSize;
-    var pageRoots=grouped.order.slice(start,start+_comPageSize);
-
-    var html=[];
-    for(var k=0;k<pageRoots.length;k++){
-      var root=pageRoots[k];
-      var items=grouped.groups[root];
-      if(items.length>=3){
-        var itemDoms=items.map(function(it){return typeof it==='string'?it:it.domain;});
-        var subHtml=items.map(function(row){
-          var dom=typeof row==='string'?row:row.domain;
-          var rs=typeof row==='object'&&row.reason?row.reason:'';
-          var clr=tc(rs);
-          var bClr=clr.startsWith('#')?clr+'44':clr.replace('var(--','rgba(0,255,231,').replace(')','0.25)');
-          var bg=clr.startsWith('#')?clr+'11':clr.replace(')','0.05)');
-          var style='border-color:'+bClr+';background:'+bg+';color:var(--txt)';
-          var reasonHtml=rs?(' · <span style="color:'+clr+';opacity:1">'+rs+'</span>'):'';
-          return '<div class="btag" style="'+style+'">'+dom+'<span style="font-size:8px">'+reasonHtml+'</span><span class="btag-x" data-domain='+JSON.stringify(dom)+' data-list="com"></span></div>';
-        }).join('');
-        var isOpen=_expandedGroups.has(root);
-        var disp=isOpen?'flex':'none';
-        var arrowTxt=isOpen?'▴':'▾';
-        html.push(
-          '<div class="comtag-group" data-group="'+root+'">'+
-            '<div class="btag comtag-group-hdr" style="border-color:rgba(0,255,231,0.4);background:rgba(0,255,231,0.08);color:var(--txt);cursor:pointer">'+
-              '<span style="color:var(--acc);font-weight:700">*.'+root+'</span>'+
-              '<span class="grp-badge" style="background:rgba(0,255,231,0.2);color:var(--acc)">'+items.length+' subdomains <span class="grp-arrow">'+arrowTxt+'</span></span>'+
-              '<span class="btag-x" data-domain="*.'+root+'" data-list="com" data-domains='+JSON.stringify(JSON.stringify(itemDoms))+' title="Remove all '+items.length+' subdomains"></span>'+
-            '</div>'+
-            '<div class="group-subdomains" style="display:'+disp+';background:rgba(0,0,0,0.3);border:1px dashed rgba(0,255,231,0.25)">'+
-              subHtml+
-            '</div>'+
-          '</div>'
-        );
-      } else {
-        for(var j=0;j<items.length;j++){
-          var row=items[j];
-          var dom=typeof row==='string'?row:row.domain;
-          var rs=typeof row==='object'&&row.reason?row.reason:'';
-          var clr=tc(rs);
-          var bClr=clr.startsWith('#')?clr+'44':clr.replace('var(--','rgba(0,255,231,').replace(')','0.25)');
-          var bg=clr.startsWith('#')?clr+'11':clr.replace(')','0.05)');
-          var style='border-color:'+bClr+';background:'+bg+';color:var(--txt)';
-          var reasonHtml=rs?(' · <span style="color:'+clr+';opacity:1">'+rs+'</span>'):'';
-          html.push('<div class="btag" style="'+style+'">'+dom+'<span style="font-size:8px">'+reasonHtml+'</span><span class="btag-x" data-domain='+JSON.stringify(dom)+' data-list="com"></span></div>');
-        }
-      }
-    }
-    var newHtml=html.join('');
-    if(tags.innerHTML!==newHtml)tags.innerHTML=newHtml;
-    renderPagination('comtags-paging',_comPage,totalPages,grouped.order.length,d.domains.length,'setComPage');
-  });
-}
-function addCommon(){
-  var v=document.getElementById('com-in').value.trim();if(!v)return;
-  var rawList=v.split(',').map(function(s){return s.trim();}).filter(Boolean);
-  var valid=[], invalid=[];
-  for(var i=0;i<rawList.length;i++){
-    var cd=_cleanDom(rawList[i]);
-    if(cd) valid.push(cd); else invalid.push(rawList[i]);
-  }
-  if(invalid.length>0) toast('Invalid domain format: '+invalid.slice(0,3).join(', '),'er');
-  if(valid.length===0) return;
-  api('/api/common','POST',{domains:valid}).then(function(r){
-    if(r.added>0) toast('Added common: '+r.added+' domains','ok');
-    if(r.skipped && r.skipped.length>0) toast('EXISTS: '+r.skipped.join(', '),'wl');
-    document.getElementById('com-in').value = (r.skipped && r.skipped.length > 0) ? r.skipped.map(function(s){return s.split(' ')[0];}).join(', ') : '';
-    loadCommon();
-  }).catch(function(e){toast(e.message,'er');});
-}
-function removeCommon(el,domain,domainsList){
-  if(domainsList&&Array.isArray(domainsList)){
-    Promise.all(domainsList.map(function(d){return api('/api/common','DELETE',{domain:d});}))
-      .then(function(){
-        var grp=el.closest('.comtag-group');
-        if(grp)grp.remove();
-        toast('Removed common group: '+domain,'ok');
-        loadCommon();
-      }).catch(function(e){toast(e.message,'er');});
-    return;
-  }
-  api('/api/common','DELETE',{domain:domain}).then(function(){
-    var grp=el.closest('.comtag-group');
-    el.closest('.btag').remove();
-    if(grp){
-      var rem=grp.querySelectorAll('.group-subdomains .btag');
-      if(!rem||rem.length===0){
-        grp.remove();
-      }else{
-        var b=grp.querySelector('.grp-badge');
-        if(b){b.innerHTML=rem.length+' subdomains <span class="grp-arrow">'+(grp.querySelector('.group-subdomains').style.display==='none'?'▾':'▴')+'</span>';}
-      }
-    }
-    toast('Removed: '+domain,'ok');
-    loadCommon();
-  }).catch(function(e){toast(e.message,'er');});
-}
-function clearCommon(){
-  if(!confirm('Clear all common domains?'))return;
-  api('/api/common/clear','POST').then(function(){toast('Common list cleared','ok');loadCommon();}).catch(function(){
-    toast('Bulk clear not available — remove entries individually','wl');
-  });
-}
 
 // Brain
 function exportBrain(){
@@ -4072,9 +3941,6 @@ on('block-in','keydown',function(e){if(e.key==='Enter')addBlock();});
 on('btn-clear-wl','click',clearWhitelist);
 on('btn-add-wl','click',addWhitelist);
 on('wl-in','keydown',function(e){if(e.key==='Enter')addWhitelist();});
-on('btn-clear-com','click',clearCommon);
-on('btn-add-com','click',addCommon);
-on('com-in','keydown',function(e){if(e.key==='Enter')addCommon();});
 on('btn-export-brain','click',exportBrain);
 on('btn-import-brain','click',function(){$('brain-import').click();});
 on('btn-prune-noise','click',pruneNoise);
@@ -4118,18 +3984,6 @@ $('wltags').addEventListener('click',function(e){
     return;
   }
   var hdr=e.target.closest('.wltag-group-hdr');
-  if(hdr){
-    toggleDomainGroup(hdr);
-  }
-});
-$('comtags').addEventListener('click',function(e){
-  var x=e.target.closest('.btag-x');
-  if(x){
-    var doms=x.dataset.domains?JSON.parse(x.dataset.domains):null;
-    removeCommon(x,x.dataset.domain,doms);
-    return;
-  }
-  var hdr=e.target.closest('.comtag-group-hdr');
   if(hdr){
     toggleDomainGroup(hdr);
   }

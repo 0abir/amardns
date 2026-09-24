@@ -314,41 +314,15 @@ impl WalStorage {
             }
         }
     }
-
-    pub fn append_common(&self, domain: &str) {
-        if let Ok(mut lock) = self.writer.lock() {
-            if let Some(f) = lock.as_mut() {
-                let line = format!("+C:{}", domain);
-                let crc = line_checksum(&line);
-                let _ = writeln!(f, "{} #crc={:08x}", line, crc);
-                let _ = f.flush();
-                self.total_records.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    }
-
-    pub fn append_uncommon(&self, domain: &str) {
-        if let Ok(mut lock) = self.writer.lock() {
-            if let Some(f) = lock.as_mut() {
-                let line = format!("-C:{}", domain);
-                let crc = line_checksum(&line);
-                let _ = writeln!(f, "{} #crc={:08x}", line, crc);
-                let _ = f.flush();
-                self.total_records.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    }
-
     // ─── Stats and maintenance ─────────────────────────────────────────────────
 
     pub fn total_records(&self) -> u64 {
         self.total_records.load(Ordering::Relaxed)
     }
 
-    pub fn load_lists(&self) -> (HashSet<String>, HashSet<String>, HashSet<String>) {
+    pub fn load_lists(&self) -> (HashSet<String>, HashSet<String>) {
         let mut custom_blocks = HashSet::new();
         let mut custom_whitelists = HashSet::new();
-        let mut custom_common = HashSet::new();
         let mut lines_count = 0u64;
 
         if self.file_path.as_str() != ":memory:" && !self.file_path.is_empty() {
@@ -393,10 +367,9 @@ impl WalStorage {
                     } else if let Some(domain) = trimmed.strip_prefix("-W:") {
                         custom_whitelists.remove(domain);
                     } else if let Some(domain) = trimmed.strip_prefix("+C:") {
-                        custom_common.insert(domain.to_string());
+                        // Legacy common domain record: migrate into custom_whitelists
                         custom_whitelists.insert(domain.to_string());
                     } else if let Some(domain) = trimmed.strip_prefix("-C:") {
-                        custom_common.remove(domain);
                         custom_whitelists.remove(domain);
                     }
                 }
@@ -404,7 +377,7 @@ impl WalStorage {
         }
 
         self.total_records.store(lines_count, Ordering::Relaxed);
-        (custom_blocks, custom_whitelists, custom_common)
+        (custom_blocks, custom_whitelists)
     }
 
     pub fn is_open(&self) -> bool {
@@ -470,7 +443,6 @@ impl WalStorage {
         let temp_path = format!("{}.tmp", self.file_path.as_str());
         let mut custom_blocks = HashSet::new();
         let mut custom_whitelists = HashSet::new();
-        let mut custom_common = HashSet::new();
         let mut recent_events = std::collections::VecDeque::with_capacity(3000);
 
         if let Ok(file) = File::open(self.file_path.as_str()) {
@@ -496,10 +468,9 @@ impl WalStorage {
                 } else if let Some(domain) = trimmed.strip_prefix("-W:") {
                     custom_whitelists.remove(domain);
                 } else if let Some(domain) = trimmed.strip_prefix("+C:") {
-                    custom_common.insert(domain.to_string());
+                    // Legacy common domain record: migrate into custom_whitelists
                     custom_whitelists.insert(domain.to_string());
                 } else if let Some(domain) = trimmed.strip_prefix("-C:") {
-                    custom_common.remove(domain);
                     custom_whitelists.remove(domain);
                 } else if trimmed.starts_with("Q:") || trimmed.starts_with("T:") {
                     if recent_events.len() >= 3000 {
@@ -519,11 +490,7 @@ impl WalStorage {
                 writeln!(out, "{} #crc={:08x}", body, crc)?;
             }
             for domain in &custom_whitelists {
-                let body = if custom_common.contains(domain) {
-                    format!("+C:{}", domain)
-                } else {
-                    format!("+W:{}", domain)
-                };
+                let body = format!("+W:{}", domain);
                 let crc = line_checksum(&body);
                 writeln!(out, "{} #crc={:08x}", body, crc)?;
             }

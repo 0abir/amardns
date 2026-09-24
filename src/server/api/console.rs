@@ -238,18 +238,7 @@ fn get_command_list() -> Vec<ConsoleCommandInfo> {
             description: "Remove domain from whitelist".into(),
             category: "Rules".into(),
         },
-        ConsoleCommandInfo {
-            name: "common".into(),
-            syntax: "common <domain> | common list".into(),
-            description: "Manage common domains (bypasses DGA and entropy checks)".into(),
-            category: "Rules".into(),
-        },
-        ConsoleCommandInfo {
-            name: "uncommon".into(),
-            syntax: "uncommon <domain>".into(),
-            description: "Remove domain from common domains list".into(),
-            category: "Rules".into(),
-        },
+
         ConsoleCommandInfo {
             name: "feed".into(),
             syntax: "feed <sync | status>".into(),
@@ -378,8 +367,6 @@ pub async fn execute_command(state: &Arc<AppState>, input: &str) -> (String, Str
         "unblock" => cmd_unblock(state, args).await,
         "whitelist" => cmd_whitelist(state, args).await,
         "unwhitelist" => cmd_unwhitelist(state, args).await,
-        "common" => cmd_common(state, args).await,
-        "uncommon" => cmd_uncommon(state, args).await,
         "feed" => cmd_feed(state, args).await,
         "cache" => cmd_cache(state, args).await,
         "bloom" => (cmd_bloom(state), "ok".into()),
@@ -590,7 +577,6 @@ fn cmd_stats(state: &AppState) -> String {
 
     let blk_count = state.custom_blocklist.read().len();
     let wl_count = state.custom_whitelist.read().len();
-    let com_count = state.custom_common.read().len();
     let cache_size = state.cache.entry_count();
 
     format!(
@@ -609,14 +595,13 @@ r#"── [ SYSTEM TELEMETRY MATRIX ] ──────────────
 ── [ ACTIVE DATABASE & RULES ] ───────────────────────────────────
  Custom Blocklist:{} domains
  Whitelist:       {} domains
- Common Domains:  {} domains
  Bloom Filter:    {} items loaded"#,
         qps,
         total_queries,
         cached, hit_rate, cache_size,
         blocked, block_pct,
         plain, doh, dot, dnssec_val,
-        blk_count, wl_count, com_count,
+        blk_count, wl_count,
         state.threat_bloom.read().count()
     )
 }
@@ -718,7 +703,7 @@ async fn cmd_trace(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
     let mut steps = Vec::new();
 
     // Step 1: Rate limit simulation
-    steps.push("[1/9] Rate Limiter Check: Exempt (Local admin console invocation)".to_string());
+    steps.push("[1/8] Rate Limiter Check: Exempt (Local admin console invocation)".to_string());
 
     // Step 2: Whitelist check
     let is_wl_exact = state.whitelist_exact.read().contains(&domain);
@@ -742,30 +727,22 @@ async fn cmd_trace(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
             "ok".into(),
         );
     } else {
-        steps.push("[2/9] Whitelist Evaluation: No whitelist bypass found. Continuing pipeline.".to_string());
+        steps.push("[2/8] Whitelist Evaluation: No whitelist bypass found. Continuing pipeline.".to_string());
     }
 
-    // Step 3: Common Domains check
-    let is_common = state.custom_common.read().contains(&domain);
-    if is_common {
-        steps.push("[3/9] Common Domains: Matched! DGA and Shannon Entropy checks will be bypassed.".to_string());
-    } else {
-        steps.push("[3/9] Common Domains: Not in common list.".to_string());
-    }
-
-    // Step 4: Threat Bloom Filter
+    // Step 3: Threat Bloom Filter
     let bloom_hit = state.threat_bloom.read().contains(&domain);
     if bloom_hit {
-        steps.push("[4/9] Threat Bloom Filter: HIT (Potential threat signature in Bloom array)".to_string());
+        steps.push("[3/8] Threat Bloom Filter: HIT (Potential threat signature in Bloom array)".to_string());
     } else {
-        steps.push("[4/9] Threat Bloom Filter: PASS (No bloom signature match)".to_string());
+        steps.push("[3/8] Threat Bloom Filter: PASS (No bloom signature match)".to_string());
     }
 
-    // Step 5: Exact Custom Blocklist
+    // Step 4: Exact Custom Blocklist
     let custom_block = state.custom_blocklist.read().get(&domain).cloned();
     if let Some(entry) = custom_block {
         steps.push(format!(
-            "[5/9] Custom Blocklist: BLOCKED! Matched custom rule. Reason: '{}', Source: '{}'",
+            "[4/8] Custom Blocklist: BLOCKED! Matched custom rule. Reason: '{}', Source: '{}'",
             entry.reason,
             entry.source
         ));
@@ -777,39 +754,39 @@ async fn cmd_trace(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
             "ok".into(),
         );
     } else {
-        steps.push("[5/9] Custom Blocklist: No exact match.".to_string());
+        steps.push("[4/8] Custom Blocklist: No exact match.".to_string());
     }
 
-    // Step 6: AI Heuristic Evaluation
+    // Step 5: AI Heuristic Evaluation
     let entropy = crate::security::heuristics::calculate_entropy(&domain);
     let is_dga = crate::security::heuristics::is_dga_threat(&domain);
     let is_lookalike = crate::security::heuristics::is_lookalike_threat(&domain);
 
     steps.push(format!(
-        "[6/9] AI Threat Engine: Shannon Entropy={:.3}, DGA Anomaly={}, Lookalike={}",
+        "[5/8] AI Threat Engine: Shannon Entropy={:.3}, DGA Anomaly={}, Lookalike={}",
         entropy,
         if is_dga { "YES (High Anomaly)" } else { "NO" },
         if is_lookalike { "YES (Potential Impersonation)" } else { "None" }
     ));
 
-    // Step 7: Cache Lookup
+    // Step 6: Cache Lookup
     let cached = state.cache.get(&domain, 1, 0x1234).await;
     if cached.is_some() {
-        steps.push("[7/9] Local DNS Cache: HIT (Found active cached response in RAM)".to_string());
+        steps.push("[6/8] Local DNS Cache: HIT (Found active cached response in RAM)".to_string());
     } else {
-        steps.push("[7/9] Local DNS Cache: MISS (Proceeding to upstream dispatch)".to_string());
+        steps.push("[6/8] Local DNS Cache: MISS (Proceeding to upstream dispatch)".to_string());
     }
 
-    // Step 8: Upstream Ranking
+    // Step 7: Upstream Ranking
     let ranked = state.upstreams.ranked_nodes();
     let fastest = ranked.first().map(|n| n.provider.as_str()).unwrap_or("Cloudflare");
     steps.push(format!(
-        "[8/9] Upstream Resolver Dispatch: Primary target is '{}' (Ranked by EWMA latency)",
+        "[7/8] Upstream Resolver Dispatch: Primary target is '{}' (Ranked by EWMA latency)",
         fastest
     ));
 
-    // Step 9: DNSSEC Verification
-    steps.push("[9/9] DNSSEC Engine: RFC 4035 Section 5.5 cryptographic anchor validation active".to_string());
+    // Step 8: DNSSEC Verification
+    steps.push("[8/8] DNSSEC Engine: RFC 4035 Section 5.5 cryptographic anchor validation active".to_string());
 
     let out = format!(
         "── [ TRACE EXECUTION PIPELINE ] ─────────────────────────────────\nDomain: {}\n\n{}\n\nVerdict: ALLOW (Clean domain passed all heuristic and signature checks)",
@@ -1091,37 +1068,6 @@ async fn cmd_unwhitelist(state: &Arc<AppState>, args: &[&str]) -> (String, Strin
     }
 }
 
-async fn cmd_common(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
-    if args.is_empty() {
-        return ("Usage: common <domain> | common list".into(), "error".into());
-    }
-
-    if args[0].eq_ignore_ascii_case("list") {
-        let com = state.custom_common.read();
-        let mut out = format!("── [ COMMON DOMAINS ({}) ] ───────────────────────────────\n", com.len());
-        for (idx, dom) in com.iter().enumerate() {
-            out.push_str(&format!("  [{}] {}\n", idx + 1, dom));
-        }
-        return (out, "ok".into());
-    }
-
-    let domain = args[0].trim_end_matches('.').to_lowercase();
-    state.custom_common.write().insert(domain.clone());
-    (format!("Domain '{}' added to common domains list.", domain), "ok".into())
-}
-
-async fn cmd_uncommon(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
-    if args.is_empty() {
-        return ("Usage: uncommon <domain>".into(), "error".into());
-    }
-    let domain = args[0].trim_end_matches('.').to_lowercase();
-    let removed = state.custom_common.write().remove(&domain);
-    if removed {
-        (format!("Domain '{}' removed from common domains.", domain), "ok".into())
-    } else {
-        (format!("Domain '{}' was not found in common domains.", domain), "error".into())
-    }
-}
 
 async fn cmd_feed(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
     if args.is_empty() || args[0].eq_ignore_ascii_case("status") {

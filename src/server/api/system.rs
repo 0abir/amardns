@@ -523,7 +523,6 @@ pub async fn handle_nuclear_wipe(
     state.cache.clear().await;
     state.custom_blocklist.write().clear();
     state.custom_whitelist.write().clear();
-    state.custom_common.write().clear();
     state.heatmap.write().clear();
     state.wal.clear();
     state.fingerprint.clear();

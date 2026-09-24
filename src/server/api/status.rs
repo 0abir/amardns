@@ -462,7 +462,6 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
 
     let blk_cnt = state.custom_blocklist.read().len();
     let wl_cnt = state.custom_whitelist.read().len();
-    let cm_cnt = state.custom_common.read().len();
     let upstreams = state.upstreams.snapshot();
     let active_upstreams = upstreams
         .iter()
@@ -522,7 +521,7 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
     let total_records = state
         .wal
         .total_records()
-        .max((blk_cnt + wl_cnt + cm_cnt) as u64);
+        .max((blk_cnt + wl_cnt) as u64);
 
     let rss_mb = crate::telemetry::metrics::get_process_rss_mb();
 
@@ -903,7 +902,7 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "db": {
                 "totalRecords": total_records,
                 "blocklistDomains": blk_cnt,
-                "whitelistDomains": wl_cnt + cm_cnt,
+                "whitelistDomains": wl_cnt,
                 "walMB": wal_mb,
                 "walBytes": wal_bytes
             },
@@ -918,7 +917,7 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
         "db": {
             "totalRecords": total_records,
             "blocklistDomains": blk_cnt,
-            "whitelistDomains": wl_cnt + cm_cnt,
+            "whitelistDomains": wl_cnt,
             "walMB": wal_mb,
             "walBytes": wal_bytes
         },
@@ -935,7 +934,7 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "crossMatched": abir_crossmatched && common_crossmatched,
             "feedOverlapCount": feed_overlap,
             "customBlocked": blk_cnt,
-            "customWhitelisted": wl_cnt + cm_cnt
+            "customWhitelisted": wl_cnt
         },
         "features": {
             "ttlGuard": {

@@ -51,28 +51,6 @@ pub struct HeatmapRecord {
     pub last_seen: u64,
 }
 
-pub const DEFAULT_COMMON_DOMAINS: &[&str] = &[
-    "google.com",
-    "apple.com",
-    "microsoft.com",
-    "cloudflare.com",
-    "amazon.com",
-    "youtube.com",
-    "netflix.com",
-    "github.com",
-    "facebook.com",
-    "whatsapp.com",
-    "akamai.net",
-    "fastly.net",
-    "wikipedia.org",
-    "twitter.com",
-    "instagram.com",
-    "linkedin.com",
-    "spotify.com",
-    "zoom.us",
-    "office.com",
-    "live.com",
-];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigDecision {
@@ -122,7 +100,6 @@ pub struct AppState {
     pub fingerprint: crate::security::heuristics::ClientFingerprintTracker,
     pub custom_blocklist: RwLock<HashMap<String, BlockEntry>>,
     pub custom_whitelist: RwLock<HashSet<String>>,
-    pub custom_common: RwLock<HashSet<String>>,
     pub cache: DnsCache,
     pub upstreams: UpstreamPool,
     pub rate_limiter: RateLimiter,
@@ -170,66 +147,9 @@ pub struct AppState {
 }
 
 impl AppState {
-    #[allow(dead_code)]
-    pub fn seed_default_common(common: &mut HashSet<String>, whitelist: &mut HashSet<String>) {
-        let roots = [
-            "google.com",
-            "googleapis.com",
-            "gstatic.com",
-            "googleusercontent.com",
-            "cloudflare.com",
-            "cloudflare-dns.com",
-            "one.one.one.one",
-            "apple.com",
-            "icloud.com",
-            "aaplimg.com",
-            "mzstatic.com",
-            "microsoft.com",
-            "azure.com",
-            "windows.net",
-            "office.com",
-            "live.com",
-            "github.com",
-            "githubusercontent.com",
-            "github.io",
-            "amazon.com",
-            "amazonaws.com",
-            "aws.amazon.com",
-            "facebook.com",
-            "fbcdn.net",
-            "instagram.com",
-            "whatsapp.com",
-            "whatsapp.net",
-            "youtube.com",
-            "ytimg.com",
-            "googlevideo.com",
-            "netflix.com",
-            "nflxvideo.net",
-            "nflximg.net",
-            "twitter.com",
-            "x.com",
-            "twimg.com",
-            "wikipedia.org",
-            "wikimedia.org",
-            "akamaized.net",
-            "fastly.net",
-            "fly.dev",
-            "fly.io",
-            "jsdelivr.net",
-            "bing.com",
-            "msn.com",
-            "yahoo.com",
-            "duckduckgo.com",
-        ];
-        for r in roots {
-            let s = r.to_string();
-            common.insert(s.clone());
-            whitelist.insert(s);
-        }
-    }
     pub fn new(config: Config) -> Self {
         let wal = WalStorage::new(&config.db_path);
-        let (raw_blocklist, raw_whitelist, raw_common) = wal.load_lists();
+        let (raw_blocklist, raw_whitelist) = wal.load_lists();
         let is_private = config.access_mode_is_private();
         let now = SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -252,12 +172,6 @@ impl AppState {
         }
 
         let custom_whitelist = raw_whitelist;
-        let mut custom_common = raw_common;
-        if custom_common.is_empty() {
-            for d in DEFAULT_COMMON_DOMAINS {
-                custom_common.insert(d.to_string());
-            }
-        }
         let heatmap = HashMap::new();
 
         let initial_decisions = vec![ConfigDecision {
@@ -297,7 +211,6 @@ impl AppState {
             fingerprint: crate::security::heuristics::ClientFingerprintTracker::new(),
             custom_blocklist: RwLock::new(custom_blocklist),
             custom_whitelist: RwLock::new(custom_whitelist),
-            custom_common: RwLock::new(custom_common),
             cache: DnsCache::new(150_000), // 150k entries ≈ 70-100 MB — dynamic expansion, governed under 200 MB hard cap
             upstreams: UpstreamPool::new(),
             rate_limiter: RateLimiter::new(100.0, 50.0, 500.0, 200.0), // 100 capacity, 50/sec refill; 500 IP ceiling, 200/sec refill
@@ -789,10 +702,6 @@ impl AppState {
         if guard_wl.contains(domain) && !domain.contains('*') {
             return true;
         }
-        let guard_cm = self.custom_common.read();
-        if guard_cm.contains(domain) && !domain.contains('*') {
-            return true;
-        }
         false
     }
 
@@ -862,12 +771,11 @@ impl AppState {
 
     pub fn is_custom_wildcard_whitelisted(&self, domain: &str) -> bool {
         let guard_wl = self.custom_whitelist.read();
-        let guard_cm = self.custom_common.read();
-        if guard_wl.is_empty() && guard_cm.is_empty() {
+        if guard_wl.is_empty() {
             return false;
         }
         let wc_self = format!("*.{}", domain);
-        if guard_wl.contains(&wc_self) || guard_cm.contains(&wc_self) {
+        if guard_wl.contains(&wc_self) {
             return true;
         }
         let parts: Vec<&str> = domain.split('.').collect();
@@ -876,13 +784,11 @@ impl AppState {
             let wc = format!("*.{}", parent);
             if guard_wl.contains(&parent)
                 || guard_wl.contains(&wc)
-                || guard_cm.contains(&parent)
-                || guard_cm.contains(&wc)
             {
                 return true;
             }
         }
-        for key in guard_wl.iter().chain(guard_cm.iter()) {
+        for key in guard_wl.iter() {
             if key.contains('*') && domain_matches_pattern(key, domain) {
                 return true;
             }
@@ -1910,7 +1816,6 @@ mod tests {
         // 2. AppState Core Engine & Autonomous Seeding
         let state = Arc::new(AppState::new(config.clone()));
         assert_eq!(state.config_decisions.read().len(), 1, "Boot tuning decision must be present");
-        assert_eq!(state.custom_common.read().len(), 20, "20 essential common domains must be seeded");
 
         // 3. Security & Cryptographic Auth Subsystem
         let token = crate::security::auth::generate_hmac_token(
@@ -2007,10 +1912,11 @@ mod tests {
         assert!(state.brain.training_cycles.load(Ordering::Relaxed) >= 1);
 
         // 11. Passive DNS Timeline & Intelligent Anomaly Suppression
+        state.custom_whitelist.write().insert("cloudflare.com".to_string());
         let ips = vec!["104.16.1.1".parse().unwrap(), "104.16.1.2".parse().unwrap()];
         let _ = state.passive_dns.record("cloudflare.com", &ips);
         assert!(state.is_exempt("cloudflare.com"));
-        assert_eq!(state.recent_anomalies.read().len(), 0, "Common domain drift must not trigger anomaly");
+        assert_eq!(state.recent_anomalies.read().len(), 0, "Whitelisted domain drift must not trigger anomaly");
 
         // 12. Autonomous Traffic Adaptation Config Decisions
         state.log_config_decision(
