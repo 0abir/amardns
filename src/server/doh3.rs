@@ -35,6 +35,19 @@ pub fn create_doh3_quinn_config(
     Ok(server_config)
 }
 
+fn resolve_socket_addr(host: &str, port: u16) -> SocketAddr {
+    use std::net::ToSocketAddrs;
+    if let Ok(mut addrs) = format!("{}:{}", host, port).to_socket_addrs() {
+        if let Some(addr) = addrs.next() {
+            return addr;
+        }
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return SocketAddr::new(ip, port);
+    }
+    SocketAddr::new(std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED), port)
+}
+
 /// Spawns the DoH3 (RFC 9114 / RFC 8484) listener on UDP port 443.
 pub async fn start_doh3_server(
     state: Arc<AppState>,
@@ -45,22 +58,20 @@ pub async fn start_doh3_server(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let quinn_config = create_doh3_quinn_config(rustls_config)?;
 
-    let host_ip: std::net::IpAddr = bind_host
-        .parse()
-        .unwrap_or(std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED));
-    let bind_addr = SocketAddr::new(host_ip, port);
+    let bind_addr = resolve_socket_addr(bind_host, port);
 
+    let domain = if bind_addr.is_ipv6() {
+        socket2::Domain::IPV6
+    } else {
+        socket2::Domain::IPV4
+    };
     let socket = socket2::Socket::new(
-        if host_ip.is_ipv4() {
-            socket2::Domain::IPV4
-        } else {
-            socket2::Domain::IPV6
-        },
+        domain,
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
     )?;
 
-    if host_ip.is_ipv6() {
+    if bind_addr.is_ipv6() {
         let _ = socket.set_only_v6(false);
     }
     let _ = socket.set_reuse_address(true);

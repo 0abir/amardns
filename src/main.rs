@@ -716,7 +716,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // 9b. Start DoQ Server (DNS-over-QUIC, RFC 9250, UDP:853)
     if config.doq_enabled {
         let doq_state = state.clone();
-        let doq_host = config.host.clone();
+        let doq_host = config.udp_host.clone();
         let doq_port = config.doq_port;
         let shutdown_rx_doq = state.shutdown_rx.clone();
         let doq_tls = doq_tls_config.clone();
@@ -738,7 +738,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // 9c. Start DoH3 Server (DNS-over-HTTP/3, RFC 9114, UDP:443)
     if config.doh3_enabled {
         let doh3_state = state.clone();
-        let doh3_host = config.host.clone();
+        let doh3_host = config.udp_host.clone();
         let doh3_port = config.doh3_port;
         let shutdown_rx_doh3 = state.shutdown_rx.clone();
         let doh3_tls = doh3_tls_config.clone();
