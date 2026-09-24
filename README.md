@@ -9,7 +9,7 @@
 [![Docker](https://github.com/0abir/amardns/actions/workflows/build-and-publish.yml/badge.svg)](https://github.com/0abir/amardns/actions/workflows/build-and-publish.yml)
 [![Memory](https://img.shields.io/badge/Memory-Zero_GC_~12MB-green.svg)](#zero-allocation-memory-architecture)
 [![Latency](https://img.shields.io/badge/Latency-P95_<5ms-brightgreen.svg)](#singleflight-coalescing--hedged-upstream-racing)
-[![Tests](https://img.shields.io/badge/Tests-145%20Passed%20(100%25)-success.svg)](#testing--verification)
+[![Tests](https://img.shields.io/badge/Tests-155%20Passed%20(100%25)-success.svg)](#testing--verification)
 
 ---
 
@@ -165,6 +165,12 @@ Incoming Query (DoH / DoT / Plain 53)
 - **Modern Cyberpunk Error Pages**: Dark glassmorphic error pages for `404 Not Found`, `401 Unauthorized`, `403 Forbidden`, `405 Method Not Allowed`, and `500 Internal Error` with live node diagnostics (Client IP, Edge Region, Node UID, Requested Path).
 - **Zero Emojis**: Clean typography, vector status indicators, and SVG icons.
 
+### 9. Over-The-Air (OTA) Binary Updates & Persistent Bootloader
+- **Persistent Volume Binary Execution**: On boot, AmarDNS inspects `/data/amardns` on the persistent NVMe volume. If an updated binary is present, execution transfers immediately via `execve` while preserving all file descriptors and environment variables.
+- **Zero-Redeploy Hot Updates**: Administrators can trigger `/api/system/update` or click "Update Binary Now" directly from the dashboard using the Master Key. The daemon queries GitHub Releases for the latest verified `amardns` binary, verifies its SHA256 checksum, atomically stages it to `/data/amardns`, and seamlessly restarts in under 3 seconds without rebuilding or redeploying the Docker container.
+- **Instant Rollback**: If an update needs to be reverted, `/api/system/rollback` purges `/data/amardns` and automatically falls back to the rock-solid base container image binary.
+- **Strict Secret Separation**: The released static binary contains zero embedded secrets or environment variables. All secrets (`DNS_MASTER_KEY`, `DESEC_TOKEN`, etc.) are inherited dynamically from Fly.io's encrypted microVM runtime environment.
+
 ---
 
 ## Getting Started
@@ -180,7 +186,7 @@ Incoming Query (DoH / DoT / Plain 53)
 git clone https://github.com/0abir/amardns.git
 cd amardns
 
-# Run full test suite (145 tests)
+# Run full test suite (155 tests)
 cargo test
 
 # Run in release mode (binds default ports 443, 853, 53)
@@ -444,6 +450,9 @@ All endpoints support authentication via `X-Master-Key` / `Authorization: Bearer
 | `/api/ai/prune`, `/api/ai/prune/{key}` | `POST` | Admin | Prune stale neural weights and domain counters. |
 | `/api/console/commands`, `/api/console/commands/{key}` | `GET` | Admin | List available interactive console commands. |
 | `/api/console/exec`, `/api/console/exec/{key}` | `POST` | Admin | Execute administrative console command. |
+| `/api/system/update/check`, `/api/system/update/check/{key}` | `GET` | View / Admin | Query GitHub Releases for binary update availability. |
+| `/api/system/update`, `/api/system/update/{key}` | `POST` | Admin | Hot-deploy latest verified static binary to `/data/amardns`. |
+| `/api/system/rollback`, `/api/system/rollback/{key}` | `POST` | Admin | Purge persistent binary and revert to container image base. |
 | `/internal/tls/bundle/{key}` | `GET` | Admin | Peer Anycast replica TLS certificate bundle sync. |
 | `/internal/acme/lock/{key}`, `/internal/acme/unlock/{key}` | `POST` | Admin | Distributed ACME renewal coordination locks. |
 
@@ -454,7 +463,7 @@ All endpoints support authentication via `X-Master-Key` / `Authorization: Bearer
 AmarDNS includes an exhaustive unit and integration test suite covering RFC 1035 wire parsing, S/MIME PKCS#7 verification, DNSSEC validation, rate limiting, and singleflight deduplication:
 
 ```bash
-# Execute test suite (145 tests)
+# Execute test suite (155 tests)
 cargo test --all-targets
 
 # Execute strict linter verification

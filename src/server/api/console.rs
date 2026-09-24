@@ -340,6 +340,12 @@ fn get_command_list() -> Vec<ConsoleCommandInfo> {
             description: "Echo text back to the terminal".into(),
             category: "General".into(),
         },
+        ConsoleCommandInfo {
+            name: "update".into(),
+            syntax: "update [check | apply | rollback]".into(),
+            description: "Check for binary updates from GitHub, apply in-place to /data/amardns, or rollback".into(),
+            category: "System".into(),
+        },
     ]
 }
 
@@ -385,6 +391,7 @@ pub async fn execute_command(state: &Arc<AppState>, input: &str) -> (String, Str
         "cert" => (cmd_cert(state), "ok".into()),
         "logs" => (cmd_logs(state, args), "ok".into()),
         "canary" => (cmd_canary(state), "ok".into()),
+        "update" => cmd_update(args).await,
         _ => (
             format!(
                 "Command not recognized: '{}'. Type 'help' to see all available commands.",
@@ -392,6 +399,59 @@ pub async fn execute_command(state: &Arc<AppState>, input: &str) -> (String, Str
             ),
             "error".into(),
         ),
+    }
+}
+
+async fn cmd_update(args: &[&str]) -> (String, String) {
+    let sub = args.first().copied().unwrap_or("check");
+    match sub {
+        "check" => {
+            let client = match reqwest::Client::builder().user_agent("AmarDNS").build() {
+                Ok(c) => c,
+                Err(e) => return (format!("Failed to build HTTP client: {}", e), "error".into()),
+            };
+            match client.get("https://api.github.com/repos/0abir/amardns/releases/latest").send().await {
+                Ok(resp) => {
+                    if let Ok(j) = resp.json::<serde_json::Value>().await {
+                        let tag = j["tag_name"].as_str().unwrap_or("unknown");
+                        let cur = env!("CARGO_PKG_VERSION");
+                        let has_persistent = std::path::Path::new("/data/amardns").exists();
+                        let mut out = format!("Current binary version: v{}\nLatest release on GitHub: {}\nPersistent /data/amardns binary active: {}\n", cur, tag, has_persistent);
+                        if tag.contains(cur) {
+                            out.push_str("Status: AmarDNS is up to date.\n");
+                        } else {
+                            out.push_str("Status: New release available! Run 'update apply' to download and install.\n");
+                        }
+                        (out, "ok".into())
+                    } else {
+                        ("Failed to parse GitHub release metadata.".into(), "error".into())
+                    }
+                }
+                Err(e) => (format!("Failed to query GitHub Releases API: {}", e), "error".into()),
+            }
+        }
+        "apply" => {
+            match crate::server::api::system::perform_download_and_install().await {
+                Ok(msg) => (format!("{}\n", msg), "ok".into()),
+                Err(e) => (format!("Update failed: {}\n", e), "error".into()),
+            }
+        }
+        "rollback" => {
+            let p = std::path::Path::new("/data/amardns");
+            if p.exists() {
+                if let Err(e) = std::fs::remove_file(p) {
+                    return (format!("Failed to remove persistent binary: {}\n", e), "error".into());
+                }
+                tokio::spawn(async {
+                    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                    std::process::exit(0);
+                });
+                ("Removed /data/amardns. Restarting to restore container base binary...\n".into(), "ok".into())
+            } else {
+                ("No persistent binary found at /data/amardns (already running base container binary).\n".into(), "error".into())
+            }
+        }
+        _ => ("Syntax: update [check | apply | rollback]\n".into(), "error".into()),
     }
 }
 

@@ -1136,6 +1136,26 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
     </div>
   </div>
 
+  <div class="sh">Engine Firmware &amp; Live Binary Updates</div>
+  <div class="ap" style="margin-bottom:18px">
+    <div class="apb">
+      <p style="font-size:9px;color:var(--mut);margin-bottom:10px;text-align:center">
+        Over-the-air hot updates for the AmarDNS static binary. Deploys directly to NVMe persistent storage (<code>/data/amardns</code>) without rebuilding or redeploying the Docker container.
+      </p>
+      <div style="display:flex;justify-content:center;gap:16px;margin-bottom:12px;font-size:10px;font-family:var(--fm);flex-wrap:wrap">
+        <div>Binary Source: <span id="fw-source" style="color:var(--acc);font-weight:700">Detecting…</span></div>
+        <div>Active Version: <span id="fw-cur-ver" style="color:var(--txt)">v1.0.0</span></div>
+        <div>Latest Release: <span id="fw-lat-ver" style="color:var(--mut)">—</span></div>
+      </div>
+      <div class="brow-c" style="gap:8px;justify-content:center">
+        <button class="btn" id="btn-check-update">Check for Updates</button>
+        <button class="btn btn-ok" id="btn-apply-update">Update Binary Now</button>
+        <button class="btn btn-w" id="btn-rollback-update">Rollback to Base Image</button>
+      </div>
+      <div id="fw-msg" style="display:none;margin-top:10px;padding:8px;border-radius:4px;font-size:9px;font-family:var(--fm);text-align:center"></div>
+    </div>
+  </div>
+
   <div class="sh" style="color:var(--bad);border-color:rgba(255,45,107,.3);justify-content:center;text-align:center">Nuclear Factory Reset</div>
   <div class="nuke-zone" style="display:flex;flex-direction:column;align-items:center;text-align:center">
     <div style="margin-bottom:12px;width:100%;max-width:360px">
@@ -1311,7 +1331,7 @@ function render(d){
         hdr.parentNode.insertBefore(vb,hdr.nextSibling);
       }
     }
-    ['btn-add-block','btn-clear-block','btn-add-wl','btn-clear-wl','btn-add-com','btn-clear-com','btn-block-active','btn-block-deactive','btn-mode-public','btn-mode-private','btn-reset-cb','btn-clear-sh','btn-clear-inc','btn-nuke','btn-prune-noise','btn-import-brain'].forEach(function(id){
+    ['btn-add-block','btn-clear-block','btn-add-wl','btn-clear-wl','btn-add-com','btn-clear-com','btn-block-active','btn-block-deactive','btn-mode-public','btn-mode-private','btn-reset-cb','btn-clear-sh','btn-clear-inc','btn-nuke','btn-prune-noise','btn-import-brain','btn-apply-update','btn-rollback-update'].forEach(function(id){
       var b=document.getElementById(id);
       if(b){b.disabled=true;b.style.opacity='0.4';b.style.cursor='not-allowed';b.title='Locked in View-Only Mode';}
     });
@@ -2768,6 +2788,7 @@ function renderAdmin(d){
     ['WAL Disk Size',walStr,'cv-t'],
     ['WAL Records',fmt(pdb.totalRecords||0),'cv-t'],
   ]);
+  if(!window._fwChecked){window._fwChecked=true;checkBinaryUpdate();}
 }
 
 // Heatmap
@@ -3442,6 +3463,65 @@ function resetCB(){if(!confirm('Reset all circuit breakers?'))return;api('/api/r
 function clearSH(){if(!confirm('Clear self-heal state?'))return;api('/api/self-heal','DELETE').then(function(){toast('Cleared','ok');go();}).catch(function(e){toast(e.message,'er');});}
 function clearInc(){api('/api/incident','DELETE').then(function(){toast('Incident cleared','ok');go();}).catch(function(e){toast(e.message,'er');});}
 
+// Binary Firmware Management
+function checkBinaryUpdate(){
+  var msg=document.getElementById('fw-msg');
+  if(msg){msg.style.display='block';msg.style.background='rgba(0,229,204,0.1)';msg.style.color='var(--acc)';msg.textContent='Querying GitHub releases…';}
+  api('/api/system/update/check').then(function(d){
+    if(d.ok){
+      var srcEl=document.getElementById('fw-source');
+      var curEl=document.getElementById('fw-cur-ver');
+      var latEl=document.getElementById('fw-lat-ver');
+      if(srcEl){srcEl.textContent=d.running_from_persistent?'Persistent (/data/amardns)':'Base Image (/amardns)';srcEl.style.color=d.running_from_persistent?'var(--warn)':'var(--acc)';}
+      if(curEl){curEl.textContent='v'+d.current_version;}
+      if(latEl){latEl.textContent=d.latest_version;}
+      if(msg){
+        if(d.update_available){
+          msg.style.background='rgba(0,255,100,0.15)';
+          msg.style.color='var(--good)';
+          msg.innerHTML='Update Available: <strong>'+d.latest_version+'</strong>. Click "Update Binary Now" to hot-deploy.';
+        } else {
+          msg.style.background='rgba(0,229,204,0.1)';
+          msg.style.color='var(--acc)';
+          msg.textContent='AmarDNS engine is up to date ('+d.latest_version+').';
+        }
+      }
+    }
+  }).catch(function(e){
+    if(msg){msg.style.display='block';msg.style.background='rgba(255,45,107,0.1)';msg.style.color='var(--bad)';msg.textContent='Update check failed: '+e.message;}
+    toast(e.message,'er');
+  });
+}
+
+function applyBinaryUpdate(){
+  if(!confirm('Download and hot-deploy the latest AmarDNS binary to persistent storage (/data/amardns)? The server will seamlessly restart into the new binary in ~1 second.'))return;
+  var msg=document.getElementById('fw-msg');
+  if(msg){msg.style.display='block';msg.style.background='rgba(255,140,0,0.15)';msg.style.color='var(--warn)';msg.textContent='Downloading latest release asset & verifying SHA256 checksum…';}
+  toast('Downloading and verifying update…','wl',6000);
+  api('/api/system/update','POST').then(function(d){
+    if(msg){msg.style.background='rgba(0,255,100,0.2)';msg.style.color='var(--good)';msg.textContent=d.message||'Update installed! Restarting…';}
+    toast('Update applied! Server restarting…','ok',6000);
+    setTimeout(function(){window.location.reload();},3500);
+  }).catch(function(e){
+    if(msg){msg.style.background='rgba(255,45,107,0.15)';msg.style.color='var(--bad)';msg.textContent='Update failed: '+e.message;}
+    toast(e.message,'er');
+  });
+}
+
+function rollbackBinaryUpdate(){
+  if(!confirm('Remove persistent binary (/data/amardns) and revert to the base container image? The server will restart immediately.'))return;
+  var msg=document.getElementById('fw-msg');
+  if(msg){msg.style.display='block';msg.style.background='rgba(255,140,0,0.15)';msg.style.color='var(--warn)';msg.textContent='Rolling back to base container image…';}
+  api('/api/system/rollback','POST').then(function(d){
+    if(msg){msg.style.background='rgba(0,255,100,0.2)';msg.style.color='var(--good)';msg.textContent=d.message||'Rollback complete! Restarting…';}
+    toast('Rollback complete! Server restarting…','ok',6000);
+    setTimeout(function(){window.location.reload();},3500);
+  }).catch(function(e){
+    if(msg){msg.style.background='rgba(255,45,107,0.15)';msg.style.color='var(--bad)';msg.textContent='Rollback failed: '+e.message;}
+    toast(e.message,'er');
+  });
+}
+
 // Nuclear wipe
 function nuclearWipe(){
   var confirm_val=document.getElementById('nuke-confirm').value.trim();
@@ -3748,6 +3828,9 @@ on('btn-tok-copy','click',tokCopy);
 on('btn-reset-cb','click',resetCB);
 on('btn-clear-sh','click',clearSH);
 on('btn-clear-inc','click',clearInc);
+on('btn-check-update','click',checkBinaryUpdate);
+on('btn-apply-update','click',applyBinaryUpdate);
+on('btn-rollback-update','click',rollbackBinaryUpdate);
 on('btn-nuke','click',nuclearWipe);
 $('btags').addEventListener('click',function(e){
   var x=e.target.closest('.btag-x');

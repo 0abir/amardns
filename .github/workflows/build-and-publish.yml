@@ -1,4 +1,4 @@
-name: Build and Publish Docker Image
+name: Build, Publish Docker Image & Release Binary
 
 on:
   push:
@@ -6,12 +6,12 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
   build:
-    name: Build & Publish Scratch Image
+    name: Build & Publish Scratch Image and Binary
     runs-on: ubuntu-latest
 
     steps:
@@ -34,8 +34,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
-            type=sha,format=short
+            type=raw,value=latest
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v7
@@ -48,3 +47,52 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Extract static binary from container
+        run: |
+          docker pull ghcr.io/${{ github.repository }}:latest
+          CID=$(docker create ghcr.io/${{ github.repository }}:latest)
+          docker cp "$CID":/amardns ./amardns
+          docker rm -v "$CID"
+          chmod +x ./amardns
+          tar -czvf amardns-linux-amd64.tar.gz amardns
+          sha256sum amardns > amardns.sha256
+          sha256sum amardns-linux-amd64.tar.gz > amardns-linux-amd64.tar.gz.sha256
+
+      - name: Publish or Update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="v$(grep -m1 '^version = ' Cargo.toml | cut -d '"' -f2)"
+          echo "Target Release Version: $VERSION"
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists. Uploading and overwriting release assets..."
+            gh release upload "$VERSION" ./amardns ./amardns-linux-amd64.tar.gz ./amardns.sha256 ./amardns-linux-amd64.tar.gz.sha256 --clobber
+            gh release edit "$VERSION" --latest
+          else
+            echo "Creating release $VERSION..."
+            gh release create "$VERSION" ./amardns ./amardns-linux-amd64.tar.gz ./amardns.sha256 ./amardns-linux-amd64.tar.gz.sha256 \
+              --title "AmarDNS $VERSION" \
+              --notes "Production static binary release for AmarDNS (x86_64 Musl). Built with zero-GC memory safety and zero embedded secrets. Over-the-air hot update ready." \
+              --latest
+          fi
+
+      - name: Prune old container package versions (keep latest only)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PACKAGE_NAME="amardns"
+          echo "Querying package versions for $PACKAGE_NAME..."
+          VERSIONS=$(gh api --paginate "/user/packages/container/${PACKAGE_NAME}/versions" 2>/dev/null || gh api --paginate "/users/${{ github.repository_owner }}/packages/container/${PACKAGE_NAME}/versions" 2>/dev/null || echo "[]")
+          echo "$VERSIONS" | jq -c '.[]' 2>/dev/null | while read -r item; do
+            ID=$(echo "$item" | jq -r '.id')
+            TAGS=$(echo "$item" | jq -r '.metadata.container.tags // [] | join(",")')
+            echo "Found version ID $ID with tags: [$TAGS]"
+            if [[ "$TAGS" != *"latest"* ]]; then
+              echo "Pruning older package version $ID..."
+              gh api --method DELETE "/user/packages/container/${PACKAGE_NAME}/versions/$ID" || true
+            else
+              echo "Preserving latest package version $ID."
+            fi
+          done || true
+

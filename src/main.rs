@@ -19,6 +19,29 @@ use config::Config;
 use state::AppState;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(unix)]
+    {
+        // If an updated binary exists on the persistent storage volume (/data/amardns)
+        // and we are not already running it, execute it in-place using execve.
+        // This enables in-dashboard zero-downtime updates on Fly.io that survive
+        // machine restarts and migrations while preserving all Fly secrets in the environment.
+        let persistent_bin = std::path::Path::new("/data/amardns");
+        if persistent_bin.is_file() {
+            let current_exe = std::env::current_exe().ok();
+            let is_running_persistent = current_exe
+                .as_ref()
+                .map(|p| p == persistent_bin)
+                .unwrap_or(false);
+            if !is_running_persistent {
+                use std::os::unix::process::CommandExt;
+                let _ = std::process::Command::new(persistent_bin)
+                    .args(std::env::args().skip(1))
+                    .envs(std::env::vars())
+                    .exec();
+            }
+        }
+    }
+
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(2)

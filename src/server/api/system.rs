@@ -108,6 +108,16 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/internal/acme/lock/{key}", post(acquire_acme_lock_key))
         .route("/internal/acme/unlock", post(release_acme_lock))
         .route("/internal/acme/unlock/{key}", post(release_acme_lock_key))
+        // Self-Update & Rollback
+        .route("/api/system/update", post(self_update_handler))
+        .route("/api/system/update/", post(self_update_handler))
+        .route("/api/system/update/{key}", post(self_update_key_handler))
+        .route("/api/system/update/check", get(self_update_check_handler))
+        .route("/api/system/update/check/", get(self_update_check_handler))
+        .route("/api/system/update/check/{key}", get(self_update_check_key_handler))
+        .route("/api/system/rollback", post(self_rollback_handler))
+        .route("/api/system/rollback/", post(self_rollback_handler))
+        .route("/api/system/rollback/{key}", post(self_rollback_key_handler))
 }
 
 // ── Query Logs ──────────────────────────────────────────────────────────────
@@ -1251,4 +1261,279 @@ fn handle_release_lock(state: &Arc<AppState>, body: serde_json::Value) -> Respon
     }
     Json(serde_json::json!({ "ok": true })).into_response()
 }
+
+// ── In-Dashboard Self-Update & Rollback ──────────────────────────────────────
+
+pub async fn self_update_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    handle_self_update(&state, None, &headers).await
+}
+
+pub async fn self_update_key_handler(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_self_update(&state, Some(&key), &headers).await
+}
+
+pub async fn self_update_check_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    handle_self_update_check(&state, None, &headers).await
+}
+
+pub async fn self_update_check_key_handler(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_self_update_check(&state, Some(&key), &headers).await
+}
+
+pub async fn self_rollback_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    handle_self_rollback(&state, None, &headers).await
+}
+
+pub async fn self_rollback_key_handler(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_self_rollback(&state, Some(&key), &headers).await
+}
+
+async fn handle_self_update_check(
+    state: &Arc<AppState>,
+    key: Option<&str>,
+    headers: &HeaderMap,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/system/update/check");
+    if !auth.is_view_or_admin() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false, "error": "Unauthorized" })),
+        )
+            .into_response();
+    }
+
+    let client = match reqwest::Client::builder()
+        .user_agent("AmarDNS")
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let current_version = env!("CARGO_PKG_VERSION");
+    let release_url = "https://api.github.com/repos/0abir/amardns/releases/latest";
+    match client.get(release_url).send().await {
+        Ok(resp) => {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                let tag = json["tag_name"].as_str().unwrap_or("unknown");
+                let has_update = !tag.contains(current_version);
+                (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "ok": true,
+                        "current_version": current_version,
+                        "latest_version": tag,
+                        "update_available": has_update,
+                        "running_from_persistent": std::path::Path::new("/data/amardns").exists(),
+                        "html_url": json["html_url"].as_str().unwrap_or("")
+                    })),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({ "ok": false, "error": "Failed to parse GitHub release response" })),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "ok": false, "error": format!("GitHub API unreachable: {}", e) })),
+        )
+            .into_response(),
+    }
+}
+
+async fn handle_self_update(
+    state: &Arc<AppState>,
+    key: Option<&str>,
+    headers: &HeaderMap,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/system/update");
+    if !auth.is_admin() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false, "error": "Admin credentials required for self-update" })),
+        )
+            .into_response();
+    }
+
+    match perform_download_and_install().await {
+        Ok(msg) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "ok": true, "message": msg, "restarting": true })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "ok": false, "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+async fn handle_self_rollback(
+    state: &Arc<AppState>,
+    key: Option<&str>,
+    headers: &HeaderMap,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/system/rollback");
+    if !auth.is_admin() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false, "error": "Admin credentials required for rollback" })),
+        )
+            .into_response();
+    }
+
+    let persistent_bin = std::path::Path::new("/data/amardns");
+    if persistent_bin.exists() {
+        if let Err(e) = std::fs::remove_file(persistent_bin) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "ok": false, "error": format!("Failed to remove persistent binary: {}", e) })),
+            )
+                .into_response();
+        }
+        tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+            tracing::info!("[system] Restarting to restore container base binary...");
+            std::process::exit(0);
+        });
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "message": "Persistent binary removed. Restarting into base container binary...",
+                "restarting": true
+            })),
+        )
+            .into_response()
+    } else {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": "No persistent binary found at /data/amardns (already running base container binary)"
+            })),
+        )
+            .into_response()
+    }
+}
+
+pub async fn perform_download_and_install() -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("AmarDNS")
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let release_url = "https://api.github.com/repos/0abir/amardns/releases/latest";
+    let resp = client.get(release_url)
+        .send()
+        .await
+        .map_err(|e| format!("GitHub API request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("GitHub API returned HTTP {}", resp.status()));
+    }
+
+    let release_json: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Failed to parse release JSON: {}", e))?;
+
+    let tag_name = release_json["tag_name"].as_str().unwrap_or("latest").to_string();
+    let assets = release_json["assets"].as_array()
+        .ok_or_else(|| "No assets attached to latest release".to_string())?;
+
+    let binary_asset = assets.iter().find(|a| {
+        let name = a["name"].as_str().unwrap_or("");
+        name == "amardns" || name == "amardns-linux-amd64"
+    }).ok_or_else(|| "No static binary asset named 'amardns' found in latest release".to_string())?;
+
+    let download_url = binary_asset["browser_download_url"].as_str()
+        .ok_or_else(|| "Missing download URL on binary asset".to_string())?;
+
+    tracing::info!("[update] Downloading latest binary from: {}", download_url);
+    let bin_bytes = client.get(download_url)
+        .send()
+        .await
+        .map_err(|e| format!("Binary download request failed: {}", e))?
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read binary bytes: {}", e))?;
+
+    if bin_bytes.len() < 500_000 {
+        return Err(format!("Downloaded file is too small ({} bytes) to be a valid binary", bin_bytes.len()));
+    }
+
+    // Verify SHA256 checksum if provided
+    if let Some(sha_asset) = assets.iter().find(|a| a["name"].as_str().unwrap_or("") == "amardns.sha256") {
+        if let Some(sha_url) = sha_asset["browser_download_url"].as_str() {
+            if let Ok(sha_res) = client.get(sha_url).send().await {
+                if let Ok(sha_text) = sha_res.text().await {
+                    let expected_sha = sha_text.split_whitespace().next().unwrap_or("").to_lowercase();
+                    if !expected_sha.is_empty() {
+                        let actual_digest = ring::digest::digest(&ring::digest::SHA256, &bin_bytes);
+                        let actual_sha: String = actual_digest.as_ref().iter().map(|b| format!("{:02x}", b)).collect();
+                        if actual_sha != expected_sha {
+                            return Err(format!("SHA256 checksum verification failed: expected {}, got {}", expected_sha, actual_sha));
+                        }
+                        tracing::info!("[update] SHA256 checksum verified: {}", actual_sha);
+                    }
+                }
+            }
+        }
+    }
+
+    let target_dir = std::path::Path::new("/data");
+    if !target_dir.exists() {
+        let _ = std::fs::create_dir_all(target_dir);
+    }
+
+    let tmp_bin = "/data/amardns.download";
+    let target_bin = "/data/amardns";
+
+    std::fs::write(tmp_bin, &bin_bytes)
+        .map_err(|e| format!("Failed to write binary to {}: {}", tmp_bin, e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(tmp_bin, std::fs::Permissions::from_mode(0o755));
+    }
+
+    std::fs::rename(tmp_bin, target_bin)
+        .map_err(|e| format!("Failed to atomically rename {} to {}: {}", tmp_bin, target_bin, e))?;
+
+    tracing::info!("[update] AmarDNS binary installed to {} (version {}). Triggering restart...", target_bin, tag_name);
+
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        tracing::info!("[system] Restarting AmarDNS after successful self-update...");
+        std::process::exit(0);
+    });
+
+    Ok(format!("Successfully upgraded to {} ({} MB). Restarting process...", tag_name, bin_bytes.len() / (1024 * 1024)))
+}
+
 
