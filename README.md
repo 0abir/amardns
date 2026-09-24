@@ -1,4 +1,4 @@
-# AmarDNS v1.0.2
+# AmarDNS v1.0.3
 
 **Autonomous Zero-GC Edge DNS Security Gateway & Threat Intelligence Engine in Rust**
 
@@ -9,13 +9,13 @@
 [![Docker](https://github.com/0abir/amardns/actions/workflows/build-and-publish.yml/badge.svg)](https://github.com/0abir/amardns/actions/workflows/build-and-publish.yml)
 [![Memory](https://img.shields.io/badge/Memory-Zero_GC_~12MB-green.svg)](#zero-allocation-memory-architecture)
 [![Latency](https://img.shields.io/badge/Latency-P95_<5ms-brightgreen.svg)](#singleflight-coalescing--hedged-upstream-racing)
-[![Tests](https://img.shields.io/badge/Tests-159%20Passed%20(100%25)-success.svg)](#testing--verification)
+[![Tests](https://img.shields.io/badge/Tests-160%20Passed%20(100%25)-success.svg)](#testing--verification)
 
 ---
 
 ## Overview
 
-**AmarDNS v1.0.2** is an enterprise-grade, asynchronous recursive DNS security resolver written in pure **Rust** (Edition 2024). It delivers high-throughput **DNS-over-HTTPS (DoH, RFC 8484)**, **DNS-over-HTTP/3 (DoH3, RFC 9114)**, **DNS-over-QUIC (DoQ, RFC 9250)**, **DNS-over-TLS (DoT, RFC 7858)**, and standard **UDP/TCP Port 53 (RFC 1035)** endpoints.
+**AmarDNS v1.0.3** is an enterprise-grade, asynchronous recursive DNS security resolver written in pure **Rust** (Edition 2024). It delivers high-throughput **DNS-over-HTTPS (DoH, RFC 8484)**, **DNS-over-HTTP/3 (DoH3, RFC 9114)**, **DNS-over-QUIC (DoQ, RFC 9250)**, **DNS-over-TLS (DoT, RFC 7858)**, and standard **UDP/TCP Port 53 (RFC 1035)** endpoints.
 
 Engineered with a **zero garbage-collection architecture**, AmarDNS indexes over **900,000 malicious domains in just 4 MB of RAM** and delivers sub-millisecond in-memory cache resolutions with automatic upstream hedging, cryptographic DNSSEC validation, singleflight deduplication, zstd-compressed response caching, and an 8D online neural threat engine.
 
@@ -48,7 +48,7 @@ AmarDNS is deployed across Anycast edge nodes with low-latency DNS resolution an
 ## System Architecture
 
 ```
-Incoming Query (DoH / DoT / Plain 53)
+Incoming Query (DoH / DoH3 / DoQ / DoT / Plain 53)
        │
        ▼
  ┌───────────────────────────────────────────────────────────┐

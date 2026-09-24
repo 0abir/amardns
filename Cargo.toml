@@ -1,6 +1,6 @@
 [package]
 name = "amardns"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2024"
 authors = ["0abir <abir@amardns.local>"]
 description = "Ultra-lightweight, zero-GC, Z+ security DNS resolver (DoH, DoH3, DoT, DoQ, Plain 53) with AI threat intelligence."
