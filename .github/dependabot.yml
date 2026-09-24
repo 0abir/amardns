@@ -15,7 +15,3 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    ignore:
-      # Avoid phantom/unreleased action tags
-      - dependency-name: "actions/checkout"
-        versions: [">= 7.0.0"]
