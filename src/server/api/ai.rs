@@ -16,17 +16,17 @@ pub fn routes() -> Router<Arc<AppState>> {
         // AI export / import / prune
         .route("/api/ai/export", get(ai_export))
         .route("/api/ai/export/", get(ai_export))
-        .route("/api/ai/export/:key", get(ai_export_key))
+        .route("/api/ai/export/{key}", get(ai_export_key))
         .route("/api/ai/import", post(ai_import))
         .route("/api/ai/import/", post(ai_import))
-        .route("/api/ai/import/:key", post(ai_import_key))
+        .route("/api/ai/import/{key}", post(ai_import_key))
         .route("/api/ai/prune", post(ai_prune))
         .route("/api/ai/prune/", post(ai_prune))
-        .route("/api/ai/prune/:key", post(ai_prune_key))
+        .route("/api/ai/prune/{key}", post(ai_prune_key))
         // AI Brain Telemetry & Learning Curve
         .route("/api/ai/brain", get(get_ai_brain))
         .route("/api/ai/brain/", get(get_ai_brain))
-        .route("/api/ai/brain/:key", get(get_ai_brain_key))
+        .route("/api/ai/brain/{key}", get(get_ai_brain_key))
 }
 
 pub async fn get_ai_brain(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {

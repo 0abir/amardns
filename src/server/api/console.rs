@@ -44,12 +44,12 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/console/exec", post(console_exec_handler))
         .route("/api/console/exec/", post(console_exec_handler))
-        .route("/api/console/exec/:key", post(console_exec_key_handler))
-        .route("/:key/api/console/exec", post(console_exec_key_handler))
+        .route("/api/console/exec/{key}", post(console_exec_key_handler))
+        .route("/{key}/api/console/exec", post(console_exec_key_handler))
         .route("/api/console/commands", get(console_commands_handler))
         .route("/api/console/commands/", get(console_commands_handler))
-        .route("/api/console/commands/:key", get(console_commands_key_handler))
-        .route("/:key/api/console/commands", get(console_commands_key_handler))
+        .route("/api/console/commands/{key}", get(console_commands_key_handler))
+        .route("/{key}/api/console/commands", get(console_commands_key_handler))
 }
 
 pub async fn console_commands_handler(

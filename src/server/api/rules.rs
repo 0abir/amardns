@@ -29,14 +29,14 @@ pub fn routes() -> Router<Arc<AppState>> {
                 .delete(delete_blocklist),
         )
         .route(
-            "/api/blocklist/:key",
+            "/api/blocklist/{key}",
             get(get_blocklist_key)
                 .post(add_blocklist_key)
                 .delete(delete_blocklist_key),
         )
         .route("/api/blocklist/clear", post(clear_blocklist))
         .route("/api/blocklist/clear/", post(clear_blocklist))
-        .route("/api/blocklist/clear/:key", post(clear_blocklist_key))
+        .route("/api/blocklist/clear/{key}", post(clear_blocklist_key))
         // Whitelist
         .route(
             "/api/whitelist",
@@ -51,14 +51,14 @@ pub fn routes() -> Router<Arc<AppState>> {
                 .delete(delete_whitelist),
         )
         .route(
-            "/api/whitelist/:key",
+            "/api/whitelist/{key}",
             get(get_whitelist_key)
                 .post(add_whitelist_key)
                 .delete(delete_whitelist_key),
         )
         .route("/api/whitelist/clear", post(clear_whitelist))
         .route("/api/whitelist/clear/", post(clear_whitelist))
-        .route("/api/whitelist/clear/:key", post(clear_whitelist_key))
+        .route("/api/whitelist/clear/{key}", post(clear_whitelist_key))
         // Common
         .route(
             "/api/common",
@@ -69,14 +69,14 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(get_common).post(add_common).delete(delete_common),
         )
         .route(
-            "/api/common/:key",
+            "/api/common/{key}",
             get(get_common_key)
                 .post(add_common_key)
                 .delete(delete_common_key),
         )
         .route("/api/common/clear", post(clear_common))
         .route("/api/common/clear/", post(clear_common))
-        .route("/api/common/clear/:key", post(clear_common_key))
+        .route("/api/common/clear/{key}", post(clear_common_key))
         // Auto-block
         .route(
             "/api/auto-block",
@@ -87,25 +87,25 @@ pub fn routes() -> Router<Arc<AppState>> {
             post(add_auto_block).delete(delete_auto_block),
         )
         .route(
-            "/api/auto-block/:key",
+            "/api/auto-block/{key}",
             post(add_auto_block_key).delete(delete_auto_block_key),
         )
         // Heatmap
         .route("/api/heatmap/top", get(get_heatmap_top))
         .route("/api/heatmap/top/", get(get_heatmap_top))
-        .route("/api/heatmap/top/:key", get(get_heatmap_top_key))
+        .route("/api/heatmap/top/{key}", get(get_heatmap_top_key))
         .route("/api/heatmap/lookup", get(heatmap_lookup))
         .route("/api/heatmap/lookup/", get(heatmap_lookup))
-        .route("/api/heatmap/lookup/:key", get(heatmap_lookup_key))
+        .route("/api/heatmap/lookup/{key}", get(heatmap_lookup_key))
         // DGA
         .route("/api/dga-test", post(dga_test))
         .route("/api/dga-test/", post(dga_test))
-        .route("/api/dga-test/:key", post(dga_test_key))
+        .route("/api/dga-test/{key}", post(dga_test_key))
         // Feature 9: Scheduled Blocking Rules
         .route("/api/schedule", get(get_schedule).post(add_schedule))
         .route("/api/schedule/", get(get_schedule).post(add_schedule))
-        .route("/api/schedule/:id", delete(delete_schedule))
-        .route("/api/schedule/:id/:key", delete(delete_schedule_key))
+        .route("/api/schedule/{id}", delete(delete_schedule))
+        .route("/api/schedule/{id}/{key}", delete(delete_schedule_key))
 }
 
 // ── Blocklist Handlers ──────────────────────────────────────────────────────

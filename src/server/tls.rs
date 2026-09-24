@@ -135,7 +135,7 @@ impl DynamicCertResolver {
         }
         let certified_key = rcgen::generate_simple_self_signed(subject_alt_names)?;
         let cert_der = certified_key.cert.der().to_vec();
-        let key_der = certified_key.key_pair.serialized_der().to_vec();
+        let key_der = certified_key.key_pair.serialize_der();
 
         let cert_chain = vec![CertificateDer::from(cert_der)];
         let private_key = tokio_rustls::rustls::pki_types::PrivateKeyDer::Pkcs8(

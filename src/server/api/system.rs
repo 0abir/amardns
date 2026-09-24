@@ -26,7 +26,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(get_blocking).post(set_blocking),
         )
         .route(
-            "/api/settings/blocking/:key",
+            "/api/settings/blocking/{key}",
             get(get_blocking_key).post(set_blocking_key),
         )
         .route(
@@ -38,7 +38,7 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(get_dns_mode).post(set_dns_mode),
         )
         .route(
-            "/api/settings/dns-mode/:key",
+            "/api/settings/dns-mode/{key}",
             get(get_dns_mode_key).post(set_dns_mode_key),
         )
         .route(
@@ -46,68 +46,68 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(get_ttl_guard).post(set_ttl_guard),
         )
         .route(
-            "/api/settings/ttl-guard/:key",
+            "/api/settings/ttl-guard/{key}",
             get(get_ttl_guard_key).post(set_ttl_guard_key),
         )
         // Upstreams
         .route("/api/upstreams/ranked", get(get_ranked_upstreams))
         .route("/api/upstreams/ranked/", get(get_ranked_upstreams))
-        .route("/api/upstreams/ranked/:key", get(get_ranked_upstreams_key))
+        .route("/api/upstreams/ranked/{key}", get(get_ranked_upstreams_key))
         .route("/api/upstreams/sync", post(sync_upstreams))
         .route("/api/upstreams/sync/", post(sync_upstreams))
-        .route("/api/upstreams/sync/:key", post(sync_upstreams_key))
+        .route("/api/upstreams/sync/{key}", post(sync_upstreams_key))
         // Controls & Wipe
         .route("/api/reset-cb", post(reset_circuit_breakers))
         .route("/api/reset-cb/", post(reset_circuit_breakers))
-        .route("/api/reset-cb/:key", post(reset_circuit_breakers_key))
+        .route("/api/reset-cb/{key}", post(reset_circuit_breakers_key))
         .route("/api/self-heal", delete(clear_self_heal))
         .route("/api/self-heal/", delete(clear_self_heal))
-        .route("/api/self-heal/:key", delete(clear_self_heal_key))
+        .route("/api/self-heal/{key}", delete(clear_self_heal_key))
         .route("/api/incident", delete(clear_incident))
         .route("/api/incident/", delete(clear_incident))
-        .route("/api/incident/:key", delete(clear_incident_key))
+        .route("/api/incident/{key}", delete(clear_incident_key))
         .route("/api/nuclear-wipe", post(nuclear_wipe))
         .route("/api/nuclear-wipe/", post(nuclear_wipe))
-        .route("/api/nuclear-wipe/:key", post(nuclear_wipe_key))
+        .route("/api/nuclear-wipe/{key}", post(nuclear_wipe_key))
         .route("/api/nuke-token", get(get_nuke_token))
         .route("/api/nuke-token/", get(get_nuke_token))
-        .route("/api/nuke-token/:key", get(get_nuke_token_key))
+        .route("/api/nuke-token/{key}", get(get_nuke_token_key))
         .route("/api/token", get(get_token))
         .route("/api/token/", get(get_token))
-        .route("/api/token/:key", get(get_token_key))
+        .route("/api/token/{key}", get(get_token_key))
         // Query Logs
         .route("/api/logs", get(get_logs))
         .route("/api/logs/", get(get_logs))
-        .route("/api/logs/:key", get(get_logs_key))
+        .route("/api/logs/{key}", get(get_logs_key))
         // Passive DNS Timeline
         .route("/api/passive-dns", get(passive_dns_handler))
         .route("/api/passive-dns/", get(passive_dns_handler))
-        .route("/api/passive-dns/:key", get(passive_dns_key_handler))
+        .route("/api/passive-dns/{key}", get(passive_dns_key_handler))
         .route("/api/passive-dns/drifts", get(passive_dns_drifts_handler))
         .route("/api/passive-dns/drifts/", get(passive_dns_drifts_handler))
         .route(
-            "/api/passive-dns/drifts/:key",
+            "/api/passive-dns/drifts/{key}",
             get(passive_dns_drifts_key_handler),
         )
         // Canary Domain Detection
         .route("/api/canary", get(canary_handler))
-        .route("/api/canary/:key", get(canary_key_handler))
+        .route("/api/canary/{key}", get(canary_key_handler))
         // Real-Time SSE Log Stream
         .route("/api/logs/stream", get(logs_stream_handler))
-        .route("/api/logs/stream/:key", get(logs_stream_handler_key))
-        .route("/:key/api/logs/stream", get(logs_stream_handler_key))
+        .route("/api/logs/stream/{key}", get(logs_stream_handler_key))
+        .route("/{key}/api/logs/stream", get(logs_stream_handler_key))
         // Cache & TTL stats
         .route("/api/cache/stats", get(cache_stats_handler))
-        .route("/api/cache/stats/:key", get(cache_stats_key))
+        .route("/api/cache/stats/{key}", get(cache_stats_key))
         .route("/api/ttl/volatile", get(volatile_domains_handler))
-        .route("/api/ttl/volatile/:key", get(volatile_domains_key))
+        .route("/api/ttl/volatile/{key}", get(volatile_domains_key))
         // Peer TLS Bundle Sync & ACME Coordination Lock
         .route("/internal/tls/bundle", get(get_tls_bundle))
-        .route("/internal/tls/bundle/:key", get(get_tls_bundle_key))
+        .route("/internal/tls/bundle/{key}", get(get_tls_bundle_key))
         .route("/internal/acme/lock", post(acquire_acme_lock))
-        .route("/internal/acme/lock/:key", post(acquire_acme_lock_key))
+        .route("/internal/acme/lock/{key}", post(acquire_acme_lock_key))
         .route("/internal/acme/unlock", post(release_acme_lock))
-        .route("/internal/acme/unlock/:key", post(release_acme_lock_key))
+        .route("/internal/acme/unlock/{key}", post(release_acme_lock_key))
 }
 
 // ── Query Logs ──────────────────────────────────────────────────────────────

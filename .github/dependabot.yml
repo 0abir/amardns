@@ -10,8 +10,12 @@ updates:
       - "dependencies"
       - "rust"
 
-  # Keep GitHub Actions workflows up to date
+  # Keep GitHub Actions workflows up to date with stable releases
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # Avoid phantom/unreleased action tags
+      - dependency-name: "actions/checkout"
+        versions: [">= 7.0.0"]

@@ -22,9 +22,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/status/", get(status_no_key_handler))
         .route("/api/intelligence", get(status_no_key_handler))
         .route("/api/intelligence/", get(status_no_key_handler))
-        .route("/:key", get(status_handler))
-        .route("/api/status/:key", get(status_handler))
-        .route("/api/intelligence/:key", get(status_handler))
+        .route("/{key}", get(status_handler))
+        .route("/api/status/{key}", get(status_handler))
+        .route("/api/intelligence/{key}", get(status_handler))
         .route("/metrics", get(prometheus_metrics_handler))
 }
 
