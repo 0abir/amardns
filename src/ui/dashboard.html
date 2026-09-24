@@ -288,7 +288,7 @@ select.fld option{background:var(--sur2)}
 .tdot-grn{background:#27c93f;box-shadow:0 0 5px rgba(39,201,63,.4)}
 .terminal-title{font-family:'Fira Code','Roboto Mono',monospace;font-size:11px;color:var(--sub);text-align:center;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .terminal-sub{font-family:'Fira Code','Roboto Mono',monospace;font-size:10px;color:var(--acc)}
-.terminal-col-header{display:grid;grid-template-columns:95px 52px 95px 45px minmax(200px,1fr) 130px 145px 135px;gap:12px;padding:7px 12px;font-family:'Fira Code','Roboto Mono',monospace;font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--sub);border-bottom:1px solid rgba(0,255,231,.1);background:rgba(0,255,231,.025);user-select:none;box-sizing:border-box;min-width:950px}
+.terminal-col-header{display:grid;grid-template-columns:95px 54px 95px 45px minmax(200px,1fr) 130px 145px 135px;gap:12px;padding:7px 12px;font-family:'Fira Code','Roboto Mono',monospace;font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--sub);border-bottom:1px solid rgba(0,255,231,.1);background:rgba(0,255,231,.025);user-select:none;box-sizing:border-box;min-width:950px}
 .terminal-col-header > *{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @keyframes logSlideIn{0%{opacity:0;transform:translateY(6px);background:rgba(0,255,231,.12)}100%{opacity:1;transform:translateY(0);background:transparent}}
 .terminal-body{height:350px;overflow-y:auto;overflow-x:auto;padding:6px;font-family:'Fira Code','Roboto Mono',SFMono-Regular,Consolas,monospace;font-size:11.5px;line-height:1.6;color:#a4b3c6;scroll-behavior:smooth}
@@ -296,16 +296,31 @@ select.fld option{background:var(--sur2)}
 .terminal-body::-webkit-scrollbar-track{background:rgba(0,0,0,.3)}
 .terminal-body::-webkit-scrollbar-thumb{background:rgba(0,255,231,.25);border-radius:3px}
 .terminal-body::-webkit-scrollbar-thumb:hover{background:var(--acc)}
-.log-line{display:grid;grid-template-columns:95px 52px 95px 45px minmax(200px,1fr) 130px 145px 135px;gap:12px;align-items:center;width:100%;min-width:950px;padding:5px 10px;border-radius:4px;cursor:pointer;transition:background .12s ease,border-color .12s ease;border-left:2px solid transparent;margin-bottom:2px;box-sizing:border-box}
+.log-line{display:grid;grid-template-columns:95px 54px 95px 45px minmax(200px,1fr) 130px 145px 135px;gap:12px;align-items:center;width:100%;min-width:950px;padding:5px 10px;border-radius:4px;cursor:pointer;transition:background .12s ease,border-color .12s ease;border-left:2px solid transparent;margin-bottom:2px;box-sizing:border-box}
 .log-line.log-new{animation:logSlideIn .35s cubic-bezier(.16,1,.3,1) forwards}
 .log-line:hover{background:rgba(0,255,231,.07);color:#f0fdf4}
 .log-line.active{background:rgba(0,255,231,.14);color:#00ffe7;border-left-color:var(--acc);box-shadow:inset 0 0 10px rgba(0,255,231,.12)}
 .log-line > *{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ll-ts{color:#6272a4;white-space:nowrap}
-.ll-proto{font-weight:700;font-size:9px;letter-spacing:.04em;padding:1px 4px;border-radius:3px;text-align:center;display:inline-block;white-space:nowrap}
-.ll-proto-doh{color:#00ffe7;background:rgba(0,255,231,.08);border:1px solid rgba(0,255,231,.2)}
-.ll-proto-dot{color:#50fa7b;background:rgba(80,250,123,.08);border:1px solid rgba(80,250,123,.2)}
-.ll-proto-plain{color:#ffb86c;background:rgba(255,184,108,.08);border:1px solid rgba(255,184,108,.25)}
+.ll-proto{font-weight:800;font-size:9px;letter-spacing:.05em;padding:2px 5px;border-radius:3px;text-align:center;display:inline-block;white-space:nowrap;line-height:1.2}
+.ll-proto-doh{color:#00ffe7;background:rgba(0,255,231,.10);border:1px solid rgba(0,255,231,.35);box-shadow:0 0 6px rgba(0,255,231,.15)}
+.ll-proto-dot{color:#50fa7b;background:rgba(80,250,123,.10);border:1px solid rgba(80,250,123,.35);box-shadow:0 0 6px rgba(80,250,123,.15)}
+.ll-proto-doq{color:#bd93f9;background:rgba(189,147,249,.14);border:1px solid rgba(189,147,249,.4);box-shadow:0 0 6px rgba(189,147,249,.2)}
+.ll-proto-doh3{color:#ff79c6;background:rgba(255,121,198,.14);border:1px solid rgba(255,121,198,.4);box-shadow:0 0 6px rgba(255,121,198,.2)}
+.ll-proto-udp{color:#ffb86c;background:rgba(255,184,108,.10);border:1px solid rgba(255,184,108,.35);box-shadow:0 0 6px rgba(255,184,108,.15)}
+.ll-proto-tcp{color:#f1fa8c;background:rgba(241,250,140,.10);border:1px solid rgba(241,250,140,.35);box-shadow:0 0 6px rgba(241,250,140,.15)}
+.ll-proto-json{color:#38bdf8;background:rgba(56,189,248,.10);border:1px solid rgba(56,189,248,.35);box-shadow:0 0 6px rgba(56,189,248,.15)}
+.ll-proto-plain{color:#ffb86c;background:rgba(255,184,108,.10);border:1px solid rgba(255,184,108,.35)}
+.log-proto-pills{display:flex;gap:4px;align-items:center;flex-wrap:wrap}
+.log-pbtn{background:rgba(255,255,255,.05);border:1px solid var(--brd);color:var(--sub);font-size:9px;font-weight:700;padding:2px 7px;border-radius:4px;cursor:pointer;transition:all .15s ease}
+.log-pbtn:hover{color:#fff;border-color:rgba(255,255,255,.3)}
+.log-pbtn.active{background:var(--card);color:#fff;border-color:var(--acc);box-shadow:0 0 6px rgba(0,255,231,.25)}
+.log-pbtn.pbtn-doh.active{border-color:#00ffe7;color:#00ffe7;background:rgba(0,255,231,.12);box-shadow:0 0 8px rgba(0,255,231,.25)}
+.log-pbtn.pbtn-dot.active{border-color:#50fa7b;color:#50fa7b;background:rgba(80,250,123,.12);box-shadow:0 0 8px rgba(80,250,123,.25)}
+.log-pbtn.pbtn-doq.active{border-color:#bd93f9;color:#bd93f9;background:rgba(189,147,249,.15);box-shadow:0 0 8px rgba(189,147,249,.3)}
+.log-pbtn.pbtn-doh3.active{border-color:#ff79c6;color:#ff79c6;background:rgba(255,121,198,.15);box-shadow:0 0 8px rgba(255,121,198,.3)}
+.log-pbtn.pbtn-udp.active{border-color:#ffb86c;color:#ffb86c;background:rgba(255,184,108,.12);box-shadow:0 0 8px rgba(255,184,108,.25)}
+.log-pbtn.pbtn-tcp.active{border-color:#f1fa8c;color:#f1fa8c;background:rgba(241,250,140,.12);box-shadow:0 0 8px rgba(241,250,140,.25)}
 .ll-dev{color:#8be9fd;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ll-type{color:#bd93f9;font-weight:700;text-align:center;white-space:nowrap}
 .ll-domain{color:#f8f8f2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
@@ -553,8 +568,17 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
       <span class="log-status-title">LIVE QUERY STREAM</span>
       <span class="log-status-tag" id="log-count-badge">0 QUERIES</span>
     </div>
+    <div class="log-proto-pills" id="log-proto-filters">
+      <button class="log-pbtn active" data-p="ALL" title="Show all incoming protocols">ALL</button>
+      <button class="log-pbtn pbtn-doh" data-p="DOH" title="Filter DNS-over-HTTPS (Port 443 TCP)">DOH</button>
+      <button class="log-pbtn pbtn-dot" data-p="DOT" title="Filter DNS-over-TLS (Port 853 TCP)">DOT</button>
+      <button class="log-pbtn pbtn-doq" data-p="DOQ" title="Filter DNS-over-QUIC (Port 853 UDP)">DOQ</button>
+      <button class="log-pbtn pbtn-doh3" data-p="DOH3" title="Filter DNS-over-HTTP/3 (Port 443 UDP)">DOH3</button>
+      <button class="log-pbtn pbtn-udp" data-p="UDP" title="Filter Plain DNS (Port 53 UDP)">UDP</button>
+      <button class="log-pbtn pbtn-tcp" data-p="TCP" title="Filter Plain DNS (Port 53 TCP)">TCP</button>
+    </div>
     <div class="log-controls">
-      <input type="text" id="log-filter-in" class="fld" placeholder="Filter domain, device, status..." style="width:200px;padding:4px 8px;font-size:11px;height:28px" />
+      <input type="text" id="log-filter-in" class="fld" placeholder="Filter domain, device, status, proto..." style="width:180px;padding:4px 8px;font-size:11px;height:28px" />
       <button class="btn btn-p" id="btn-log-autoscroll" style="padding:4px 9px;font-size:10px" title="Toggle autoscroll to bottom">Auto-Scroll: ON</button>
       <button class="btn btn-s" id="btn-log-pause" style="padding:4px 9px;font-size:10px" title="Pause or resume live stream">Pause</button>
       <button class="btn btn-s" id="btn-log-clear" style="padding:4px 9px;font-size:10px" title="Clear console view">Clear</button>
@@ -1688,18 +1712,30 @@ function buildLogRowHtml(l, isSel, isNew) {
   var proto = (l.proto || 'DoH').toUpperCase();
   var protoClass = 'll-proto-doh';
   var protoLabel = 'DOH';
-  if (proto.includes('DOT') || proto.includes('TLS')) {
+  if (proto.includes('DOQ') || proto === 'QUIC') {
+    protoClass = 'll-proto-doq';
+    protoLabel = 'DOQ';
+  } else if (proto.includes('DOH3') || proto.includes('H3') || proto.includes('HTTP/3')) {
+    protoClass = 'll-proto-doh3';
+    protoLabel = 'DOH3';
+  } else if (proto.includes('DOT') || proto.includes('TLS')) {
     protoClass = 'll-proto-dot';
     protoLabel = 'DOT';
   } else if (proto.includes('UDP')) {
-    protoClass = 'll-proto-plain';
+    protoClass = 'll-proto-udp';
     protoLabel = 'UDP';
   } else if (proto.includes('TCP')) {
-    protoClass = 'll-proto-plain';
+    protoClass = 'll-proto-tcp';
     protoLabel = 'TCP';
   } else if (proto.includes('JSON')) {
-    protoClass = 'll-proto-doh';
+    protoClass = 'll-proto-json';
     protoLabel = 'JSON';
+  } else if (proto.includes('PLAIN')) {
+    protoClass = 'll-proto-udp';
+    protoLabel = 'UDP';
+  } else {
+    protoClass = 'll-proto-doh';
+    protoLabel = 'DOH';
   }
 
   var devStr = l.client || '127.0.0.1';
@@ -1880,7 +1916,21 @@ function renderLogs(d) {
 
     if (_filterProto && _filterProto !== 'ALL') {
       var p = (l.proto || '').toUpperCase();
-      if (!p.includes(_filterProto)) return false;
+      if (_filterProto === 'DOQ') {
+        if (!p.includes('DOQ') && p !== 'QUIC') return false;
+      } else if (_filterProto === 'DOH3') {
+        if (!p.includes('DOH3') && !p.includes('H3')) return false;
+      } else if (_filterProto === 'DOT') {
+        if (!p.includes('DOT') && !p.includes('TLS')) return false;
+      } else if (_filterProto === 'DOH') {
+        if (!p.includes('DOH') && !p.includes('HTTP') && !p.includes('JSON')) return false;
+      } else if (_filterProto === 'UDP') {
+        if (!p.includes('UDP') && !p.includes('PLAIN')) return false;
+      } else if (_filterProto === 'TCP') {
+        if (!p.includes('TCP')) return false;
+      } else if (!p.includes(_filterProto)) {
+        return false;
+      }
     }
 
     var q = (_logFilter || _filterSearch || '').toLowerCase();
@@ -1891,7 +1941,8 @@ function renderLogs(d) {
       var ups = (l.upstream || '').toLowerCase();
       var stStr = (l.status || '').toLowerCase();
       var qType = (l.qtype || '').toLowerCase();
-      if (!dom.includes(q) && !cl.includes(q) && !rea.includes(q) && !ups.includes(q) && !stStr.includes(q) && !qType.includes(q)) return false;
+      var pStr = (l.proto || '').toLowerCase();
+      if (!dom.includes(q) && !cl.includes(q) && !rea.includes(q) && !ups.includes(q) && !stStr.includes(q) && !qType.includes(q) && !pStr.includes(q)) return false;
     }
     return true;
   });
@@ -2011,7 +2062,24 @@ function updateParamInspector(l) {
   }
 
   st('pv-client', escHtml(l.client || 'unknown'));
-  st('pv-proto', escHtml((l.proto || 'DoH') + ' · Session Verified'));
+  var protoRaw = (l.proto || 'DoH').toUpperCase();
+  var protoBadge = '';
+  if (protoRaw.includes('DOQ') || protoRaw === 'QUIC') {
+    protoBadge = '<span class="ll-proto ll-proto-doq">DOQ</span> <span style="color:#bd93f9;font-weight:600">DNS-over-QUIC</span> (UDP 853)';
+  } else if (protoRaw.includes('DOH3') || protoRaw.includes('H3')) {
+    protoBadge = '<span class="ll-proto ll-proto-doh3">DOH3</span> <span style="color:#ff79c6;font-weight:600">DNS-over-HTTP/3</span> (UDP 443)';
+  } else if (protoRaw.includes('DOT') || protoRaw.includes('TLS')) {
+    protoBadge = '<span class="ll-proto ll-proto-dot">DOT</span> <span style="color:#50fa7b;font-weight:600">DNS-over-TLS</span> (TCP 853)';
+  } else if (protoRaw.includes('UDP') || protoRaw.includes('PLAIN')) {
+    protoBadge = '<span class="ll-proto ll-proto-udp">UDP</span> <span style="color:#ffb86c;font-weight:600">Plain DNS</span> (UDP 53)';
+  } else if (protoRaw.includes('TCP')) {
+    protoBadge = '<span class="ll-proto ll-proto-tcp">TCP</span> <span style="color:#f1fa8c;font-weight:600">Plain DNS</span> (TCP 53)';
+  } else if (protoRaw.includes('JSON')) {
+    protoBadge = '<span class="ll-proto ll-proto-json">JSON</span> <span style="color:#38bdf8;font-weight:600">DoH JSON API</span> (TCP 443)';
+  } else {
+    protoBadge = '<span class="ll-proto ll-proto-doh">DOH</span> <span style="color:#00ffe7;font-weight:600">DNS-over-HTTPS</span> (RFC 8484)';
+  }
+  st('pv-proto', protoBadge);
 
   st('pv-domain', escHtml(l.domain || '—'));
   st('pv-type', 'Type: ' + escHtml(l.qtype || 'A') + ' (IN Class 1)');
@@ -3870,6 +3938,17 @@ on('log-filter-in','input',function(){
   _logFilter=this.value.trim();
   renderLogs(_D);
 });
+var protoFilters=$('log-proto-filters');
+if(protoFilters){
+  protoFilters.addEventListener('click',function(e){
+    var btn=e.target.closest('.log-pbtn');
+    if(!btn)return;
+    protoFilters.querySelectorAll('.log-pbtn').forEach(function(b){b.classList.remove('active');});
+    btn.classList.add('active');
+    _filterProto=btn.dataset.p||'ALL';
+    renderLogs(_D);
+  });
+}
 var consoleBox=$('log-console-box');
 if(consoleBox){
   consoleBox.addEventListener('click',function(e){
