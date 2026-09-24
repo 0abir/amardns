@@ -1,9 +1,9 @@
 [package]
 name = "amardns"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 authors = ["0abir <abir@amardns.local>"]
-description = "Ultra-lightweight, zero-GC, Z+ security DNS resolver (DoH, DoT, Plain 53) with AI threat intelligence."
+description = "Ultra-lightweight, zero-GC, Z+ security DNS resolver (DoH, DoH3, DoT, DoQ, Plain 53) with AI threat intelligence."
 
 [lib]
 name = "amardns"
@@ -21,6 +21,12 @@ hyper = { version = "1.4", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["server-auto", "tokio", "service"] }
 tower-service = "0.3"
 bytes = "1.6"
+http = "1.0"
+
+# QUIC & HTTP/3 for DoQ (RFC 9250) and DoH3 (RFC 9114)
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls", "ring"] }
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
 
 # DNS Protocol wire handling: custom zero-GC RFC 1035 parser (src/dns/parser.rs)
 

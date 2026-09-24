@@ -988,6 +988,8 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
         "protocols": {
             "doh": state.metrics.doh_queries.load(Ordering::Relaxed),
             "dot": state.metrics.dot_queries.load(Ordering::Relaxed),
+            "doq": state.metrics.doq_queries.load(Ordering::Relaxed),
+            "doh3": state.metrics.doh3_queries.load(Ordering::Relaxed),
             "plain": state.metrics.plain_queries.load(Ordering::Relaxed)
         },
         "singleflight": {

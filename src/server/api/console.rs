@@ -1485,6 +1485,10 @@ mod tests {
             plain53_udp_host: "127.0.0.1".into(),
             total_mem_cap: 200.0,
             base_mem: 40.0,
+            doq_enabled: true,
+            doq_port: 853,
+            doh3_enabled: true,
+            doh3_port: 443,
         }
     }
 

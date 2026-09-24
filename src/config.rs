@@ -34,6 +34,10 @@ pub struct Config {
     pub plain53_udp_host: String,
     pub total_mem_cap: f64,
     pub base_mem: f64,
+    pub doq_enabled: bool,
+    pub doq_port: u16,
+    pub doh3_enabled: bool,
+    pub doh3_port: u16,
 }
 
 /// Parse a port number from the named environment variable.  If the variable
@@ -194,6 +198,16 @@ impl Config {
             .filter(|&v| (0.0..=8192.0).contains(&v))
             .unwrap_or(40.0);
 
+        let doq_port = parse_port("DOQ_PORT", dot_port);
+        let doq_enabled = env::var("DOQ_ENABLED")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(true);
+
+        let doh3_port = parse_port("DOH3_PORT", port);
+        let doh3_enabled = env::var("DOH3_ENABLED")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(true);
+
         Self {
             port,
             dot_port,
@@ -228,6 +242,10 @@ impl Config {
             plain53_udp_host,
             total_mem_cap,
             base_mem,
+            doq_enabled,
+            doq_port,
+            doh3_enabled,
+            doh3_port,
         }
     }
 
@@ -491,6 +509,10 @@ mod tests {
         let cfg = Config::from_env();
         assert_eq!(cfg.port, 443);
         assert_eq!(cfg.dot_port, 853);
+        assert_eq!(cfg.doq_port, 853);
+        assert_eq!(cfg.doh3_port, 443);
+        assert!(cfg.doq_enabled);
+        assert!(cfg.doh3_enabled);
         assert!(!cfg.udp_host.is_empty());
     }
 }

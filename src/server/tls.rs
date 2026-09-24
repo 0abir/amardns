@@ -212,6 +212,28 @@ pub fn create_dynamic_doh_server_config(
     Ok(Arc::new(config))
 }
 
+/// Creates a dynamic rustls ServerConfig for DoQ (RFC 9250 "doq" ALPN) backed by a hot-reloadable certificate resolver.
+pub fn create_dynamic_doq_server_config(
+    resolver: Arc<DynamicCertResolver>,
+) -> Result<Arc<rustls::ServerConfig>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_cert_resolver(resolver);
+    config.alpn_protocols = vec![b"doq".to_vec()];
+    Ok(Arc::new(config))
+}
+
+/// Creates a dynamic rustls ServerConfig for DoH3 (RFC 9114 "h3" ALPN) backed by a hot-reloadable certificate resolver.
+pub fn create_dynamic_doh3_server_config(
+    resolver: Arc<DynamicCertResolver>,
+) -> Result<Arc<rustls::ServerConfig>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_cert_resolver(resolver);
+    config.alpn_protocols = vec![b"h3".to_vec()];
+    Ok(Arc::new(config))
+}
+
 /// Serves Axum Router over native TLS using tokio-rustls and hyper-util with graceful shutdown and PROXY v2 support.
 pub async fn serve_axum_tls<F>(
     listener: TcpListener,
@@ -315,5 +337,23 @@ mod tests {
         assert!(cfg.is_ok());
         let cfg = cfg.unwrap();
         assert!(cfg.alpn_protocols.is_empty());
+    }
+
+    #[test]
+    fn test_create_dynamic_doq_server_config() {
+        let resolver = Arc::new(
+            DynamicCertResolver::from_self_signed(&["dns.example.com".to_string()]).unwrap(),
+        );
+        let cfg = create_dynamic_doq_server_config(resolver).unwrap();
+        assert_eq!(cfg.alpn_protocols, vec![b"doq".to_vec()]);
+    }
+
+    #[test]
+    fn test_create_dynamic_doh3_server_config() {
+        let resolver = Arc::new(
+            DynamicCertResolver::from_self_signed(&["dns.example.com".to_string()]).unwrap(),
+        );
+        let cfg = create_dynamic_doh3_server_config(resolver).unwrap();
+        assert_eq!(cfg.alpn_protocols, vec![b"h3".to_vec()]);
     }
 }

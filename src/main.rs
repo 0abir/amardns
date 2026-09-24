@@ -684,6 +684,14 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
+    // 7c. Dynamic Hot-Reloadable TLS configuration for DoQ (DNS-over-QUIC, RFC 9250)
+    let doq_tls_config = server::tls::create_dynamic_doq_server_config(cert_resolver.clone())
+        .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+
+    // 7d. Dynamic Hot-Reloadable TLS configuration for DoH3 (DNS-over-HTTP/3, RFC 9114)
+    let doh3_tls_config = server::tls::create_dynamic_doh3_server_config(cert_resolver.clone())
+        .map_err(|e| -> Box<dyn std::error::Error> { e })?;
+
     // 8. Shutdown coordination channels (derived from centralized AppState watch channel)
     let shutdown_rx_dot = state.shutdown_rx.clone();
 
@@ -704,6 +712,50 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             error!("[dot] Server error: {}", e);
         }
     });
+
+    // 9b. Start DoQ Server (DNS-over-QUIC, RFC 9250, UDP:853)
+    if config.doq_enabled {
+        let doq_state = state.clone();
+        let doq_host = config.host.clone();
+        let doq_port = config.doq_port;
+        let shutdown_rx_doq = state.shutdown_rx.clone();
+        let doq_tls = doq_tls_config.clone();
+        tokio::spawn(async move {
+            if let Err(e) = server::doq::start_doq_server(
+                doq_state,
+                &doq_host,
+                doq_port,
+                doq_tls,
+                shutdown_rx_doq,
+            )
+            .await
+            {
+                error!("[doq] Server error: {}", e);
+            }
+        });
+    }
+
+    // 9c. Start DoH3 Server (DNS-over-HTTP/3, RFC 9114, UDP:443)
+    if config.doh3_enabled {
+        let doh3_state = state.clone();
+        let doh3_host = config.host.clone();
+        let doh3_port = config.doh3_port;
+        let shutdown_rx_doh3 = state.shutdown_rx.clone();
+        let doh3_tls = doh3_tls_config.clone();
+        tokio::spawn(async move {
+            if let Err(e) = server::doh3::start_doh3_server(
+                doh3_state,
+                &doh3_host,
+                doh3_port,
+                doh3_tls,
+                shutdown_rx_doh3,
+            )
+            .await
+            {
+                error!("[doh3] Server error: {}", e);
+            }
+        });
+    }
 
     // 9b. Start Plain DNS UDP+TCP on port 53 (optional, for LAN/router deployments)
     if config.plain53_enabled {

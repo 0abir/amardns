@@ -1493,12 +1493,12 @@ function render(d){
   renderDP('dp-protocols', [
     ['DNS-over-HTTPS (DoH)', fmt(proto.doh || 0), 'cv-t'],
     ['DNS-over-TLS (DoT)', fmt(proto.dot || 0), 'cv-t'],
+    ['DNS-over-QUIC (DoQ)', fmt(proto.doq || 0), 'cv-t'],
+    ['DNS-over-HTTP/3 (DoH3)', fmt(proto.doh3 || 0), 'cv-t'],
     ['Plain DNS (UDP/TCP 53)', fmt(proto.plain || 0), 'cv-t'],
     ['Singleflight Dedup Savings', fmt(sf.coalesced || 0) + ' coalesced', 'cv-g'],
     ['Active In-Flight Locks', fmt(sf.inFlight || 0), 'cv-i'],
-    ['CNAME Chain Flattening', fmt((feat.cnameFlattening && feat.cnameFlattening.resolved) || 0) + ' resolved', 'cv-g'],
-    ['Transport ALPN / Wire', 'h2, dot (TLS 1.3)', 'cv-g'],
-    ['Kernel UDP SO_REUSEPORT', '4 Zero-GC Workers', 'cv-g']
+    ['CNAME Chain Flattening', fmt((feat.cnameFlattening && feat.cnameFlattening.resolved) || 0) + ' resolved', 'cv-g']
   ]);
 
   // Threat Intel Summary card

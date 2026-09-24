@@ -34,6 +34,8 @@ pub struct Metrics {
     pub swarm_alarms: AtomicU64,
     pub dot_queries: AtomicU64,
     pub doh_queries: AtomicU64,
+    pub doq_queries: AtomicU64,
+    pub doh3_queries: AtomicU64,
     pub plain_queries: AtomicU64,
     // DNSSEC Cryptographic Telemetry (RFC 4034, RFC 4035, RFC 5155, RFC 9276)
     pub dnssec_validations: AtomicU64,
@@ -105,6 +107,8 @@ impl Metrics {
             swarm_alarms: AtomicU64::new(0),
             dot_queries: AtomicU64::new(0),
             doh_queries: AtomicU64::new(0),
+            doq_queries: AtomicU64::new(0),
+            doh3_queries: AtomicU64::new(0),
             plain_queries: AtomicU64::new(0),
             dnssec_validations: AtomicU64::new(0),
             dnssec_secure: AtomicU64::new(0),
@@ -207,6 +211,10 @@ impl Metrics {
         self.requests.fetch_add(1, Ordering::Relaxed);
         if device_type == "dot" {
             self.dot_queries.fetch_add(1, Ordering::Relaxed);
+        } else if device_type == "doq" {
+            self.doq_queries.fetch_add(1, Ordering::Relaxed);
+        } else if device_type == "doh3" {
+            self.doh3_queries.fetch_add(1, Ordering::Relaxed);
         } else if device_type.starts_with("plain") || device_type.starts_with("Plain") {
             self.plain_queries.fetch_add(1, Ordering::Relaxed);
         } else {
@@ -301,6 +309,8 @@ impl Metrics {
         self.swarm_alarms.store(0, Ordering::Relaxed);
         self.dot_queries.store(0, Ordering::Relaxed);
         self.doh_queries.store(0, Ordering::Relaxed);
+        self.doq_queries.store(0, Ordering::Relaxed);
+        self.doh3_queries.store(0, Ordering::Relaxed);
         self.plain_queries.store(0, Ordering::Relaxed);
         self.dnssec_validations.store(0, Ordering::Relaxed);
         self.dnssec_secure.store(0, Ordering::Relaxed);
@@ -669,6 +679,16 @@ impl Metrics {
             self.dot_queries.load(Ordering::Relaxed)
         );
         counter!(
+            "amardns_doq_queries_total",
+            "DNS-over-QUIC queries",
+            self.doq_queries.load(Ordering::Relaxed)
+        );
+        counter!(
+            "amardns_doh3_queries_total",
+            "DNS-over-HTTP/3 queries",
+            self.doh3_queries.load(Ordering::Relaxed)
+        );
+        counter!(
             "amardns_doh_queries_total",
             "DNS-over-HTTPS queries",
             self.doh_queries.load(Ordering::Relaxed)
@@ -859,6 +879,10 @@ mod tests {
         let m = Metrics::new();
         m.record_query("127.0.0.1", "plain");
         assert_eq!(m.plain_queries.load(Ordering::Relaxed), 1);
+        m.record_query("127.0.0.1", "doq");
+        assert_eq!(m.doq_queries.load(Ordering::Relaxed), 1);
+        m.record_query("127.0.0.1", "doh3");
+        assert_eq!(m.doh3_queries.load(Ordering::Relaxed), 1);
 
         let sec_details = crate::dns::dnssec::DnssecValidationDetails::secure(
             crate::dns::dnssec::DnssecAlgorithm::Ed25519,
@@ -892,6 +916,8 @@ mod tests {
 
         let text = m.prometheus_text(100, 1.5, 42);
         assert!(text.contains("amardns_plain_queries_total 1"));
+        assert!(text.contains("amardns_doq_queries_total 1"));
+        assert!(text.contains("amardns_doh3_queries_total 1"));
         assert!(text.contains("amardns_dnssec_validations_total 3"));
         assert!(text.contains("amardns_dnssec_secure_total 2"));
         assert!(text.contains("amardns_dnssec_bogus_total 1"));

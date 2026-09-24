@@ -37,6 +37,8 @@ COPY --from=builder /empty-certs /certs
 
 ENV PORT=443 \
     DOT_PORT=853 \
+    DOQ_PORT=853 \
+    DOH3_PORT=443 \
     PLAIN53_ENABLED=true \
     HOST=:: \
     UDP_HOST=fly-global-services \
@@ -45,6 +47,6 @@ ENV PORT=443 \
     DNS_ACCESS_MODE=public
 
 VOLUME ["/data"]
-EXPOSE 53/tcp 53/udp 443/tcp 853/tcp
+EXPOSE 53/tcp 53/udp 443/tcp 443/udp 853/tcp 853/udp
 
 ENTRYPOINT ["/amardns"]

@@ -1,4 +1,4 @@
-# AmarDNS v1.0.1
+# AmarDNS v1.0.2
 
 **Autonomous Zero-GC Edge DNS Security Gateway & Threat Intelligence Engine in Rust**
 
@@ -9,17 +9,18 @@
 [![Docker](https://github.com/0abir/amardns/actions/workflows/build-and-publish.yml/badge.svg)](https://github.com/0abir/amardns/actions/workflows/build-and-publish.yml)
 [![Memory](https://img.shields.io/badge/Memory-Zero_GC_~12MB-green.svg)](#zero-allocation-memory-architecture)
 [![Latency](https://img.shields.io/badge/Latency-P95_<5ms-brightgreen.svg)](#singleflight-coalescing--hedged-upstream-racing)
-[![Tests](https://img.shields.io/badge/Tests-155%20Passed%20(100%25)-success.svg)](#testing--verification)
+[![Tests](https://img.shields.io/badge/Tests-159%20Passed%20(100%25)-success.svg)](#testing--verification)
 
 ---
 
 ## Overview
 
-**AmarDNS v1.0.1** is an enterprise-grade, asynchronous recursive DNS security resolver written in pure **Rust** (Edition 2024). It delivers high-throughput **DNS-over-HTTPS (DoH, RFC 8484)**, **DNS-over-TLS (DoT, RFC 7858)**, and standard **UDP/TCP Port 53 (RFC 1035)** endpoints.
+**AmarDNS v1.0.2** is an enterprise-grade, asynchronous recursive DNS security resolver written in pure **Rust** (Edition 2024). It delivers high-throughput **DNS-over-HTTPS (DoH, RFC 8484)**, **DNS-over-HTTP/3 (DoH3, RFC 9114)**, **DNS-over-QUIC (DoQ, RFC 9250)**, **DNS-over-TLS (DoT, RFC 7858)**, and standard **UDP/TCP Port 53 (RFC 1035)** endpoints.
 
 Engineered with a **zero garbage-collection architecture**, AmarDNS indexes over **900,000 malicious domains in just 4 MB of RAM** and delivers sub-millisecond in-memory cache resolutions with automatic upstream hedging, cryptographic DNSSEC validation, singleflight deduplication, zstd-compressed response caching, and an 8D online neural threat engine.
 
 Powered by modern async infrastructure:
+- **Quinn 0.11 & h3 0.0.8** pure Rust QUIC and HTTP/3 transport engine with zero head-of-line blocking.
 - **Axum 0.8** high-performance HTTP/1.1 & HTTP/2 engine with zero-copy stream processing.
 - **Rustls 0.23** memory-safe edge TLS termination with ALPN and PROXY protocol v2 support.
 - **rcgen 0.14** automated X.509 certificate generation and CSR serialization.
@@ -34,11 +35,13 @@ AmarDNS is deployed across Anycast edge nodes with low-latency DNS resolution an
 
 | Protocol | Endpoint / Hostname | Port | Usage / Client Configuration |
 | :--- | :--- | :--- | :--- |
-| **DNS-over-HTTPS (DoH)** | `https://<your-domain>/dns-query` | `443` | Browsers, iOS/macOS Encrypted DNS profiles, `cloudflared`, `dnscrypt-proxy` |
-| **DoH JSON REST API** | `https://<your-domain>/resolve` | `443` | Web inspector, command-line scripts (`curl "https://<your-domain>/resolve?name=google.com&type=A"`) |
-| **DNS-over-TLS (DoT)** | `<your-domain>` | `853` | Android Private DNS, stubby, systemd-resolved |
+| **DNS-over-HTTPS (DoH)** | `https://<your-domain>/dns-query` | `443/tcp` | Browsers, iOS/macOS Encrypted DNS profiles, `cloudflared`, `dnscrypt-proxy` |
+| **DNS-over-HTTP/3 (DoH3)** | `https://<your-domain>/dns-query` | `443/udp` | HTTP/3 QUIC clients, modern browsers with Alt-Svc / H3 support |
+| **DNS-over-QUIC (DoQ)** | `<your-domain>` | `853/udp` | AdGuard Home, DNSCloak, mobile QUIC DNS clients (RFC 9250) |
+| **DNS-over-TLS (DoT)** | `<your-domain>` | `853/tcp` | Android Private DNS, stubby, systemd-resolved (RFC 7858) |
+| **DoH JSON REST API** | `https://<your-domain>/resolve` | `443/tcp` | Web inspector, command-line scripts (`curl "https://<your-domain>/resolve?name=google.com&type=A"`) |
 | **Plain DNS (IPv6/IPv4)** | `<your-ip-address>` | `53/udp`, `53/tcp` | Standard recursive DNS forwarding with EDNS(0) cookies |
-| **Edge Dashboard & Console** | `https://<your-domain>/` or `/{key}` | `443` | Live telemetry matrix, neural brain inspector, threat feeds |
+| **Edge Dashboard & Console** | `https://<your-domain>/` or `/{key}` | `443/tcp` | Live telemetry matrix, neural brain inspector, threat feeds |
 
 ---
 

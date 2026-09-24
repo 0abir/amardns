@@ -627,6 +627,10 @@ pub async fn process_dns_wire_packet_full(
     let log_id = dev_tag.unwrap_or(&client_str);
     let proto_metric = if proto.contains("DoT") || proto.eq_ignore_ascii_case("dot") {
         "dot"
+    } else if proto.contains("DoQ") || proto.eq_ignore_ascii_case("doq") {
+        "doq"
+    } else if proto.contains("DoH3") || proto.eq_ignore_ascii_case("doh3") {
+        "doh3"
     } else if proto.contains("Plain") || proto.eq_ignore_ascii_case("plain") {
         "plain"
     } else {

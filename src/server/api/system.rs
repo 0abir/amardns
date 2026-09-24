@@ -1417,7 +1417,30 @@ async fn handle_self_rollback(
         }
         tokio::spawn(async {
             tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-            tracing::info!("[system] Restarting to restore container base binary...");
+            tracing::info!("[system] Rollback: switching back to base container binary via in-place execve...");
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                let target_bin = if std::path::Path::new("/amardns").is_file() {
+                    "/amardns".to_string()
+                } else {
+                    std::env::current_exe()
+                        .ok()
+                        .and_then(|p| p.to_str().map(|s| s.to_string()))
+                        .unwrap_or_else(|| "/amardns".to_string())
+                };
+                let err = std::process::Command::new(&target_bin)
+                    .args(std::env::args().skip(1))
+                    .envs(std::env::vars())
+                    .exec();
+                tracing::error!(
+                    "[system] In-place execve rollback to '{}' failed: {}. Exiting with code 1...",
+                    target_bin,
+                    err
+                );
+                std::process::exit(1);
+            }
+            #[cfg(not(unix))]
             std::process::exit(0);
         });
         (
@@ -1549,7 +1572,21 @@ pub async fn perform_download_and_install() -> Result<String, String> {
 
     tokio::spawn(async {
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-        tracing::info!("[system] Restarting AmarDNS after successful self-update...");
+        tracing::info!("[system] Hot-restarting AmarDNS into new persistent binary via in-place execve...");
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            let err = std::process::Command::new("/data/amardns")
+                .args(std::env::args().skip(1))
+                .envs(std::env::vars())
+                .exec();
+            tracing::error!(
+                "[system] In-place execve failed: {}. Exiting with code 1 to trigger supervisor restart...",
+                err
+            );
+            std::process::exit(1);
+        }
+        #[cfg(not(unix))]
         std::process::exit(0);
     });
 
