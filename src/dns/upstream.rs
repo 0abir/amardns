@@ -611,17 +611,8 @@ impl UpstreamPool {
 
     /// Resolves DNS wire query using ultra-fast hedged queries across the top 2 resolvers
     pub async fn resolve(&self, query_wire: &[u8]) -> Option<(Vec<u8>, String)> {
-        let key = match crate::dns::parser::parse_dns_query(query_wire) {
-            Some(parsed) => {
-                if let Some(q) = parsed.question {
-                    format!("{}:{}", q.name, q.qtype)
-                } else {
-                    use std::hash::{Hash, Hasher};
-                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                    query_wire.hash(&mut hasher);
-                    format!("wire-{}", hasher.finish())
-                }
-            }
+        let key = match crate::dns::parser::parse_dns_query(query_wire).and_then(|p| p.question) {
+            Some(q) => format!("{}:{}", q.name, q.qtype),
             None => {
                 use std::hash::{Hash, Hasher};
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1406,7 +1397,8 @@ impl UpstreamPool {
 
 fn to_base64_url(input: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::new();
+    let cap = (input.len() * 4).div_ceil(3);
+    let mut out = String::with_capacity(cap);
     let mut i = 0;
     while i < input.len() {
         let b0 = input[i] as u32;

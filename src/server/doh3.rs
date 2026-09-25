@@ -285,7 +285,7 @@ async fn handle_doh3_request<S>(
 /// Helper to decode standard and URL-safe base64 without padding.
 fn decode_b64_url(input: &str) -> Option<Vec<u8>> {
     let mut s = input.replace('-', "+").replace('_', "/");
-    while s.len() % 4 != 0 {
+    while !s.len().is_multiple_of(4) {
         s.push('=');
     }
     base64_decode_rfc4648(&s)

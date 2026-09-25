@@ -711,10 +711,9 @@ pub fn canonical_wire_name(domain: &str) -> Vec<u8> {
 }
 
 /// Hex decoding helper
-#[allow(clippy::manual_is_multiple_of)]
 pub fn hex_decode(hex_str: &str) -> Result<Vec<u8>, &'static str> {
     let clean = hex_str.trim();
-    if clean.len() % 2 != 0 {
+    if !clean.len().is_multiple_of(2) {
         return Err("Odd length hex string");
     }
     let mut bytes = Vec::with_capacity(clean.len() / 2);

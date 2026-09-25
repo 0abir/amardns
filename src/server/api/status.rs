@@ -665,7 +665,7 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
     };
 
     let status = serde_json::json!({
-        "isolateId": fly_machine_id.clone(),
+        "isolateId": fly_machine_id,
         "region": fly_region.clone(),
         "uptime": uptime_secs,
         "uptimeStr": uptime_str,

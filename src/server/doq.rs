@@ -171,65 +171,62 @@ async fn handle_doq_stream(
     mut recv: quinn::RecvStream,
     client_ip: std::net::IpAddr,
 ) {
-    loop {
-        // Read 2-octet length prefix in network byte order
-        let mut len_buf = [0u8; 2];
-        let read_res = tokio::time::timeout(DOQ_READ_TIMEOUT, recv.read_exact(&mut len_buf)).await;
-        match read_res {
-            Ok(Ok(())) => {}
-            Ok(Err(quinn::ReadExactError::FinishedEarly(_))) => {
-                break;
-            }
-            Ok(Err(e)) => {
-                debug!("[doq] Stream read prefix error: {:?}", e);
-                break;
-            }
-            Err(_) => {
-                debug!("[doq] Stream read timeout");
-                break;
-            }
+    // Read 2-octet length prefix in network byte order
+    let mut len_buf = [0u8; 2];
+    let read_res = tokio::time::timeout(DOQ_READ_TIMEOUT, recv.read_exact(&mut len_buf)).await;
+    match read_res {
+        Ok(Ok(())) => {}
+        Ok(Err(quinn::ReadExactError::FinishedEarly(_))) => {
+            return;
         }
-
-        let msg_len = u16::from_be_bytes(len_buf) as usize;
-        if msg_len == 0 || msg_len > 4096 {
-            debug!("[doq] Invalid message length: {}", msg_len);
-            break;
+        Ok(Err(e)) => {
+            debug!("[doq] Stream read prefix error: {:?}", e);
+            return;
         }
-
-        let mut query = vec![0u8; msg_len];
-        let body_res = tokio::time::timeout(DOQ_READ_TIMEOUT, recv.read_exact(&mut query)).await;
-        if body_res.is_err() || body_res.unwrap().is_err() {
-            debug!("[doq] Stream read query body error");
-            break;
+        Err(_) => {
+            debug!("[doq] Stream read timeout");
+            return;
         }
+    }
 
-        // Per-query rate limit check
-        let resp_bytes = if !state.check_rate_limit(client_ip, None) {
-            build_servfail_response(&query)
-        } else {
-            crate::server::doh::process_dns_wire_packet(
-                state.clone(),
-                &query,
-                client_ip,
-                None,
-                "DoQ",
-            )
-            .await
-        };
+    let msg_len = u16::from_be_bytes(len_buf) as usize;
+    if msg_len == 0 || msg_len > 4096 {
+        debug!("[doq] Invalid message length: {}", msg_len);
+        return;
+    }
 
-        // Write 2-octet length prefix followed by response packet
-        let resp_len = resp_bytes.len() as u16;
-        let write_fut = async {
-            send.write_all(&resp_len.to_be_bytes()).await?;
-            send.write_all(&resp_bytes).await?;
-            Ok::<(), quinn::WriteError>(())
-        };
+    let mut query = vec![0u8; msg_len];
+    let body_res = tokio::time::timeout(DOQ_READ_TIMEOUT, recv.read_exact(&mut query)).await;
+    if body_res.is_err() || body_res.unwrap().is_err() {
+        debug!("[doq] Stream read query body error");
+        return;
+    }
 
-        if let Ok(Ok(())) = tokio::time::timeout(DOQ_WRITE_TIMEOUT, write_fut).await {
-            // In RFC 9250, a stream may either finish after one transaction or pipelining
-            let _ = send.finish();
-        }
-        break;
+    // Per-query rate limit check
+    let resp_bytes = if !state.check_rate_limit(client_ip, None) {
+        build_servfail_response(&query)
+    } else {
+        crate::server::doh::process_dns_wire_packet(
+            state.clone(),
+            &query,
+            client_ip,
+            None,
+            "DoQ",
+        )
+        .await
+    };
+
+    // Write 2-octet length prefix followed by response packet
+    let resp_len = resp_bytes.len() as u16;
+    let write_fut = async {
+        send.write_all(&resp_len.to_be_bytes()).await?;
+        send.write_all(&resp_bytes).await?;
+        Ok::<(), quinn::WriteError>(())
+    };
+
+    if let Ok(Ok(())) = tokio::time::timeout(DOQ_WRITE_TIMEOUT, write_fut).await {
+        // In RFC 9250, a stream finishes after one transaction
+        let _ = send.finish();
     }
 }
 

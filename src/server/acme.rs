@@ -21,7 +21,8 @@ const LETSENCRYPT_DIR: &str = "https://acme-v02.api.letsencrypt.org/directory";
 /// URL-safe Base64 encoder without padding (RFC 7515 / RFC 8555)
 pub fn b64url(input: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::new();
+    let cap = (input.len() * 4).div_ceil(3);
+    let mut out = String::with_capacity(cap);
     let mut i = 0;
     while i < input.len() {
         let b0 = input[i] as u32;
@@ -52,7 +53,8 @@ pub fn b64url(input: &[u8]) -> String {
 
 /// URL-safe Base64 decoder supporting both padded and unpadded input
 pub fn b64url_decode(input: &str) -> Result<Vec<u8>, String> {
-    let mut out = Vec::new();
+    let cap = (input.len() * 3) / 4;
+    let mut out = Vec::with_capacity(cap);
     let mut buf = 0u32;
     let mut bits = 0;
     for c in input.chars() {

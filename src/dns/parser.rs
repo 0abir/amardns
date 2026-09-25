@@ -672,9 +672,7 @@ pub fn append_ede_to_response(wire: &mut Vec<u8>, ede_code: u16, extra_text: &st
                 return;
             }
             wire[name_end + 8..name_end + 10].copy_from_slice(&(new_rdlen as u16).to_be_bytes());
-            for (i, &b) in ede_option.iter().enumerate() {
-                wire.insert(rdata_end + i, b);
-            }
+            wire.splice(rdata_end..rdata_end, ede_option);
             return;
         }
         ar_pos = rdata_end;
@@ -1237,9 +1235,7 @@ pub fn append_cookie_to_response(wire: &mut Vec<u8>, client_cookie: &[u8], serve
                 return;
             }
             wire[name_end + 8..name_end + 10].copy_from_slice(&(new_rdlen as u16).to_be_bytes());
-            for (i, &b) in cookie_opt.iter().enumerate() {
-                wire.insert(rdata_end + i, b);
-            }
+            wire.splice(rdata_end..rdata_end, cookie_opt);
             return;
         }
         ar_pos = rdata_end;

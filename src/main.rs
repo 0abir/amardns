@@ -263,7 +263,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             Err(e) => {
-                boot_state.log_anomaly("upstream_sync_error", &e.to_string());
+                boot_state.log_anomaly("upstream_sync_error", &e);
                 error!("[boot] Upstream sync error: {}", e);
             }
         }

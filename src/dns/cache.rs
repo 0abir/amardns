@@ -358,9 +358,9 @@ impl DnsCache {
     }
 
     pub async fn invalidate_negative(&self, qname: &str) {
-        let clean = qname.trim_end_matches('.').to_ascii_lowercase();
+        let clean = qname.trim_end_matches('.');
         for qtype in [1, 2, 5, 6, 12, 15, 16, 28, 33, 64, 65, 255, 257] {
-            let key = format!("{}:{}", clean, qtype);
+            let key = Self::make_key(clean, qtype);
             self.neg_cache.invalidate(&key).await;
         }
     }
