@@ -18,7 +18,6 @@ COPY cert[s] /staging-certs/
 
 # Stage 2: Minimal Scratch container (< 12MB). Runs as root (UID 0) —
 # no USER directive — so the binary can bind privileged ports 53/443/853
-# directly.
 FROM scratch
 WORKDIR /
 
