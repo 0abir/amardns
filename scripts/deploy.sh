@@ -24,30 +24,48 @@ flyctl apps create "${APP_NAME}" --org "${ORG_NAME}"
 echo "[3/7] Allocating Dedicated Anycast IPv6..."
 flyctl ips allocate-v6 --app "${APP_NAME}"
 
+get_shared_ip() {
+  flyctl ips list --json --app "${APP_NAME}" | python3 -c "import sys, json; ips = json.load(sys.stdin); print(next((i['Address'] for i in ips if i.get('Type') == 'shared_v4'), ''))"
+}
+
 echo "Allocating Shared IPv4 (prioritizing ending with 0, or ending with 5)..."
 FOUND_IP=""
-for attempt in $(seq 1 20); do
-  echo "  -> IP allocation attempt ${attempt}/20 (seeking ending in 0)..."
-  flyctl ips allocate-v4 --shared --app "${APP_NAME}"
-  CURRENT_IP=$(flyctl ips list --app "${APP_NAME}" | grep "shared" | awk '{print $2}' | tail -n1)
-  LAST_DIGIT="${CURRENT_IP: -1}"
-  echo "     Allocated shared IP: ${CURRENT_IP} (ends in '${LAST_DIGIT}')"
-  if [ "${LAST_DIGIT}" = "0" ]; then
-    echo "  -> SUCCESS: Priority target achieved! IPv4 ends in 0: ${CURRENT_IP}"
-    FOUND_IP="${CURRENT_IP}"
-    break
+EXISTING_IP=$(get_shared_ip)
+if [ -n "${EXISTING_IP}" ]; then
+  EXISTING_DIGIT="${EXISTING_IP: -1}"
+  if [ "${EXISTING_DIGIT}" = "0" ]; then
+    echo "  -> Existing shared IP already satisfies priority target (ends in 0): ${EXISTING_IP}"
+    FOUND_IP="${EXISTING_IP}"
+  else
+    echo "  -> Releasing existing non-priority IP: ${EXISTING_IP}"
+    flyctl ips release "${EXISTING_IP}" --app "${APP_NAME}" || true
+    sleep 1
   fi
-  # Release and retry
-  flyctl ips release "${CURRENT_IP}" --app "${APP_NAME}"
-  sleep 1
-done
+fi
+
+if [ -z "${FOUND_IP}" ]; then
+  for attempt in $(seq 1 20); do
+    echo "  -> IP allocation attempt ${attempt}/20 (seeking ending in 0)..."
+    flyctl ips allocate-v4 --shared --app "${APP_NAME}"
+    CURRENT_IP=$(get_shared_ip)
+    LAST_DIGIT="${CURRENT_IP: -1}"
+    echo "     Allocated shared IP: ${CURRENT_IP} (ends in '${LAST_DIGIT}')"
+    if [ "${LAST_DIGIT}" = "0" ]; then
+      echo "  -> SUCCESS: Priority target achieved! IPv4 ends in 0: ${CURRENT_IP}"
+      FOUND_IP="${CURRENT_IP}"
+      break
+    fi
+    flyctl ips release "${CURRENT_IP}" --app "${APP_NAME}"
+    sleep 1
+  done
+fi
 
 if [ -z "${FOUND_IP}" ]; then
   echo "  -> Priority 0 not acquired after 20 attempts. Seeking either 0 or 5..."
-  for attempt in $(seq 21 35); do
-    echo "  -> IP allocation attempt ${attempt}/35 (seeking 0 or 5)..."
+  for attempt in $(seq 21 40); do
+    echo "  -> IP allocation attempt ${attempt}/40 (seeking 0 or 5)..."
     flyctl ips allocate-v4 --shared --app "${APP_NAME}"
-    CURRENT_IP=$(flyctl ips list --app "${APP_NAME}" | grep "shared" | awk '{print $2}' | tail -n1)
+    CURRENT_IP=$(get_shared_ip)
     LAST_DIGIT="${CURRENT_IP: -1}"
     echo "     Allocated shared IP: ${CURRENT_IP} (ends in '${LAST_DIGIT}')"
     if [ "${LAST_DIGIT}" = "0" ] || [ "${LAST_DIGIT}" = "5" ]; then
