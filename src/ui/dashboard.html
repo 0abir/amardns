@@ -231,6 +231,32 @@ select.fld option{background:var(--sur2)}
 .toast.wl{background:rgba(255,204,0,.08);border-color:rgba(255,204,0,.28);color:var(--warn)}
 @keyframes sli{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}
 
+/* Themed Cyberpunk Modal */
+.modal-backdrop{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:rgba(0,5,8,.84);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);padding:16px;opacity:0;visibility:hidden;transition:opacity .18s ease,visibility .18s ease;touch-action:none}
+.modal-backdrop.open{opacity:1;visibility:visible}
+.modal-box{position:relative;max-width:520px;width:100%;background:var(--bg2);border:1px solid var(--brd2);clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,12px 100%,0 calc(100% - 12px));box-shadow:0 0 35px rgba(0,255,231,.08),0 25px 50px rgba(0,0,0,.9);transform:scale(.95) translateY(6px);transition:transform .2s cubic-bezier(.16,1,.3,1);display:flex;flex-direction:column;overflow:hidden}
+.modal-backdrop.open .modal-box{transform:scale(1) translateY(0)}
+.modal-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--brd);background:rgba(4,15,20,.85)}
+.modal-header-left{display:flex;align-items:center;gap:8px;min-width:0}
+.modal-dot{width:6px;height:6px;border-radius:50%;background:var(--acc);box-shadow:0 0 8px var(--acc);flex-shrink:0}
+.modal-backdrop.type-danger .modal-dot{background:var(--bad);box-shadow:0 0 8px var(--bad)}
+.modal-backdrop.type-warning .modal-dot{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+.modal-title{font-family:var(--fh);font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--acc);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.modal-backdrop.type-danger .modal-title{color:var(--bad)}
+.modal-backdrop.type-warning .modal-title{color:var(--warn)}
+.modal-close-btn{background:none;border:none;color:var(--sub);font-size:20px;line-height:1;cursor:pointer;padding:0 6px;transition:color .15s;font-family:var(--fm)}
+.modal-close-btn:hover{color:var(--acc)}
+.modal-body{padding:20px 18px;display:flex;gap:16px;align-items:flex-start;background:var(--sur)}
+.modal-icon-badge{width:36px;height:36px;border:1px solid rgba(0,255,231,.25);background:rgba(0,255,231,.05);color:var(--acc);font-family:var(--fm);font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;clip-path:polygon(0 0,calc(100% - 6px) 0,100% 6px,100% 100%,6px 100%,0 calc(100% - 6px))}
+.modal-backdrop.type-danger .modal-icon-badge{border-color:rgba(255,45,107,.4);background:rgba(255,45,107,.08);color:var(--bad)}
+.modal-backdrop.type-warning .modal-icon-badge{border-color:rgba(255,204,0,.4);background:rgba(255,204,0,.08);color:var(--warn)}
+.modal-content-col{flex:1;min-width:0}
+.modal-msg{font-family:var(--fm);font-size:12.5px;line-height:1.65;color:var(--txt);word-break:break-word}
+.modal-submsg{margin-top:8px;font-size:10px;color:var(--sub);letter-spacing:.04em}
+.modal-footer{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:12px 18px;border-top:1px solid var(--brd);background:rgba(2,11,15,.95)}
+.modal-btn{min-width:90px;justify-content:center}
+@media(max-width:480px){.modal-box{max-width:100%}.modal-body{padding:16px 14px;gap:12px}.modal-icon-badge{width:30px;height:30px;font-size:11px}.modal-msg{font-size:11.5px}.modal-footer{padding:10px 14px}}
+
 /* Profile table */
 .ptable{width:100%;border-collapse:collapse}
 .ptable th{font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--sub);padding:9px 12px;border-bottom:1px solid var(--brd2);text-align:left}
@@ -508,6 +534,28 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
 </head>
 <body>
 <div id="tarea"></div>
+<div id="ui-modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-hidden="true">
+  <div class="modal-box" id="ui-modal-box">
+    <div class="modal-header">
+      <div class="modal-header-left">
+        <span class="modal-dot" id="ui-modal-dot"></span>
+        <span class="modal-title" id="ui-modal-title">AMARDNS // SYSTEM CONFIRMATION</span>
+      </div>
+      <button class="modal-close-btn" id="ui-modal-close" aria-label="Close dialog">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-icon-badge" id="ui-modal-icon-badge">›_</div>
+      <div class="modal-content-col">
+        <div class="modal-msg" id="ui-modal-msg"></div>
+        <div class="modal-submsg" id="ui-modal-submsg" style="display:none"></div>
+      </div>
+    </div>
+    <div class="modal-footer" id="ui-modal-footer">
+      <button class="btn btn-g modal-btn" id="ui-modal-cancel">CANCEL</button>
+      <button class="btn btn-p modal-btn" id="ui-modal-confirm">CONFIRM</button>
+    </div>
+  </div>
+</div>
 <div class="app">
 
 <div class="topbar">
@@ -1313,6 +1361,155 @@ function renderTab(id){
   if(id==='security')renderSecurity(_D);
   if(id==='admin')renderAdmin(_D);
 }
+
+// Themed Cyberpunk Modal System
+var _modalResolver = null;
+function uiConfirm(msg, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = {}; }
+  opts = opts || {};
+  return new Promise(function(resolve) {
+    if (_modalResolver) { _modalResolver(false); }
+    _modalResolver = function(val) {
+      _closeModal();
+      if (cb) cb(val);
+      resolve(val);
+    };
+
+    var bd = document.getElementById('ui-modal-backdrop');
+    var titleEl = document.getElementById('ui-modal-title');
+    var msgEl = document.getElementById('ui-modal-msg');
+    var submsgEl = document.getElementById('ui-modal-submsg');
+    var iconBadge = document.getElementById('ui-modal-icon-badge');
+    var confirmBtn = document.getElementById('ui-modal-confirm');
+    var cancelBtn = document.getElementById('ui-modal-cancel');
+
+    if (!bd || !confirmBtn || !cancelBtn) {
+      if (cb) cb(false);
+      resolve(false);
+      return;
+    }
+
+    bd.className = 'modal-backdrop';
+    if (opts.danger || opts.type === 'danger') {
+      bd.classList.add('type-danger');
+      confirmBtn.className = 'btn btn-d modal-btn';
+      iconBadge.textContent = '!';
+    } else if (opts.warning || opts.type === 'warning') {
+      bd.classList.add('type-warning');
+      confirmBtn.className = 'btn btn-w modal-btn';
+      iconBadge.textContent = '!';
+    } else {
+      confirmBtn.className = 'btn btn-p modal-btn';
+      iconBadge.textContent = '›_';
+    }
+
+    titleEl.textContent = opts.title || 'AMARDNS // SYSTEM CONFIRMATION';
+    msgEl.textContent = msg || '';
+    if (opts.submsg) {
+      submsgEl.textContent = opts.submsg;
+      submsgEl.style.display = 'block';
+    } else {
+      submsgEl.style.display = 'none';
+    }
+
+    confirmBtn.textContent = opts.confirmText || (opts.alertOnly ? 'OK' : 'CONFIRM');
+    cancelBtn.textContent = opts.cancelText || 'CANCEL';
+    cancelBtn.style.display = opts.alertOnly ? 'none' : 'inline-flex';
+
+    bd.classList.add('open');
+    bd.setAttribute('aria-hidden', 'false');
+
+    setTimeout(function() {
+      if (opts.danger && cancelBtn && cancelBtn.style.display !== 'none') {
+        cancelBtn.focus();
+      } else if (confirmBtn) {
+        confirmBtn.focus();
+      }
+    }, 50);
+  });
+}
+
+function uiAlert(msg, opts, cb) {
+  if (typeof opts === 'function') { cb = opts; opts = {}; }
+  opts = opts || {};
+  opts.alertOnly = true;
+  opts.title = opts.title || 'AMARDNS // NOTICE';
+  return uiConfirm(msg, opts, cb);
+}
+
+function _closeModal() {
+  var bd = document.getElementById('ui-modal-backdrop');
+  if (bd) {
+    bd.classList.remove('open');
+    bd.setAttribute('aria-hidden', 'true');
+  }
+  _modalResolver = null;
+}
+
+// Wire modal click & keyboard interactions
+(function _initModalEvents() {
+  function _bind() {
+    var bd = document.getElementById('ui-modal-backdrop');
+    var closeBtn = document.getElementById('ui-modal-close');
+    var cancelBtn = document.getElementById('ui-modal-cancel');
+    var confirmBtn = document.getElementById('ui-modal-confirm');
+
+    if (confirmBtn) {
+      confirmBtn.onclick = function() {
+        if (_modalResolver) _modalResolver(true);
+      };
+    }
+    if (cancelBtn) {
+      cancelBtn.onclick = function() {
+        if (_modalResolver) _modalResolver(false);
+      };
+    }
+    if (closeBtn) {
+      closeBtn.onclick = function() {
+        if (_modalResolver) _modalResolver(false);
+      };
+    }
+    if (bd) {
+      bd.onclick = function(e) {
+        if (e.target === bd && _modalResolver) {
+          _modalResolver(false);
+        }
+      };
+    }
+    document.addEventListener('keydown', function(e) {
+      var backdrop = document.getElementById('ui-modal-backdrop');
+      if (!backdrop || !backdrop.classList.contains('open') || !_modalResolver) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        _modalResolver(false);
+      } else if (e.key === 'Enter') {
+        var cancelEl = document.getElementById('ui-modal-cancel');
+        if (document.activeElement === cancelEl) {
+          e.preventDefault();
+          _modalResolver(false);
+        } else {
+          e.preventDefault();
+          _modalResolver(true);
+        }
+      }
+    });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _bind);
+  } else {
+    _bind();
+  }
+})();
+
+// Intercept browser alert and confirm to enforce theme
+window.alert = function(msg) {
+  return uiAlert(msg);
+};
+window.confirm = function(msg) {
+  console.warn('[AmarDNS] Intercepted native confirm(); routed to themed uiConfirm');
+  uiConfirm(msg);
+  return false;
+};
 
 function toast(msg,type,dur){
   var t=document.createElement('div');t.className='toast '+(type||'in');t.textContent=msg;
@@ -3135,10 +3332,16 @@ function removeBlock(el,domain,isAuto,domainsList){
   }).catch(function(e){toast(e.message,'er');});
 }
 function clearBlock(){
-  if(!confirm('Clear ALL blocked domains from the blocklist?'))return;
-  api('/api/blocklist/clear','POST').then(function(){toast('Blocklist cleared','ok');loadBlock();go();}).catch(function(){
-    // Fallback: not yet a bulk clear endpoint — inform user
-    toast('Bulk clear not available — remove entries individually','wl');
+  uiConfirm('Clear ALL blocked domains from the blocklist?', {
+    title: 'BLOCKLIST // CLEAR CONFIRMATION',
+    confirmText: 'CLEAR ALL BLOCKED',
+    danger: true
+  }, function(ok){
+    if(!ok) return;
+    api('/api/blocklist/clear','POST').then(function(){toast('Blocklist cleared','ok');loadBlock();go();}).catch(function(){
+      // Fallback: not yet a bulk clear endpoint — inform user
+      toast('Bulk clear not available — remove entries individually','wl');
+    });
   });
 }
 
@@ -3243,9 +3446,15 @@ function removeWhitelist(el,domain,domainsList){
   }).catch(function(e){toast(e.message,'er');});
 }
 function clearWhitelist(){
-  if(!confirm('Clear all whitelisted domains?'))return;
-  api('/api/whitelist/clear','POST').then(function(){toast('Whitelist cleared','ok');loadWhitelist();}).catch(function(){
-    toast('Bulk clear not available — remove entries individually','wl');
+  uiConfirm('Clear all whitelisted domains?', {
+    title: 'WHITELIST // CLEAR CONFIRMATION',
+    confirmText: 'CLEAR WHITELIST',
+    danger: true
+  }, function(ok){
+    if(!ok) return;
+    api('/api/whitelist/clear','POST').then(function(){toast('Whitelist cleared','ok');loadWhitelist();}).catch(function(){
+      toast('Bulk clear not available — remove entries individually','wl');
+    });
   });
 }
 
@@ -3416,8 +3625,24 @@ function tokCopy(){
   if(navigator.clipboard)navigator.clipboard.writeText(v).then(function(){toast('Copied','ok');});
   else{document.getElementById('tok-url').select();document.execCommand('copy');toast('Copied','ok');}
 }
-function resetCB(){if(!confirm('Reset all circuit breakers?'))return;api('/api/reset-cb','POST').then(function(){toast('CBs reset','ok');go();}).catch(function(e){toast(e.message,'er');});}
-function clearSH(){if(!confirm('Clear self-heal state?'))return;api('/api/self-heal','DELETE').then(function(){toast('Cleared','ok');go();}).catch(function(e){toast(e.message,'er');});}
+function resetCB(){
+  uiConfirm('Reset all circuit breakers?', {
+    title: 'CIRCUIT BREAKERS // RESET CONFIRMATION',
+    confirmText: 'RESET CIRCUIT BREAKERS'
+  }, function(ok){
+    if(!ok) return;
+    api('/api/reset-cb','POST').then(function(){toast('CBs reset','ok');go();}).catch(function(e){toast(e.message,'er');});
+  });
+}
+function clearSH(){
+  uiConfirm('Clear self-heal state?', {
+    title: 'SELF-HEAL // CLEAR STATE CONFIRMATION',
+    confirmText: 'CLEAR SELF-HEAL'
+  }, function(ok){
+    if(!ok) return;
+    api('/api/self-heal','DELETE').then(function(){toast('Cleared','ok');go();}).catch(function(e){toast(e.message,'er');});
+  });
+}
 function clearInc(){api('/api/incident','DELETE').then(function(){toast('Incident cleared','ok');go();}).catch(function(e){toast(e.message,'er');});}
 
 // Binary Firmware Management
@@ -3491,17 +3716,22 @@ function _fwHidePanelAfterSuccess() {
 }
 
 function applyBinaryUpdate() {
-  if (!confirm('Download and hot-deploy the latest AmarDNS binary to persistent storage (/data/amardns)? The server will seamlessly restart in-place via execve.')) return;
-  var panel = document.getElementById('fw-update-panel');
-  var logConsole = document.getElementById('fw-log-console');
-  var msg = document.getElementById('fw-msg');
-  if (msg) msg.style.display = 'none';
-  if (logConsole) logConsole.innerHTML = '';
-  if (panel) {
-    panel.style.display = 'block';
-    panel.style.opacity = '1';
-    panel.style.transform = '';
-  }
+  uiConfirm('Download and hot-deploy the latest AmarDNS binary to persistent storage (/data/amardns)? The server will seamlessly restart in-place via execve.', {
+    title: 'FIRMWARE // LIVE UPDATE CONFIRMATION',
+    confirmText: 'START HOT-DEPLOY',
+    type: 'accent'
+  }, function(ok){
+    if(!ok) return;
+    var panel = document.getElementById('fw-update-panel');
+    var logConsole = document.getElementById('fw-log-console');
+    var msg = document.getElementById('fw-msg');
+    if (msg) msg.style.display = 'none';
+    if (logConsole) logConsole.innerHTML = '';
+    if (panel) {
+      panel.style.display = 'block';
+      panel.style.opacity = '1';
+      panel.style.transform = '';
+    }
 
   _fwSetProgress(10, 'INITIALIZING OTA UPDATE…', 'Step 1/6: Handshake');
   _fwLog('Starting AmarDNS live firmware update pipeline...', 'var(--acc)');
@@ -3577,20 +3807,26 @@ function applyBinaryUpdate() {
     }
     toast(e.message, 'er');
   });
+  });
 }
 
 function rollbackBinaryUpdate() {
-  if (!confirm('Remove persistent binary (/data/amardns) and revert to the base container image? The server will seamlessly restart in-place via execve.')) return;
-  var panel = document.getElementById('fw-update-panel');
-  var logConsole = document.getElementById('fw-log-console');
-  var msg = document.getElementById('fw-msg');
-  if (msg) msg.style.display = 'none';
-  if (logConsole) logConsole.innerHTML = '';
-  if (panel) {
-    panel.style.display = 'block';
-    panel.style.opacity = '1';
-    panel.style.transform = '';
-  }
+  uiConfirm('Remove persistent binary (/data/amardns) and revert to the base container image? The server will seamlessly restart in-place via execve.', {
+    title: 'FIRMWARE // ROLLBACK CONFIRMATION',
+    confirmText: 'REVERT TO BASE IMAGE',
+    danger: true
+  }, function(ok){
+    if(!ok) return;
+    var panel = document.getElementById('fw-update-panel');
+    var logConsole = document.getElementById('fw-log-console');
+    var msg = document.getElementById('fw-msg');
+    if (msg) msg.style.display = 'none';
+    if (logConsole) logConsole.innerHTML = '';
+    if (panel) {
+      panel.style.display = 'block';
+      panel.style.opacity = '1';
+      panel.style.transform = '';
+    }
 
   _fwSetProgress(20, 'INITIALIZING ROLLBACK…', 'Step 1/4: Removal');
   _fwLog('Removing persistent binary: /data/amardns...', 'var(--warn)');
@@ -3641,17 +3877,23 @@ function rollbackBinaryUpdate() {
     }
     toast(e.message, 'er');
   });
+  });
 }
 
 // Nuclear wipe
 function nuclearWipe(){
   var confirm_val=document.getElementById('nuke-confirm').value.trim();
   if(confirm_val!=='NUKE'){toast('Type NUKE to confirm','er');return;}
-  if(!confirm('Reset all data from PulseDB & AeroCache? System state will be wiped to zero and reinitialized.'))return;
-  var btn=document.querySelector('.btn-nuke');btn.disabled=true;
-  var res=document.getElementById('nuke-result');
-  res.innerHTML='<span style="color:var(--acc)">Saving brain backup…</span>';
-  api('/api/ai/export').then(function(bd){
+  uiConfirm('Reset all data from PulseDB & AeroCache? System state will be wiped to zero and reinitialized.', {
+    title: 'CRITICAL // NUCLEAR FACTORY RESET',
+    confirmText: 'EXECUTE NUCLEAR RESET',
+    danger: true
+  }, function(ok){
+    if(!ok) return;
+    var btn=document.querySelector('.btn-nuke');btn.disabled=true;
+    var res=document.getElementById('nuke-result');
+    res.innerHTML='<span style="color:var(--acc)">Saving brain backup…</span>';
+    api('/api/ai/export').then(function(bd){
     function _afterSave(){toast('Brain saved — nuking now','ok',4000);_doNuke(btn,res);}
     function _saveBlob(raw){var blob=new Blob([raw],{type:'application/json'});var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='brain-prenuke-'+Date.now()+'.json';a.click();}
     if(!bd.chunked){_saveBlob(bd.data||JSON.stringify(bd,null,2));_afterSave();}
@@ -3661,6 +3903,7 @@ function nuclearWipe(){
       Promise.all(fetches).then(function(){_saveBlob(parts.join(''));_afterSave();}).catch(function(){toast('Chunk error — nuking anyway','wl',3000);_doNuke(btn,res);});
     }
   }).catch(function(){toast('Brain export failed — nuking anyway','wl',3000);_doNuke(btn,res);});
+  });
 }
 function _doNuke(btn,res){
   var _nukeToken=null;
