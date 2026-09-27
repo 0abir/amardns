@@ -467,7 +467,8 @@ All endpoints support authentication via `X-Master-Key` / `Authorization: Bearer
 | `/api/console/commands`, `/api/console/commands/{key}` | `GET` | Admin | List available interactive console commands. |
 | `/api/console/exec`, `/api/console/exec/{key}` | `POST` | Admin | Execute administrative console command. |
 | `/api/system/update/check`, `/api/system/update/check/{key}` | `GET` | View / Admin | Query GitHub Releases for binary update availability. |
-| `/api/system/update`, `/api/system/update/{key}` | `POST` | Admin | Hot-deploy latest verified static binary to `/amardns`. |
+| `/api/system/update/releases`, `/api/system/update/releases/{key}` | `GET` | View / Admin | List all published releases, tags, dates, and binary availability. |
+| `/api/system/update`, `/api/system/update/{key}` | `POST` | Admin | Hot-deploy verified static binary to `/amardns` (latest or target tag). |
 | `/api/system/rollback`, `/api/system/rollback/{key}` | `POST` | Admin | Rotate active binary to `/amardns-<ver>` and restore `/amardns.bak`. |
 | `/api/system/software`, `/api/system/software/{key}` | `GET` | View / Admin | List on-disk software binaries, versions, sizes, and relative age. |
 | `/api/system/software/remove`, `/api/system/software/remove/{key}` | `POST` | Admin | Remove binary archive or backup (watchdog auto-recovers `/amardns`). |

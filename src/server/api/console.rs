@@ -331,8 +331,8 @@ fn get_command_list() -> Vec<ConsoleCommandInfo> {
         },
         ConsoleCommandInfo {
             name: "update".into(),
-            syntax: "update [check | apply | rollback]".into(),
-            description: "Check for binary updates from GitHub, apply in-place to /amardns, or rollback".into(),
+            syntax: "update [check | list | apply [tag] | rollback]".into(),
+            description: "Check GitHub releases, list remote versions, install specific version, or rollback".into(),
             category: "System".into(),
         },
         ConsoleCommandInfo {
@@ -437,8 +437,43 @@ async fn cmd_update(args: &[&str]) -> (String, String) {
                 Err(e) => (format!("Failed to query GitHub Releases API: {}", e), "error".into()),
             }
         }
+        "list" | "releases" | "versions" => {
+            match crate::server::api::system::fetch_remote_releases().await {
+                Ok(releases) => {
+                    if releases.is_empty() {
+                        return ("No releases found on GitHub repository.\n".into(), "ok".into());
+                    }
+                    let mut out = String::new();
+                    out.push_str("── [ Available Releases on GitHub ] ──────────────────────────────────────────\n\n");
+                    out.push_str(&format!(
+                        "  {:<12} {:<15} {:<12} {:<10} {}\n",
+                        "VERSION", "RELEASE DATE", "COMPATIBLE", "STATUS", "RELEASE NAME"
+                    ));
+                    out.push_str("  ──────────────────────────────────────────────────────────────────────────\n");
+                    for r in &releases {
+                        let status_badge = if r.is_current {
+                            "ACTIVE"
+                        } else if r.prerelease {
+                            "PRE-REL"
+                        } else {
+                            "STABLE"
+                        };
+                        let compat = if r.has_binary { "YES" } else { "NO (source)" };
+                        out.push_str(&format!(
+                            "  {:<12} {:<15} {:<12} {:<10} {}\n",
+                            r.tag, r.relative_age, compat, status_badge, r.name
+                        ));
+                    }
+                    out.push('\n');
+                    out.push_str("  To install a specific version: update apply <version_tag> (e.g. update apply v1.0.9)\n");
+                    (out, "ok".into())
+                }
+                Err(e) => (format!("Failed to fetch releases: {}\n", e), "error".into()),
+            }
+        }
         "apply" => {
-            match crate::server::api::system::perform_download_and_install().await {
+            let target_version = args.get(1).copied();
+            match crate::server::api::system::perform_download_and_install(target_version).await {
                 Ok(msg) => (format!("{}\n", msg), "ok".into()),
                 Err(e) => (format!("Update failed: {}\n", e), "error".into()),
             }
@@ -449,7 +484,7 @@ async fn cmd_update(args: &[&str]) -> (String, String) {
                 Err(e) => (format!("Rollback failed: {}\n", e), "error".into()),
             }
         }
-        _ => ("Syntax: update [check | apply | rollback]\n".into(), "error".into()),
+        _ => ("Syntax: update [check | list | apply [tag] | rollback]\n".into(), "error".into()),
     }
 }
 

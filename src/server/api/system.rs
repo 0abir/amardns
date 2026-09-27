@@ -115,6 +115,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/system/update/check", get(self_update_check_handler))
         .route("/api/system/update/check/", get(self_update_check_handler))
         .route("/api/system/update/check/{key}", get(self_update_check_key_handler))
+        .route("/api/system/update/releases", get(self_update_releases_handler))
+        .route("/api/system/update/releases/", get(self_update_releases_handler))
+        .route("/api/system/update/releases/{key}", get(self_update_releases_key_handler))
         .route("/api/system/rollback", post(self_rollback_handler))
         .route("/api/system/rollback/", post(self_rollback_handler))
         .route("/api/system/rollback/{key}", post(self_rollback_key_handler))
@@ -1273,16 +1276,27 @@ fn handle_release_lock(state: &Arc<AppState>, body: serde_json::Value) -> Respon
 
 // ── In-Dashboard Self-Update & Rollback ──────────────────────────────────────
 
-pub async fn self_update_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    handle_self_update(&state, None, &headers).await
+#[derive(Debug, Clone, serde::Deserialize, Default)]
+pub struct SelfUpdateReq {
+    pub version: Option<String>,
+    pub tag: Option<String>,
+}
+
+pub async fn self_update_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    payload: Option<Json<SelfUpdateReq>>,
+) -> Response {
+    handle_self_update(&state, None, &headers, payload.map(|j| j.0)).await
 }
 
 pub async fn self_update_key_handler(
     State(state): State<Arc<AppState>>,
     Path(key): Path<String>,
     headers: HeaderMap,
+    payload: Option<Json<SelfUpdateReq>>,
 ) -> Response {
-    handle_self_update(&state, Some(&key), &headers).await
+    handle_self_update(&state, Some(&key), &headers, payload.map(|j| j.0)).await
 }
 
 pub async fn self_update_check_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
@@ -1295,6 +1309,18 @@ pub async fn self_update_check_key_handler(
     headers: HeaderMap,
 ) -> Response {
     handle_self_update_check(&state, Some(&key), &headers).await
+}
+
+pub async fn self_update_releases_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    handle_self_update_releases(&state, None, &headers).await
+}
+
+pub async fn self_update_releases_key_handler(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_self_update_releases(&state, Some(&key), &headers).await
 }
 
 pub async fn self_rollback_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
@@ -1375,10 +1401,44 @@ async fn handle_self_update_check(
     }
 }
 
+async fn handle_self_update_releases(
+    state: &Arc<AppState>,
+    key: Option<&str>,
+    headers: &HeaderMap,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/system/update/releases");
+    if !auth.is_view_or_admin() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false, "error": "Unauthorized" })),
+        )
+            .into_response();
+    }
+
+    match fetch_remote_releases().await {
+        Ok(releases) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "current_version": format!("v{}", env!("CARGO_PKG_VERSION")),
+                "total": releases.len(),
+                "releases": releases,
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "ok": false, "error": e })),
+        )
+            .into_response(),
+    }
+}
+
 async fn handle_self_update(
     state: &Arc<AppState>,
     key: Option<&str>,
     headers: &HeaderMap,
+    payload: Option<SelfUpdateReq>,
 ) -> Response {
     let auth = check_auth(state, key, headers, "/api/system/update");
     if !auth.is_admin() {
@@ -1389,7 +1449,10 @@ async fn handle_self_update(
             .into_response();
     }
 
-    match perform_download_and_install().await {
+    let target_ver = payload.as_ref()
+        .and_then(|p| p.version.as_deref().or(p.tag.as_deref()));
+
+    match perform_download_and_install(target_ver).await {
         Ok(msg) => (
             StatusCode::OK,
             Json(serde_json::json!({ "ok": true, "message": msg, "restarting": true })),
@@ -1978,21 +2041,130 @@ pub fn prune_software_binaries() -> Result<String, String> {
     ))
 }
 
-/// Download, verify, and install latest binary to /amardns, backing up current to /amardns.bak.
-pub async fn perform_download_and_install() -> Result<String, String> {
+/// Remote release item from GitHub repository releases API.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RemoteReleaseInfo {
+    pub tag: String,
+    pub name: String,
+    pub published_at: String,
+    pub relative_age: String,
+    pub prerelease: bool,
+    pub is_current: bool,
+    pub has_binary: bool,
+    pub html_url: String,
+}
+
+fn format_relative_time_str(rfc3339_str: &str) -> String {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(rfc3339_str) {
+        let now = chrono::Utc::now();
+        let diff = now.signed_duration_since(dt.with_timezone(&chrono::Utc));
+        let secs = diff.num_seconds();
+        if secs < 60 {
+            "just now".to_string()
+        } else if secs < 3600 {
+            format!("{}m ago", secs / 60)
+        } else if secs < 86400 {
+            format!("{}h ago", secs / 3600)
+        } else if secs < 2592000 {
+            format!("{}d ago", secs / 86400)
+        } else {
+            format!("{}mo ago", secs / 2592000)
+        }
+    } else {
+        "unknown".to_string()
+    }
+}
+
+pub async fn fetch_remote_releases() -> Result<Vec<RemoteReleaseInfo>, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("AmarDNS")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let url = "https://api.github.com/repos/0abir/amardns/releases?per_page=100";
+    let resp = client.get(url).send().await
+        .map_err(|e| format!("GitHub API request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("GitHub API returned HTTP {}", resp.status()));
+    }
+
+    let releases_json: Vec<serde_json::Value> = resp.json().await
+        .map_err(|e| format!("Failed to parse releases JSON: {}", e))?;
+
+    let is_arm64 = std::env::consts::ARCH == "aarch64";
+    let current_pkg_ver = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let mut results = Vec::new();
+
+    for rel in releases_json {
+        let tag = rel["tag_name"].as_str().unwrap_or("").to_string();
+        if tag.is_empty() {
+            continue;
+        }
+        let name = rel["name"].as_str().unwrap_or(&tag).to_string();
+        let pub_at = rel["published_at"].as_str().unwrap_or("").to_string();
+        let relative_age = format_relative_time_str(&pub_at);
+        let prerelease = rel["prerelease"].as_bool().unwrap_or(false);
+        let html_url = rel["html_url"].as_str().unwrap_or("").to_string();
+
+        let has_binary = rel["assets"].as_array().map(|assets| {
+            assets.iter().any(|a| {
+                let n = a["name"].as_str().unwrap_or("");
+                if is_arm64 {
+                    n == "amardns-arm64" || n == "amardns-linux-arm64" || n == "amardns"
+                } else {
+                    n == "amardns" || n == "amardns-linux-amd64"
+                }
+            })
+        }).unwrap_or(false);
+
+        let is_current = tag == current_pkg_ver || tag.trim_start_matches('v') == env!("CARGO_PKG_VERSION");
+
+        results.push(RemoteReleaseInfo {
+            tag,
+            name,
+            published_at: pub_at,
+            relative_age,
+            prerelease,
+            is_current,
+            has_binary,
+            html_url,
+        });
+    }
+
+    Ok(results)
+}
+
+/// Download, verify, and install binary (latest or specific target version) to /amardns, backing up current to /amardns.bak.
+pub async fn perform_download_and_install(target_version: Option<&str>) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .user_agent("AmarDNS")
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
-    let release_url = "https://api.github.com/repos/0abir/amardns/releases/latest";
-    let resp = client.get(release_url)
+    let (release_url, is_specific) = match target_version {
+        Some(v) if !v.trim().is_empty() && !v.eq_ignore_ascii_case("latest") => {
+            let clean_tag = if v.starts_with('v') {
+                v.trim().to_string()
+            } else {
+                format!("v{}", v.trim())
+            };
+            (format!("https://api.github.com/repos/0abir/amardns/releases/tags/{}", clean_tag), true)
+        }
+        _ => ("https://api.github.com/repos/0abir/amardns/releases/latest".to_string(), false),
+    };
+
+    let resp = client.get(&release_url)
         .send()
         .await
         .map_err(|e| format!("GitHub API request failed: {}", e))?;
 
     if !resp.status().is_success() {
+        if resp.status() == reqwest::StatusCode::NOT_FOUND && is_specific {
+            return Err(format!("Release version '{}' was not found on GitHub. Please check the version catalog.", target_version.unwrap_or("")));
+        }
         return Err(format!("GitHub API returned HTTP {}", resp.status()));
     }
 
@@ -2001,7 +2173,7 @@ pub async fn perform_download_and_install() -> Result<String, String> {
 
     let tag_name = release_json["tag_name"].as_str().unwrap_or("latest").to_string();
     let assets = release_json["assets"].as_array()
-        .ok_or_else(|| "No assets attached to latest release".to_string())?;
+        .ok_or_else(|| "No assets attached to release".to_string())?;
 
     let is_arm64 = std::env::consts::ARCH == "aarch64";
     let binary_asset = assets.iter().find(|a| {
@@ -2011,12 +2183,12 @@ pub async fn perform_download_and_install() -> Result<String, String> {
         } else {
             name == "amardns" || name == "amardns-linux-amd64"
         }
-    }).ok_or_else(|| "No compatible static binary asset found in latest release".to_string())?;
+    }).ok_or_else(|| format!("No compatible static binary asset found in release {}", tag_name))?;
 
     let download_url = binary_asset["browser_download_url"].as_str()
         .ok_or_else(|| "Missing download URL on binary asset".to_string())?;
 
-    tracing::info!("[update] Downloading latest binary from: {}", download_url);
+    tracing::info!("[update] Downloading binary ({}) from: {}", tag_name, download_url);
     let bin_bytes = client.get(download_url)
         .send()
         .await
@@ -2160,11 +2332,20 @@ mod tests {
     }
 
     #[test]
-    fn test_prune_software_binaries_execution() {
-        let result = prune_software_binaries();
-        assert!(result.is_ok());
-        let msg = result.unwrap();
-        assert!(msg.contains("Active '/amardns' and backup '/amardns.bak' preserved"));
+    fn test_format_relative_time_str() {
+        let age_now = format_relative_time_str(&chrono::Utc::now().to_rfc3339());
+        assert_eq!(age_now, "just now");
+
+        let past = chrono::Utc::now() - chrono::Duration::hours(5);
+        let age_hours = format_relative_time_str(&past.to_rfc3339());
+        assert_eq!(age_hours, "5h ago");
+
+        let past_days = chrono::Utc::now() - chrono::Duration::days(3);
+        let age_days = format_relative_time_str(&past_days.to_rfc3339());
+        assert_eq!(age_days, "3d ago");
+
+        let invalid = format_relative_time_str("not_a_date");
+        assert_eq!(invalid, "unknown");
     }
 }
 

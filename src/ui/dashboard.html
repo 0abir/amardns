@@ -556,6 +556,50 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
     </div>
   </div>
 </div>
+
+<!-- Modern Version Selector & Time Machine Modal -->
+<div id="version-picker-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-hidden="true">
+  <div class="modal-box" style="max-width:580px;max-height:85vh;display:flex;flex-direction:column">
+    <div class="modal-header">
+      <div class="modal-header-left">
+        <span class="modal-dot" style="background:var(--acc);box-shadow:0 0 8px var(--acc)"></span>
+        <span class="modal-title">RELEASE TIME MACHINE // VERSION SELECTOR</span>
+      </div>
+      <button class="modal-close-btn" id="version-picker-close" aria-label="Close dialog">&times;</button>
+    </div>
+    
+    <!-- Search Bar & Filter Header -->
+    <div style="padding:12px 16px;background:rgba(8,16,28,0.95);border-bottom:1px solid var(--brd);display:flex;flex-direction:column;gap:8px">
+      <div style="position:relative;width:100%">
+        <input type="text" id="vp-search-input" placeholder="Search versions... (e.g. 1.0.9, v1.0, Sep 2026)" style="width:100%;background:rgba(3,8,16,0.9);border:1px solid var(--brd2);border-radius:4px;color:var(--txt);font-family:var(--fm);font-size:11px;padding:7px 10px 7px 28px;outline:none" autocomplete="off" />
+        <svg style="position:absolute;left:8px;top:50%;transform:translateY(-50%);opacity:0.4;pointer-events:none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:9.5px;font-family:var(--fm);color:var(--mut);flex-wrap:wrap;gap:6px">
+        <div style="display:flex;gap:6px">
+          <button class="chip-cmd" id="vp-filter-all" style="padding:1px 7px;font-size:9px;border-color:var(--acc);color:var(--acc)">All</button>
+          <button class="chip-cmd" id="vp-filter-stable" style="padding:1px 7px;font-size:9px">Stable Only</button>
+          <button class="chip-cmd" id="vp-filter-compat" style="padding:1px 7px;font-size:9px">Compatible Binaries</button>
+        </div>
+        <span id="vp-count-label">Loading releases…</span>
+      </div>
+    </div>
+
+    <!-- Scrollable Release List with Modern Responsive Cards -->
+    <div id="vp-release-list" style="flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:8px;background:var(--sur);min-height:220px;max-height:420px;-webkit-overflow-scrolling:touch">
+    </div>
+
+    <!-- Modal Footer -->
+    <div class="modal-footer" style="justify-content:space-between;padding:10px 16px">
+      <div style="font-size:9px;font-family:var(--fm);color:var(--mut)">
+        Current Engine: <strong style="color:var(--acc)" id="vp-cur-ver">Detecting…</strong>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-g" id="vp-btn-cancel">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="app">
 
 <div class="topbar">
@@ -1216,10 +1260,19 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
         <div>Active Version: <span id="fw-cur-ver" style="color:var(--txt)">Detecting…</span></div>
         <div>Latest Release: <span id="fw-lat-ver" style="color:var(--mut)">—</span></div>
       </div>
-      <div class="brow-c" style="gap:8px;justify-content:center">
+      <div class="brow-c" style="gap:8px;justify-content:center;flex-wrap:wrap">
         <button class="btn" id="btn-check-update">Check for Updates</button>
         <button class="btn btn-ok" id="btn-apply-update">Update Binary Now</button>
+        <button class="btn btn-p" id="btn-select-version" style="display:inline-flex;align-items:center;gap:5px">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 14 14"/></svg>
+          Select Version ▾
+        </button>
         <button class="btn btn-w" id="btn-rollback-update">Rollback to Fallback Backup</button>
+      </div>
+
+      <div id="fw-target-indicator" style="display:none;margin-top:8px;font-size:9.5px;font-family:var(--fm);color:var(--warn);text-align:center">
+        Selected Target Version: <span id="fw-selected-ver" style="font-weight:700">v1.0.9</span>
+        <a href="javascript:void(0)" onclick="_resetSelectedVersion()" style="color:var(--mut);margin-left:8px;text-decoration:underline">Reset to Latest</a>
       </div>
 
       <!-- Interactive OTA Update Progress & Log Machine -->
@@ -3716,10 +3769,235 @@ function _fwHidePanelAfterSuccess() {
   }, 3500);
 }
 
-function applyBinaryUpdate() {
-  uiConfirm('Download and hot-deploy latest AmarDNS binary to /amardns (backing up current to /amardns.bak)? The server will seamlessly restart in-place via execve.', {
+var _selectedVersionForUpdate = null;
+var _allReleasesCache = [];
+var _vpFilterMode = 'all';
+
+function _resetSelectedVersion() {
+  _selectedVersionForUpdate = null;
+  var ind = document.getElementById('fw-target-indicator');
+  if (ind) ind.style.display = 'none';
+  var btn = document.getElementById('btn-apply-update');
+  if (btn) btn.textContent = 'Update Binary Now';
+}
+
+function openVersionPicker() {
+  var backdrop = document.getElementById('version-picker-backdrop');
+  if (!backdrop) return;
+  backdrop.classList.add('open');
+  backdrop.setAttribute('aria-hidden', 'false');
+
+  var curVerEl = document.getElementById('vp-cur-ver');
+  var fwCur = document.getElementById('fw-cur-ver');
+  if (curVerEl && fwCur) curVerEl.textContent = fwCur.textContent || 'v1.0.11';
+
+  var searchIn = document.getElementById('vp-search-input');
+  if (searchIn) {
+    searchIn.value = '';
+    setTimeout(function(){ searchIn.focus(); }, 150);
+  }
+
+  loadRemoteReleases();
+}
+
+function closeVersionPicker() {
+  var backdrop = document.getElementById('version-picker-backdrop');
+  if (backdrop) {
+    backdrop.classList.remove('open');
+    backdrop.setAttribute('aria-hidden', 'true');
+  }
+}
+
+function loadRemoteReleases() {
+  var listEl = document.getElementById('vp-release-list');
+  var countEl = document.getElementById('vp-count-label');
+  if (listEl) {
+    listEl.innerHTML = '<div style="padding:30px 10px;text-align:center;color:var(--mut);font-family:var(--fm);font-size:11px">Querying GitHub Releases repository…</div>';
+  }
+
+  api('/api/system/update/releases').then(function(d) {
+    if (d && d.ok && Array.isArray(d.releases)) {
+      _allReleasesCache = d.releases;
+      renderReleaseList();
+    } else {
+      if (listEl) listEl.innerHTML = '<div style="padding:20px;text-align:center;color:var(--bad)">No releases found or failed to parse response.</div>';
+    }
+  }).catch(function(e) {
+    if (listEl) listEl.innerHTML = '<div style="padding:20px;text-align:center;color:var(--bad)">Failed to load releases: ' + escapeHtml(e.message) + '</div>';
+    if (countEl) countEl.textContent = 'Error';
+  });
+}
+
+function _updateVpFilterButtons() {
+  var bAll = document.getElementById('vp-filter-all');
+  var bStb = document.getElementById('vp-filter-stable');
+  var bCmp = document.getElementById('vp-filter-compat');
+  if (bAll) {
+    bAll.style.borderColor = _vpFilterMode === 'all' ? 'var(--acc)' : 'var(--brd)';
+    bAll.style.color = _vpFilterMode === 'all' ? 'var(--acc)' : 'var(--txt)';
+  }
+  if (bStb) {
+    bStb.style.borderColor = _vpFilterMode === 'stable' ? 'var(--acc)' : 'var(--brd)';
+    bStb.style.color = _vpFilterMode === 'stable' ? 'var(--acc)' : 'var(--txt)';
+  }
+  if (bCmp) {
+    bCmp.style.borderColor = _vpFilterMode === 'compat' ? 'var(--acc)' : 'var(--brd)';
+    bCmp.style.color = _vpFilterMode === 'compat' ? 'var(--acc)' : 'var(--txt)';
+  }
+}
+
+function renderReleaseList() {
+  var listEl = document.getElementById('vp-release-list');
+  var countEl = document.getElementById('vp-count-label');
+  var searchIn = document.getElementById('vp-search-input');
+  var q = (searchIn ? searchIn.value : '').trim().toLowerCase();
+
+  var filtered = _allReleasesCache.filter(function(r) {
+    if (_vpFilterMode === 'stable' && r.prerelease) return false;
+    if (_vpFilterMode === 'compat' && !r.has_binary) return false;
+    if (q) {
+      var matchTag = r.tag.toLowerCase().indexOf(q) !== -1;
+      var matchName = (r.name || '').toLowerCase().indexOf(q) !== -1;
+      var matchAge = (r.relative_age || '').toLowerCase().indexOf(q) !== -1;
+      var matchDate = (r.published_at || '').toLowerCase().indexOf(q) !== -1;
+      return matchTag || matchName || matchAge || matchDate;
+    }
+    return true;
+  });
+
+  if (countEl) countEl.textContent = filtered.length + ' release' + (filtered.length === 1 ? '' : 's') + ' available';
+
+  if (!listEl) return;
+  if (filtered.length === 0) {
+    listEl.innerHTML = '<div style="padding:30px 10px;text-align:center;color:var(--mut);font-family:var(--fm);font-size:11px">No matching releases found. Try adjusting your search query.</div>';
+    return;
+  }
+
+  listEl.innerHTML = '';
+  filtered.forEach(function(r, idx) {
+    var row = document.createElement('div');
+    row.style.background = 'rgba(6,12,24,0.7)';
+    row.style.border = '1px solid ' + (r.is_current ? 'rgba(0,255,200,0.35)' : 'var(--brd)');
+    row.style.borderRadius = '5px';
+    row.style.padding = '9px 12px';
+    row.style.display = 'flex';
+    row.style.justifyContent = 'space-between';
+    row.style.alignItems = 'center';
+    row.style.gap = '12px';
+
+    var left = document.createElement('div');
+    left.style.minWidth = '0';
+    left.style.flex = '1';
+
+    var headerRow = document.createElement('div');
+    headerRow.style.display = 'flex';
+    headerRow.style.alignItems = 'center';
+    headerRow.style.gap = '6px';
+    headerRow.style.flexWrap = 'wrap';
+
+    var tagSpan = document.createElement('span');
+    tagSpan.style.fontFamily = 'var(--fm)';
+    tagSpan.style.fontSize = '12px';
+    tagSpan.style.fontWeight = '700';
+    tagSpan.style.color = r.is_current ? 'var(--acc)' : 'var(--txt)';
+    tagSpan.textContent = r.tag;
+    headerRow.appendChild(tagSpan);
+
+    if (r.is_current) {
+      var badgeCur = document.createElement('span');
+      badgeCur.className = 'badge';
+      badgeCur.style.background = 'rgba(0,255,200,0.15)';
+      badgeCur.style.color = 'var(--acc)';
+      badgeCur.style.fontSize = '8.5px';
+      badgeCur.textContent = 'CURRENT';
+      headerRow.appendChild(badgeCur);
+    }
+    if (idx === 0 && !r.prerelease) {
+      var badgeLat = document.createElement('span');
+      badgeLat.className = 'badge';
+      badgeLat.style.background = 'rgba(0,255,100,0.15)';
+      badgeLat.style.color = 'var(--good)';
+      badgeLat.style.fontSize = '8.5px';
+      badgeLat.textContent = 'LATEST';
+      headerRow.appendChild(badgeLat);
+    }
+    if (r.prerelease) {
+      var badgePre = document.createElement('span');
+      badgePre.className = 'badge';
+      badgePre.style.background = 'rgba(255,170,0,0.15)';
+      badgePre.style.color = 'var(--warn)';
+      badgePre.style.fontSize = '8.5px';
+      badgePre.textContent = 'PRE-RELEASE';
+      headerRow.appendChild(badgePre);
+    }
+    if (r.has_binary) {
+      var badgeBin = document.createElement('span');
+      badgeBin.className = 'badge';
+      badgeBin.style.background = 'rgba(0,180,255,0.12)';
+      badgeBin.style.color = '#38bdf8';
+      badgeBin.style.fontSize = '8.5px';
+      badgeBin.textContent = 'STATIC MUSL';
+      headerRow.appendChild(badgeBin);
+    }
+
+    left.appendChild(headerRow);
+
+    var subRow = document.createElement('div');
+    subRow.style.fontSize = '9.5px';
+    subRow.style.color = 'var(--mut)';
+    subRow.style.marginTop = '3px';
+    subRow.style.fontFamily = 'var(--fm)';
+    var pubDate = r.published_at ? r.published_at.split('T')[0] : '';
+    subRow.textContent = (pubDate ? (pubDate + ' • ') : '') + r.relative_age + (r.name && r.name !== r.tag ? (' — ' + r.name) : '');
+    left.appendChild(subRow);
+
+    row.appendChild(left);
+
+    var right = document.createElement('div');
+    right.style.flexShrink = '0';
+
+    if (r.is_current) {
+      var actBtn = document.createElement('button');
+      actBtn.className = 'btn btn-sm';
+      actBtn.disabled = true;
+      actBtn.style.opacity = '0.4';
+      actBtn.style.fontSize = '9.5px';
+      actBtn.style.padding = '3px 8px';
+      actBtn.textContent = 'Active';
+      right.appendChild(actBtn);
+    } else {
+      var instBtn = document.createElement('button');
+      instBtn.className = 'btn btn-sm ' + (r.has_binary ? 'btn-ok' : 'btn-w');
+      instBtn.style.fontSize = '9.5px';
+      instBtn.style.padding = '3px 9px';
+      instBtn.textContent = 'Install ' + r.tag;
+      instBtn.onclick = function() {
+        closeVersionPicker();
+        _selectedVersionForUpdate = r.tag;
+        var ind = document.getElementById('fw-target-indicator');
+        var selVer = document.getElementById('fw-selected-ver');
+        if (ind && selVer) {
+          selVer.textContent = r.tag;
+          ind.style.display = 'block';
+        }
+        var applyBtn = document.getElementById('btn-apply-update');
+        if (applyBtn) applyBtn.textContent = 'Install ' + r.tag + ' Now';
+        applyBinaryUpdate(r.tag);
+      };
+      right.appendChild(instBtn);
+    }
+
+    row.appendChild(right);
+    listEl.appendChild(row);
+  });
+}
+
+function applyBinaryUpdate(customVer) {
+  var targetVer = customVer || _selectedVersionForUpdate || null;
+  var label = targetVer ? ('version ' + targetVer) : 'the latest AmarDNS binary';
+  uiConfirm('Download and hot-deploy ' + label + ' to /amardns (backing up current to /amardns.bak)? The server will seamlessly restart in-place via execve.', {
     title: 'FIRMWARE // LIVE UPDATE CONFIRMATION',
-    confirmText: 'START HOT-DEPLOY',
+    confirmText: targetVer ? ('INSTALL ' + targetVer) : 'START HOT-DEPLOY',
     type: 'accent'
   }, function(ok){
     if(!ok) return;
@@ -3736,11 +4014,14 @@ function applyBinaryUpdate() {
 
   _fwSetProgress(10, 'INITIALIZING OTA UPDATE…', 'Step 1/6: Handshake');
   _fwLog('Starting AmarDNS live firmware update pipeline...', 'var(--acc)');
+  if (targetVer) {
+    _fwLog('Selected target release: ' + targetVer, 'var(--warn)');
+  }
   _fwLog('Target architecture: Linux Musl Static (Zero-GC Edition)', '#94a3b8');
 
   setTimeout(function() {
     _fwSetProgress(25, 'QUERYING GITHUB RELEASES…', 'Step 2/6: Discovery');
-    _fwLog('Contacting GitHub Release API for latest binary & SHA256 checksum...', '#94a3b8');
+    _fwLog('Contacting GitHub Release API for ' + (targetVer || 'latest') + ' & SHA256 checksum...', '#94a3b8');
   }, 400);
 
   setTimeout(function() {
@@ -3750,7 +4031,8 @@ function applyBinaryUpdate() {
 
   toast('Downloading and verifying update…', 'wl', 8000);
 
-  api('/api/system/update', 'POST').then(function(d) {
+  var payload = targetVer ? { version: targetVer } : {};
+  api('/api/system/update', 'POST', payload).then(function(d) {
     _fwSetProgress(75, 'VERIFYING CHECKSUM & INTEGRITY…', 'Step 4/6: Verification');
     _fwLog('SHA-256 integrity check PASS: payload digest matches release.', 'var(--good)');
     _fwLog('Running pre-flight test: /amardns.download --verify -> AMARDNS_OK', 'var(--good)');
@@ -3777,13 +4059,14 @@ function applyBinaryUpdate() {
             if (curEl) { curEl.textContent = 'v' + chk.current_version; curEl.style.color = 'var(--good)'; }
             if (latEl) { latEl.textContent = chk.latest_version; }
 
-            toast('Upgraded to ' + chk.latest_version + ' successfully!', 'ok', 6000);
+            toast('Installed ' + (targetVer || chk.latest_version) + ' successfully!', 'ok', 6000);
             if (msg) {
               msg.style.display = 'block';
               msg.style.background = 'rgba(0,255,100,0.15)';
               msg.style.color = 'var(--good)';
-              msg.innerHTML = 'Successfully upgraded to <strong>' + chk.latest_version + '</strong> via in-place hot restart.';
+              msg.innerHTML = 'Successfully installed <strong>' + (targetVer || chk.latest_version) + '</strong> via in-place hot restart.';
             }
+            _resetSelectedVersion();
             _fwHidePanelAfterSuccess();
             setTimeout(function() { go(); }, 1500);
           }
@@ -4202,7 +4485,21 @@ on('btn-reset-cb','click',resetCB);
 on('btn-clear-sh','click',clearSH);
 on('btn-clear-inc','click',clearInc);
 on('btn-check-update','click',checkBinaryUpdate);
-on('btn-apply-update','click',applyBinaryUpdate);
+on('btn-apply-update','click',function(){ applyBinaryUpdate(); });
+on('btn-select-version','click',openVersionPicker);
+on('version-picker-close','click',closeVersionPicker);
+on('vp-btn-cancel','click',closeVersionPicker);
+on('vp-filter-all','click',function(){_vpFilterMode='all';_updateVpFilterButtons();renderReleaseList();});
+on('vp-filter-stable','click',function(){_vpFilterMode='stable';_updateVpFilterButtons();renderReleaseList();});
+on('vp-filter-compat','click',function(){_vpFilterMode='compat';_updateVpFilterButtons();renderReleaseList();});
+var _vpBackdrop=document.getElementById('version-picker-backdrop');
+if(_vpBackdrop){
+  _vpBackdrop.addEventListener('click',function(e){if(e.target===_vpBackdrop)closeVersionPicker();});
+}
+var _vpSearch=document.getElementById('vp-search-input');
+if(_vpSearch){
+  _vpSearch.addEventListener('input',renderReleaseList);
+}
 on('btn-rollback-update','click',rollbackBinaryUpdate);
 on('btn-clear-machinelog','click',function(){var b=$('machine-logbox');if(b)b.innerHTML='<span style="color:var(--mut)">Log view cleared.</span>';});
 var _mlb=document.getElementById('machine-logbox');
