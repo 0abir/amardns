@@ -7,7 +7,20 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-pub const DEFAULT_UPSTREAM_URL: &str =
+/// Opt-in upstream feed URL: only fetched when the operator explicitly sets
+/// UPSTREAM_FEED_URL or UPSTREAM_DNS_CONFIG_URL in the environment.
+/// The built-in candidate pool (all_default_candidate_configs) is always used as the
+/// secure fallback regardless of whether an external feed is configured.
+///
+/// NOTE: This constant is retained for operator reference only. It is NOT used by default.
+/// Setting it as a default would create a supply-chain risk if the hosting account were
+/// compromised. Operators who wish to use a remote feed must set UPSTREAM_FEED_URL explicitly.
+#[deprecated(
+    since = "1.0.11",
+    note = "Do not set this as the default. Use UPSTREAM_FEED_URL env var for opt-in remote feeds."
+)]
+#[allow(dead_code)]
+pub const LEGACY_UPSTREAM_URL: &str =
     "https://cdn.jsdelivr.net/gh/abir614/-@latest/dns-upstream.json";
 
 /// Official IANA Root Server Hints (13 Root Name Server clusters).
@@ -851,53 +864,65 @@ impl UpstreamPool {
     }
 
     pub async fn sync_and_rank(&self) -> Result<usize, String> {
-        let feed_url = std::env::var("UPSTREAM_DNS_CONFIG_URL")
+        // Only fetch from a remote URL if the operator has explicitly configured one.
+        // Falling back to a third-party CDN URL by default would create a supply-chain
+        // risk (e.g. if the hosting account were compromised). The built-in candidate
+        // pool is always used as the secure baseline.
+        let feed_url_opt = std::env::var("UPSTREAM_DNS_CONFIG_URL")
             .or_else(|_| std::env::var("UPSTREAM_FEED_URL"))
-            .unwrap_or_else(|_| DEFAULT_UPSTREAM_URL.to_string());
+            .ok()
+            .filter(|s| !s.trim().is_empty());
 
         let mut cfgs = Self::default_upstreams_config();
 
-        match self
-            .client
-            .get(&feed_url)
-            .timeout(Duration::from_millis(4000))
-            .send()
-            .await
-        {
-            Ok(resp) if resp.status().is_success() => {
-                if let Ok(payload) = resp.json::<UpstreamPayload>().await {
-                    let fetched = match payload {
-                        UpstreamPayload::Wrapped { dns_over_https } => dns_over_https,
-                        UpstreamPayload::Direct(list) => list,
-                    };
-                    let valid_fetched: Vec<_> = fetched
-                        .into_iter()
-                        .filter(|c| c.url.starts_with("https://"))
-                        .collect();
-                    if !valid_fetched.is_empty() {
-                        tracing::info!(
-                            "[upstream] Loaded {} candidate upstreams from {}",
-                            valid_fetched.len(),
-                            feed_url
-                        );
-                        cfgs = valid_fetched;
+        if let Some(feed_url) = feed_url_opt {
+            match self
+                .client
+                .get(&feed_url)
+                .timeout(Duration::from_millis(4000))
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    if let Ok(payload) = resp.json::<UpstreamPayload>().await {
+                        let fetched = match payload {
+                            UpstreamPayload::Wrapped { dns_over_https } => dns_over_https,
+                            UpstreamPayload::Direct(list) => list,
+                        };
+                        let valid_fetched: Vec<_> = fetched
+                            .into_iter()
+                            .filter(|c| c.url.starts_with("https://"))
+                            .collect();
+                        if !valid_fetched.is_empty() {
+                            tracing::info!(
+                                "[upstream] Loaded {} candidate upstreams from {}",
+                                valid_fetched.len(),
+                                feed_url
+                            );
+                            cfgs = valid_fetched;
+                        }
                     }
                 }
+                Ok(resp) => {
+                    tracing::warn!(
+                        "[upstream] Upstream feed URL {} returned HTTP {}; using built-in fallback upstreams",
+                        feed_url,
+                        resp.status()
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "[upstream] Failed to fetch upstreams from {}: {}; using built-in fallback upstreams",
+                        feed_url,
+                        e
+                    );
+                }
             }
-            Ok(resp) => {
-                tracing::warn!(
-                    "[upstream] Upstream feed URL {} returned HTTP {}; using default fallback upstreams",
-                    feed_url,
-                    resp.status()
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "[upstream] Failed to fetch upstreams from {}: {}; using default fallback upstreams",
-                    feed_url,
-                    e
-                );
-            }
+        } else {
+            tracing::debug!(
+                "[upstream] No UPSTREAM_FEED_URL configured; using built-in hardened upstream pool ({} candidates)",
+                cfgs.len()
+            );
         }
 
         *self.candidates.write() = cfgs.clone();

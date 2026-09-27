@@ -1,0 +1,37 @@
+[package]
+name = "amardns-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.amardns]
+path = ".."
+
+# Cargo.toml for fuzz targets: each fuzz target is a [[bin]] entry
+[[bin]]
+name = "fuzz_dns_parser"
+path = "fuzz_targets/fuzz_dns_parser.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_bloom"
+path = "fuzz_targets/fuzz_bloom.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_dnssec"
+path = "fuzz_targets/fuzz_dnssec.rs"
+test = false
+doc = false
+
+[profile.release]
+panic = "abort"
+opt-level = 3

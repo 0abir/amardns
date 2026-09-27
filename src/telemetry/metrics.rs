@@ -810,9 +810,9 @@ pub fn get_total_mem_cap_mb() -> f64 {
 }
 
 /// Reads current process Resident Set Size (RSS) in megabytes from /proc/self/statm on Linux.
-/// Includes configurable BASE_MEM baseline overhead (default 40MB) to accurately account for system/container/kernel allocation.
+/// Returns the true measured RSS without any additive offset.
+/// Use this for Prometheus /metrics reporting and the dashboard display.
 pub fn get_process_rss_mb() -> f64 {
-    let base = get_base_mem_mb();
     #[cfg(target_os = "linux")]
     {
         if let Ok(s) = std::fs::read_to_string("/proc/self/statm") {
@@ -820,11 +820,23 @@ pub fn get_process_rss_mb() -> f64 {
             if parts.len() > 1 {
                 let resident_pages: f64 = parts[1].parse().unwrap_or(0.0);
                 let raw_mb = resident_pages * 4096.0 / 1_048_576.0;
-                return (((raw_mb + base) * 10.0).round()) / 10.0;
+                return (raw_mb * 10.0).round() / 10.0;
             }
         }
     }
-    base
+    0.0
+}
+
+/// Returns RSS for use by the dynamic memory governor's zone threshold comparisons.
+/// Adds the configurable BASE_MEM baseline (default 40 MB) to account for memory that
+/// the allocator has committed but /proc/self/statm does not count as resident
+/// (e.g. mmap-backed moka cache shards, jemalloc retained pages, etc.).
+/// Do NOT use this for metrics reporting — it intentionally over-counts to give the
+/// governor a conservative headroom estimate.
+pub fn get_governor_rss_mb() -> f64 {
+    let base = get_base_mem_mb();
+    let raw = get_process_rss_mb();
+    ((raw + base) * 10.0).round() / 10.0
 }
 
 #[cfg(test)]

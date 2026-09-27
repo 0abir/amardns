@@ -491,7 +491,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         let mut last_warning_time = std::time::Instant::now();
         loop {
             interval.tick().await;
-            let rss_mb = crate::telemetry::metrics::get_process_rss_mb();
+            let rss_mb = crate::telemetry::metrics::get_governor_rss_mb();
             if rss_mb >= red_zone {
                 // RED ZONE: Emergency shedding
                 tracing::warn!(
@@ -510,7 +510,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                     .await
                     .ok();
                 crate::telemetry::metrics::trim_process_memory();
-                let post_rss = crate::telemetry::metrics::get_process_rss_mb();
+                let post_rss = crate::telemetry::metrics::get_governor_rss_mb();
                 tracing::info!(
                     "[mem-governor] Emergency shedding complete. RSS dropped to {:.1} MB. {:.1} MB ceiling preserved.",
                     post_rss,

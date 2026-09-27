@@ -17,7 +17,7 @@
 
 **AmarDNS v1.0.3** is an enterprise-grade, asynchronous recursive DNS security resolver written in pure **Rust** (Edition 2024). It delivers high-throughput **DNS-over-HTTPS (DoH, RFC 8484)**, **DNS-over-HTTP/3 (DoH3, RFC 9114)**, **DNS-over-QUIC (DoQ, RFC 9250)**, **DNS-over-TLS (DoT, RFC 7858)**, and standard **UDP/TCP Port 53 (RFC 1035)** endpoints.
 
-Engineered with a **zero garbage-collection architecture**, AmarDNS indexes over **900,000 malicious domains in just 4 MB of RAM** and delivers sub-millisecond in-memory cache resolutions with automatic upstream hedging, cryptographic DNSSEC validation, singleflight deduplication, zstd-compressed response caching, and an 8D online neural threat engine.
+Engineered with a **zero garbage-collection architecture**, AmarDNS indexes over **900,000 malicious domains in just 4 MB of RAM** and delivers sub-millisecond in-memory cache resolutions with automatic upstream hedging, cryptographic DNSSEC validation, singleflight deduplication, zstd-compressed response caching, and an 8-feature online heuristic threat classifier (Shannon entropy DGA detection, Markov bigram analysis, and logistic regression).
 
 Powered by modern async infrastructure:
 - **Quinn 0.11 & h3 0.0.8** pure Rust QUIC and HTTP/3 transport engine with zero head-of-line blocking.
@@ -72,7 +72,7 @@ Incoming Query (DoH / DoH3 / DoQ / DoT / Plain 53)
  └─────────────────────────────┬─────────────────────────────┘
                                ▼ No Match
  ┌───────────────────────────────────────────────────────────┐
- │ 6. AI 8D Neural + Markov & Shannon DGA Engine (Priority 5)│── Match ──► BLOCK (Intercepts zero-day algorithmic threats)
+ │ 6. Heuristic Threat Classifier: 8-feature logistic regression + Markov + Shannon DGA │── Match ──► BLOCK (Intercepts zero-day algorithmic threats)
  └─────────────────────────────┬─────────────────────────────┘
                                ▼ No Match
  ┌───────────────────────────────────────────────────────────┐
@@ -127,7 +127,7 @@ Incoming Query (DoH / DoH3 / DoQ / DoT / Plain 53)
 2. **Exact Block Hole-Punch (Priority 2)**: Explicit subdomain blocks punch directly through broad wildcard whitelists (e.g., `*.apple.com` is whitelisted, but `analytics.apple.com` is explicitly blocked, while `apple.com` and `icloud.com` remain allowed).
 3. **Wildcard Whitelist (Priority 3)**: Approves all remaining subdomains under an authorized apex domain.
 4. **Custom Wildcard Blocklist (Priority 4)**: User-defined blocking rules.
-5. **AI Heuristics & Neural Brain (Priority 5)**: Real-time DGA Shannon entropy ($H > 3.65$), homoglyph Levenshtein distance, and 8-feature online neural classification.
+5. **Heuristic Threat Classifier (Priority 5)**: Real-time DGA Shannon entropy ($H > 3.65$), homoglyph Levenshtein distance, and 8-feature online logistic regression (SGD, lr=0.01) with a Markov bigram table for sequence-aware domain classification.
 6. **Global Threat Feed Bloom Filter (Priority 6)**: Suffix-walking verification against 900,000+ malicious domains.
 
 ### 4. Singleflight Coalescing & Hedged Upstream Racing

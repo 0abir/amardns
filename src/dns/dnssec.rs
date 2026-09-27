@@ -710,6 +710,140 @@ pub fn canonical_wire_name(domain: &str) -> Vec<u8> {
     out
 }
 
+/// A single resource record extracted from a DNS wire response for RRset canonicalization.
+#[derive(Debug, Clone)]
+struct RawResourceRecord {
+    /// Owner name in canonical lowercased wire format
+    owner_wire: Vec<u8>,
+    /// RR TYPE
+    rtype: u16,
+    /// RR CLASS
+    rclass: u16,
+    /// RDATA bytes (raw, not decompressed)
+    rdata: Vec<u8>,
+}
+
+/// Extracts all resource records of `covered_type` whose owner name (case-insensitively)
+/// matches `signer_name` from the answer, authority, and additional sections of a DNS wire packet.
+/// Returns them as raw RR structs for canonical ordering (RFC 4034 §6.3).
+fn extract_covered_rrset(wire: &[u8], covered_type: u16, owner_name: &str) -> Vec<RawResourceRecord> {
+    let mut records = Vec::new();
+
+    if wire.len() < 12 {
+        return records;
+    }
+
+    let qdcount = u16::from_be_bytes([wire[4], wire[5]]) as usize;
+    let ancount = u16::from_be_bytes([wire[6], wire[7]]) as usize;
+    let nscount = u16::from_be_bytes([wire[8], wire[9]]) as usize;
+    let arcount = u16::from_be_bytes([wire[10], wire[11]]) as usize;
+
+    let mut pos = 12;
+
+    // Skip question section
+    for _ in 0..qdcount {
+        pos = match crate::dns::parser::skip_dns_name(wire, pos) {
+            Some(p) => p + 4,
+            None => return records,
+        };
+        if pos > wire.len() {
+            return records;
+        }
+    }
+
+    let canonical_owner = canonical_wire_name(owner_name);
+
+    let total_rrs = ancount + nscount + arcount;
+    for _ in 0..total_rrs {
+        if pos >= wire.len() {
+            break;
+        }
+
+        let (rr_name, next_p) = match crate::dns::parser::parse_name_with_offset(wire, pos) {
+            Some(res) => res,
+            None => break,
+        };
+        pos = next_p;
+
+        if pos + 10 > wire.len() {
+            break;
+        }
+
+        let rtype  = u16::from_be_bytes([wire[pos],     wire[pos + 1]]);
+        let rclass = u16::from_be_bytes([wire[pos + 2], wire[pos + 3]]);
+        let rdlen  = u16::from_be_bytes([wire[pos + 8], wire[pos + 9]]) as usize;
+        pos += 10;
+
+        if pos + rdlen > wire.len() {
+            break;
+        }
+
+        let rdata = &wire[pos..pos + rdlen];
+        pos += rdlen;
+
+        // Include only RRs of the covered type whose owner matches (case-insensitive)
+        if rtype == covered_type
+            && rr_name.trim_end_matches('.').eq_ignore_ascii_case(owner_name.trim_end_matches('.'))
+        {
+            records.push(RawResourceRecord {
+                owner_wire: canonical_owner.clone(),
+                rtype,
+                rclass,
+                rdata: rdata.to_vec(),
+            });
+        }
+    }
+
+    // RFC 4034 §6.3: sort RRs by their wire-format RDATA (canonical ordering)
+    records.sort_by(|a, b| a.rdata.cmp(&b.rdata));
+    records.dedup_by(|a, b| a.rdata == b.rdata); // de-duplicate identical RRs
+
+    records
+}
+
+/// Builds the RFC 4034 §3.1.8.1 signed data buffer for RRSIG verification:
+///   RRSIG_RDATA (header only, without the signature field)
+///   || canonical(signer_name)
+///   || for each RR in canonical(covered_rrset):
+///        canonical(owner_name) || TYPE(2) || CLASS(2) || original_TTL(4) || RDLENGTH(2) || RDATA
+///
+/// This is the data that was actually signed by the zone's private key.
+fn build_rrsig_signed_data(
+    rrsig: &RrsigRecord,
+    rrset: &[RawResourceRecord],
+) -> Vec<u8> {
+    // RRSIG RDATA header: type_covered(2) + algorithm(1) + labels(1) + original_ttl(4)
+    //                    + sig_expiration(4) + sig_inception(4) + key_tag(2) = 18 bytes
+    // (signer name is appended separately in canonical wire form)
+    let signer_wire = canonical_wire_name(&rrsig.signer_name);
+    let orig_ttl_bytes = rrsig.original_ttl.to_be_bytes();
+
+    let mut cap = rrsig.rdata_header_bytes.len() + signer_wire.len();
+    for rr in rrset {
+        cap += rr.owner_wire.len() + 2 + 2 + 4 + 2 + rr.rdata.len();
+    }
+
+    let mut out = Vec::with_capacity(cap);
+
+    // RRSIG RDATA header (18 bytes — covers up to key_tag, NOT signer name, NOT signature)
+    out.extend_from_slice(&rrsig.rdata_header_bytes);
+
+    // Canonical wire-format signer name
+    out.extend_from_slice(&signer_wire);
+
+    // Each RR in the covered RRset, in canonical order
+    for rr in rrset {
+        out.extend_from_slice(&rr.owner_wire);                          // owner name (canonical)
+        out.extend_from_slice(&rr.rtype.to_be_bytes());                 // TYPE
+        out.extend_from_slice(&rr.rclass.to_be_bytes());                // CLASS
+        out.extend_from_slice(&orig_ttl_bytes);                         // original TTL (from RRSIG)
+        out.extend_from_slice(&(rr.rdata.len() as u16).to_be_bytes());  // RDLENGTH
+        out.extend_from_slice(&rr.rdata);                               // RDATA
+    }
+
+    out
+}
+
 /// Hex decoding helper
 pub fn hex_decode(hex_str: &str) -> Result<Vec<u8>, &'static str> {
     let clean = hex_str.trim();
@@ -1418,9 +1552,21 @@ pub fn validate_dnssec(wire: &[u8], now_epoch: Option<u64>) -> DnssecValidationD
                 .iter()
                 .find(|k| k.calculate_key_tag() == rrsig.key_tag)
             {
-                let mut signed_data = Vec::with_capacity(rrsig.rdata_header_bytes.len() + 64);
-                signed_data.extend_from_slice(&rrsig.rdata_header_bytes);
-                signed_data.extend_from_slice(&canonical_wire_name(&rrsig.signer_name));
+                // RFC 4034 §3.1.8.1: extract the RRset covered by this RRSIG and build the
+                // canonical signed-data blob = RRSIG_RDATA_header || signer_name || covered_rrset
+                let covered_rrset = extract_covered_rrset(wire, rrsig.type_covered, &rrsig.name);
+                let signed_data = if covered_rrset.is_empty() {
+                    // Fallback for self-referential DNSKEY RRsets and any edge case where the
+                    // covered records could not be located in this single response packet.
+                    // We still verify the header/signer structure to catch obviously bad sigs.
+                    let mut sd =
+                        Vec::with_capacity(rrsig.rdata_header_bytes.len() + 64);
+                    sd.extend_from_slice(&rrsig.rdata_header_bytes);
+                    sd.extend_from_slice(&canonical_wire_name(&rrsig.signer_name));
+                    sd
+                } else {
+                    build_rrsig_signed_data(rrsig, &covered_rrset)
+                };
 
                 let is_valid = verify_dnssec_signature(
                     rrsig.algorithm,
