@@ -1907,6 +1907,35 @@ pub async fn perform_rollback() -> Result<String, String> {
 }
 
 /// Removes a software binary or version archive.
+/// Discovers recovery candidates from a directory, prioritizing the newest local /amardns-* archive,
+/// then /amardns.bak fallback.
+pub fn find_recovery_candidate(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if let Some(n) = p.file_name().and_then(|s| s.to_str()) {
+                if n.starts_with("amardns-") && p.is_file() {
+                    candidates.push(p);
+                }
+            }
+        }
+    }
+    candidates.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+    candidates.reverse();
+
+    if let Some(cand) = candidates.first() {
+        Some(cand.clone())
+    } else {
+        let backup = dir.join("amardns.bak");
+        if backup.is_file() {
+            Some(backup)
+        } else {
+            None
+        }
+    }
+}
+
 /// SAFETY WATCHDOG: If the running software (/amardns) is removed,
 /// immediately restores from the newest local version or /amardns.bak and restarts.
 pub async fn remove_software_binary(target_name: &str) -> Result<String, String> {
@@ -1944,26 +1973,15 @@ pub async fn remove_software_binary(target_name: &str) -> Result<String, String>
         tracing::warn!("[watchdog] Active software /amardns was targeted for removal! Engaging safety watchdog recovery...");
         let _ = std::fs::remove_file(&target_path);
 
-        // Search for newest local /amardns-* or /amardns.bak
-        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-        if let Ok(entries) = std::fs::read_dir("/") {
-            for e in entries.flatten() {
-                let p = e.path();
-                if let Some(n) = p.file_name().and_then(|s| s.to_str()) {
-                    if n.starts_with("amardns-") && p.is_file() {
-                        candidates.push(p);
-                    }
-                }
-            }
-        }
-        candidates.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
-        candidates.reverse();
-
         let backup = std::path::Path::new("/amardns.bak");
-        let (recovery_src, recovery_desc) = if let Some(cand) = candidates.first() {
-            (cand.clone(), format!("local newer archive '{}'", cand.display()))
-        } else if backup.is_file() {
-            (backup.to_path_buf(), "fallback backup '/amardns.bak'".to_string())
+        let (recovery_src, recovery_desc) = if let Some(cand) = find_recovery_candidate(std::path::Path::new("/")) {
+            let is_bak = cand == backup;
+            let desc = if is_bak {
+                "fallback backup '/amardns.bak'".to_string()
+            } else {
+                format!("local newer archive '{}'", cand.display())
+            };
+            (cand, desc)
         } else if let Ok(exe) = std::env::current_exe() {
             (exe.clone(), format!("running process image '{}'", exe.display()))
         } else {
@@ -2377,6 +2395,36 @@ mod tests {
         let invalid = format_relative_time_str("not_a_date");
         assert_eq!(invalid, "unknown");
     }
+
+    #[test]
+    fn test_safety_watchdog_auto_recovery_candidate_resolution() {
+        let temp_dir = std::env::temp_dir().join(format!("amardns_wd_test_{}_{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        // 1. In empty directory: no candidate
+        assert_eq!(find_recovery_candidate(&temp_dir), None);
+
+        // 2. Only fallback backup exists: selects amardns.bak
+        let bak_path = temp_dir.join("amardns.bak");
+        let _ = std::fs::write(&bak_path, b"backup binary content");
+        assert_eq!(find_recovery_candidate(&temp_dir), Some(bak_path.clone()));
+
+        // 3. Newer archive exists: prioritizes newer amardns-v1.0.10 over amardns.bak
+        let v1_path = temp_dir.join("amardns-v1.0.10");
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        let _ = std::fs::write(&v1_path, b"v1.0.10 binary content");
+        assert_eq!(find_recovery_candidate(&temp_dir), Some(v1_path.clone()));
+
+        // 4. Even newer archive added: prioritizes newest
+        let v2_path = temp_dir.join("amardns-v1.0.11");
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        let _ = std::fs::write(&v2_path, b"v1.0.11 binary content");
+        assert_eq!(find_recovery_candidate(&temp_dir), Some(v2_path.clone()));
+
+        // 5. Cleanup
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 }
+
 
 

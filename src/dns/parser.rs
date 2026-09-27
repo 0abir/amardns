@@ -2046,4 +2046,69 @@ mod extra_tests {
         // TC bit set (byte 2 bit 1)
         assert_ne!(res_trunc[2] & 0x02, 0);
     }
+
+    #[test]
+    fn test_parse_name_malicious_compression_pointer_loops_and_bounds() {
+        // 1. Direct cyclic pointer: offset 12 has [0xC0, 0x0C] (points to itself)
+        let mut loop_wire = vec![0u8; 12];
+        loop_wire.extend_from_slice(&[0xc0, 0x0c]);
+        assert_eq!(
+            parse_name_with_offset(&loop_wire, 12),
+            None,
+            "Direct cyclic pointer must be rejected safely"
+        );
+
+        // 2. Ping-pong pointer loop: offset 12 -> 14, offset 14 -> 12
+        let mut pingpong = vec![0u8; 12];
+        pingpong.extend_from_slice(&[0xc0, 0x0e, 0xc0, 0x0c]);
+        assert_eq!(
+            parse_name_with_offset(&pingpong, 12),
+            None,
+            "Ping-pong cyclic pointer loop must be rejected safely"
+        );
+
+        // 3. Out-of-bounds pointer: points to byte 250 in a 14-byte packet
+        let mut oob = vec![0u8; 12];
+        oob.extend_from_slice(&[0xc0, 0xfa]);
+        assert_eq!(
+            parse_name_with_offset(&oob, 12),
+            None,
+            "Out-of-bounds compression pointer must return None"
+        );
+
+        // 4. Overlong label length: byte specifies length 64 (> 63 limit per RFC 1035 §2.3.4)
+        let mut overlong_label = vec![0u8; 12];
+        overlong_label.push(64); // invalid label length
+        overlong_label.extend_from_slice(&[b'a'; 64]);
+        overlong_label.push(0);
+        assert_eq!(
+            parse_name_with_offset(&overlong_label, 12),
+            None,
+            "Labels exceeding 63 bytes must be rejected"
+        );
+
+        // 5. Valid RFC 1035 multi-hop compression pointer traversal:
+        // Position 12: "example" (7 bytes) + "com" (3 bytes) + 0 (end of root)
+        // Position 25: "api" (3 bytes) + pointer to position 12 (0xC0, 0x0C)
+        let mut valid_compressed = vec![0u8; 12];
+        // "example.com"
+        valid_compressed.push(7);
+        valid_compressed.extend_from_slice(b"example");
+        valid_compressed.push(3);
+        valid_compressed.extend_from_slice(b"com");
+        valid_compressed.push(0); // pos 25
+
+        // "api" + pointer to 12
+        let api_pos = valid_compressed.len();
+        valid_compressed.push(3);
+        valid_compressed.extend_from_slice(b"api");
+        valid_compressed.extend_from_slice(&[0xc0, 0x0c]); // pointer to example.com
+
+        let parsed = parse_name_with_offset(&valid_compressed, api_pos);
+        assert!(parsed.is_some());
+        let (name, next_pos) = parsed.unwrap();
+        assert_eq!(name, "api.example.com");
+        assert_eq!(next_pos, api_pos + 1 + 3 + 2);
+    }
 }
+
