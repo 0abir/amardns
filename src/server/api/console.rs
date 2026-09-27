@@ -1723,7 +1723,11 @@ mod tests {
         assert_eq!(status, "error");
         assert!(out.contains("Syntax: rm"));
 
-        let (out, status) = execute_command(&state, "rm nonexistent_binary_file_abc123.bak").await;
+        let (out, status) = execute_command(&state, "rm other_file_outside.bak").await;
+        assert_eq!(status, "error");
+        assert!(out.contains("Security restriction"));
+
+        let (out, status) = execute_command(&state, "rm amardns-nonexistent_file_abc123.bak").await;
         assert_eq!(status, "error");
         assert!(out.contains("not found"));
     }

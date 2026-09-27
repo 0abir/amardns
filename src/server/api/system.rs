@@ -1915,11 +1915,20 @@ pub async fn remove_software_binary(target_name: &str) -> Result<String, String>
         return Err("Specify binary to remove (e.g. 'amardns.bak', 'amardns-1.0.10')".to_string());
     }
 
+    if clean.contains("..") {
+        return Err("Security restriction: path traversal sequences ('..') are strictly disallowed.".to_string());
+    }
+
     let target_path = if clean.starts_with('/') {
         std::path::PathBuf::from(clean)
     } else {
         std::path::PathBuf::from(format!("/{}", clean))
     };
+
+    let file_name = target_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if !file_name.starts_with("amardns") {
+        return Err(format!("Security restriction: can only remove AmarDNS software binaries (must begin with 'amardns'), rejected '{}'", file_name));
+    }
 
     if !target_path.exists() {
         let rel_path = std::path::Path::new(clean);
@@ -2146,10 +2155,14 @@ pub async fn perform_download_and_install(target_version: Option<&str>) -> Resul
 
     let (release_url, is_specific) = match target_version {
         Some(v) if !v.trim().is_empty() && !v.eq_ignore_ascii_case("latest") => {
-            let clean_tag = if v.starts_with('v') {
-                v.trim().to_string()
+            let trimmed = v.trim();
+            if !trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_') {
+                return Err("Security restriction: invalid characters in version tag. Only alphanumeric, '.', '-', and '_' are permitted.".to_string());
+            }
+            let clean_tag = if trimmed.starts_with('v') {
+                trimmed.to_string()
             } else {
-                format!("v{}", v.trim())
+                format!("v{}", trimmed)
             };
             (format!("https://api.github.com/repos/0abir/amardns/releases/tags/{}", clean_tag), true)
         }
@@ -2326,9 +2339,26 @@ mod tests {
         assert!(err_empty.is_err());
         assert!(err_empty.unwrap_err().contains("Specify binary to remove"));
 
-        let err_not_found = remove_software_binary("nonexistent_binary_test_123.bak").await;
+        // Path traversal protection
+        let err_traversal = remove_software_binary("../../../etc/shadow").await;
+        assert!(err_traversal.is_err());
+        assert!(err_traversal.unwrap_err().contains("path traversal"));
+
+        // Restricted to amardns files only
+        let err_non_amardns = remove_software_binary("/etc/passwd").await;
+        assert!(err_non_amardns.is_err());
+        assert!(err_non_amardns.unwrap_err().contains("Security restriction"));
+
+        let err_not_found = remove_software_binary("amardns-nonexistent-123.bak").await;
         assert!(err_not_found.is_err());
         assert!(err_not_found.unwrap_err().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_perform_download_tag_sanitization() {
+        let err_invalid_chars = perform_download_and_install(Some("v1.0.0;rm -rf /")).await;
+        assert!(err_invalid_chars.is_err());
+        assert!(err_invalid_chars.unwrap_err().contains("Security restriction: invalid characters"));
     }
 
     #[test]
