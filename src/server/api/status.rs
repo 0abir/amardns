@@ -319,6 +319,18 @@ pub async fn prometheus_metrics_handler(
         healthy_up
     );
 
+    let rss_mb = crate::telemetry::metrics::get_process_rss_mb();
+    gauge!(
+        "amardns_process_rss_mb",
+        "Process resident set size in megabytes",
+        rss_mb
+    );
+    gauge!(
+        "amardns_process_resident_memory_bytes",
+        "Process resident set size in bytes",
+        (rss_mb * 1024.0 * 1024.0) as u64
+    );
+
     out.push_str("# HELP amardns_latency_bucket DNS resolution latency histogram\n");
     out.push_str("# TYPE amardns_latency_bucket counter\n");
     out.push_str(&format!("amardns_latency_bucket{{le=\"1\"}} {}\n", lat_s1));

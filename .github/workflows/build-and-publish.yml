@@ -85,7 +85,7 @@ jobs:
             echo ""
             echo "---"
             echo "**Release Tag**: \`$TARGET_TAG\`"
-            echo "**Built for**: Linux x86_64 (Musl static, zero-GC, Z+ security)"
+            echo "**Built for**: Linux x86_64 & AArch64/ARM64 (Musl static, zero-GC, Z+ security)"
             echo "**OTA Hot-Deploy Ready**: Compatible with in-place \`execve\` dashboard firmware updater."
           } > release_notes.md
 
@@ -153,18 +153,29 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Extract static binary from container
+      - name: Extract static binaries from multi-arch container
         run: |
-          docker pull ghcr.io/${{ github.repository }}:latest
-          CID=$(docker create ghcr.io/${{ github.repository }}:latest)
-          docker cp "$CID":/amardns ./amardns
-          docker rm -v "$CID"
+          # 1. Extract and verify AMD64 static binary
+          docker pull --platform linux/amd64 ghcr.io/${{ github.repository }}:latest
+          CID_AMD=$(docker create --platform linux/amd64 ghcr.io/${{ github.repository }}:latest)
+          docker cp "$CID_AMD":/amardns ./amardns
+          docker rm -v "$CID_AMD"
           chmod +x ./amardns
-          # Pre-release automated verification test
           ./amardns --verify
           tar -czvf amardns-linux-amd64.tar.gz amardns
           sha256sum amardns > amardns.sha256
           sha256sum amardns-linux-amd64.tar.gz > amardns-linux-amd64.tar.gz.sha256
+
+          # 2. Extract and verify ARM64 static binary (via QEMU)
+          docker pull --platform linux/arm64 ghcr.io/${{ github.repository }}:latest
+          CID_ARM=$(docker create --platform linux/arm64 ghcr.io/${{ github.repository }}:latest)
+          docker cp "$CID_ARM":/amardns ./amardns-arm64
+          docker rm -v "$CID_ARM"
+          chmod +x ./amardns-arm64
+          ./amardns-arm64 --verify
+          tar -czvf amardns-linux-arm64.tar.gz amardns-arm64
+          sha256sum amardns-arm64 > amardns-arm64.sha256
+          sha256sum amardns-linux-arm64.tar.gz > amardns-linux-arm64.tar.gz.sha256
 
       - name: Publish or Update GitHub Release
         env:
@@ -173,13 +184,24 @@ jobs:
           VERSION="${{ steps.versioning.outputs.version }}"
           echo "Publishing GitHub Release: $VERSION"
 
+          RELEASE_ASSETS=(
+            ./amardns
+            ./amardns-linux-amd64.tar.gz
+            ./amardns.sha256
+            ./amardns-linux-amd64.tar.gz.sha256
+            ./amardns-arm64
+            ./amardns-linux-arm64.tar.gz
+            ./amardns-arm64.sha256
+            ./amardns-linux-arm64.tar.gz.sha256
+          )
+
           if gh release view "$VERSION" >/dev/null 2>&1; then
             echo "Release $VERSION already exists. Uploading assets and updating notes..."
-            gh release upload "$VERSION" ./amardns ./amardns-linux-amd64.tar.gz ./amardns.sha256 ./amardns-linux-amd64.tar.gz.sha256 --clobber
+            gh release upload "$VERSION" "${RELEASE_ASSETS[@]}" --clobber
             gh release edit "$VERSION" --title "AmarDNS $VERSION" --notes-file release_notes.md --latest
           else
             echo "Creating release $VERSION..."
-            gh release create "$VERSION" ./amardns ./amardns-linux-amd64.tar.gz ./amardns.sha256 ./amardns-linux-amd64.tar.gz.sha256 \
+            gh release create "$VERSION" "${RELEASE_ASSETS[@]}" \
               --title "AmarDNS $VERSION" \
               --notes-file release_notes.md \
               --generate-notes \

@@ -1970,4 +1970,88 @@ mod tests {
         // Querying for A (1) -> NODATA proof is invalid (type exists)
         assert!(!verify_nsec3_nodata(existing, 1, &nsec3_list));
     }
+
+    #[test]
+    fn test_canonical_wire_name_rfc4034() {
+        assert_eq!(canonical_wire_name("."), vec![0]);
+        assert_eq!(canonical_wire_name(""), vec![0]);
+        assert_eq!(
+            canonical_wire_name("example.com"),
+            vec![7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0]
+        );
+        assert_eq!(
+            canonical_wire_name("ExAmPlE.CoM."),
+            vec![7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0]
+        );
+        assert_eq!(
+            canonical_wire_name("a.b.c"),
+            vec![1, b'a', 1, b'b', 1, b'c', 0]
+        );
+    }
+
+    #[test]
+    fn test_build_rrsig_signed_data_rfc4034() {
+        let dummy_header = vec![0x00, 0x01, 0x0d, 0x02, 0x00, 0x00, 0x0e, 0x10,
+                                0x66, 0x00, 0x00, 0x00, 0x65, 0x00, 0x00, 0x00, 0x12, 0x34];
+        let rrsig = RrsigRecord {
+            name: "example.com".to_string(),
+            type_covered: 1, // A
+            algorithm: DnssecAlgorithm::EcdsaP256Sha256,
+            labels: 2,
+            original_ttl: 3600,
+            sig_expiration: 0x66000000,
+            sig_inception: 0x65000000,
+            key_tag: 0x1234,
+            signer_name: "example.com".to_string(),
+            signature: vec![0xaa, 0xbb],
+            rdata_header_bytes: dummy_header.clone(),
+        };
+
+        let rr = RawResourceRecord {
+            owner_wire: canonical_wire_name("example.com"),
+            rtype: 1, // A
+            rclass: 1, // IN
+            rdata: vec![93, 184, 216, 34], // 93.184.216.34
+        };
+
+        let signed_data = build_rrsig_signed_data(&rrsig, &[rr]);
+        // Signed data must begin with the 18-byte RRSIG header
+        assert_eq!(&signed_data[..18], &dummy_header[..]);
+        // Then canonical wire signer name (\x07example\x03com\x00 = 13 bytes)
+        let signer_wire = canonical_wire_name("example.com");
+        assert_eq!(&signed_data[18..18 + signer_wire.len()], &signer_wire[..]);
+        // Total length must equal header + signer + owner + type(2) + class(2) + ttl(4) + rdlen(2) + rdata(4)
+        let expected_len = 18 + signer_wire.len() + signer_wire.len() + 2 + 2 + 4 + 2 + 4;
+        assert_eq!(signed_data.len(), expected_len);
+    }
+
+    #[test]
+    fn test_extract_covered_rrset_and_deduplication() {
+        // Build a mock DNS wire response with 1 question and 2 A records for example.com
+        let mut wire = Vec::new();
+        // Header: ID=0x1234, Flags=0x8180 (response, no error), QD=1, AN=2, NS=0, AR=0
+        wire.extend_from_slice(&[0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00]);
+        // Question: example.com, type A (1), class IN (1)
+        wire.extend_from_slice(&[0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00]);
+        wire.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+        // Answer 1: example.com, type A, class IN, TTL 300, rdlen 4, IP 1.2.3.4
+        wire.extend_from_slice(&[0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00]);
+        wire.extend_from_slice(&[0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x04, 1, 2, 3, 4]);
+        // Answer 2: example.com, type A, class IN, TTL 300, rdlen 4, IP 1.2.3.5
+        wire.extend_from_slice(&[0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00]);
+        wire.extend_from_slice(&[0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x04, 1, 2, 3, 5]);
+
+        let rrset = extract_covered_rrset(&wire, 1, "example.com");
+        assert_eq!(rrset.len(), 2);
+        assert_eq!(rrset[0].rdata, vec![1, 2, 3, 4]);
+        assert_eq!(rrset[1].rdata, vec![1, 2, 3, 5]);
+
+        // Non-matching type should return empty
+        let rrset_mx = extract_covered_rrset(&wire, 15, "example.com");
+        assert!(rrset_mx.is_empty());
+
+        // Non-matching domain should return empty
+        let rrset_diff = extract_covered_rrset(&wire, 1, "other.com");
+        assert!(rrset_diff.is_empty());
+    }
 }
