@@ -36,20 +36,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(unix)]
     {
-        // If an updated binary exists on the persistent storage volume (/data/amardns)
-        // and we are not already running it, execute it in-place using execve.
-        // This enables in-dashboard zero-downtime updates on Fly.io that survive
-        // machine restarts and migrations while preserving all Fly secrets in the environment.
-        let persistent_bin = std::path::Path::new("/data/amardns");
-        if persistent_bin.is_file() {
+        // ── Watchdog & Self-Execution Bootloader ─────────────────────────────
+        // Ensure /amardns is present and running. If /amardns is missing (e.g. accidental
+        // deletion), automatically restore it from the newest local archive or backup.
+        let target_bin = std::path::Path::new("/amardns");
+        if !target_bin.exists() {
+            let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+            if let Ok(entries) = std::fs::read_dir("/") {
+                for e in entries.flatten() {
+                    let p = e.path();
+                    if let Some(n) = p.file_name().and_then(|s| s.to_str()) {
+                        if n.starts_with("amardns-") && p.is_file() {
+                            candidates.push(p);
+                        }
+                    }
+                }
+            }
+            candidates.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+            candidates.reverse();
+
+            let backup = std::path::Path::new("/amardns.bak");
+            let recovery = candidates.first().cloned().or_else(|| {
+                if backup.is_file() {
+                    Some(backup.to_path_buf())
+                } else {
+                    None
+                }
+            });
+
+            if let Some(src) = recovery {
+                eprintln!("[bootloader watchdog] /amardns was missing! Restoring from {:?}", src);
+                if std::fs::copy(&src, target_bin).is_ok() {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(target_bin, std::fs::Permissions::from_mode(0o755));
+                }
+            }
+        }
+
+        // If /amardns exists and we are not currently running it,
+        // execute it in-place using execve for a fresh, synchronized runtime.
+        if target_bin.is_file() {
             let current_exe = std::env::current_exe().ok();
-            let is_running_persistent = current_exe
+            let is_running_target = current_exe
                 .as_ref()
-                .map(|p| p == persistent_bin)
+                .map(|p| p == target_bin)
                 .unwrap_or(false);
-            if !is_running_persistent {
+            if !is_running_target {
                 use std::os::unix::process::CommandExt;
-                let _ = std::process::Command::new(persistent_bin)
+                let _ = std::process::Command::new(target_bin)
                     .args(std::env::args().skip(1))
                     .envs(std::env::vars())
                     .exec();

@@ -332,7 +332,19 @@ fn get_command_list() -> Vec<ConsoleCommandInfo> {
         ConsoleCommandInfo {
             name: "update".into(),
             syntax: "update [check | apply | rollback]".into(),
-            description: "Check for binary updates from GitHub, apply in-place to /data/amardns, or rollback".into(),
+            description: "Check for binary updates from GitHub, apply in-place to /amardns, or rollback".into(),
+            category: "System".into(),
+        },
+        ConsoleCommandInfo {
+            name: "software".into(),
+            syntax: "software <list | remove <file> | fallback | prune>".into(),
+            description: "List software binaries, relative age, trigger fallback, or prune archives".into(),
+            category: "System".into(),
+        },
+        ConsoleCommandInfo {
+            name: "rm".into(),
+            syntax: "rm <file>".into(),
+            description: "Remove on-disk software binary (watchdog auto-recovers if /amardns is targeted)".into(),
             category: "System".into(),
         },
     ]
@@ -379,6 +391,8 @@ pub async fn execute_command(state: &Arc<AppState>, input: &str) -> (String, Str
         "logs" => (cmd_logs(state, args), "ok".into()),
         "canary" => (cmd_canary(state), "ok".into()),
         "update" => cmd_update(args).await,
+        "software" | "versions" => cmd_software(args).await,
+        "rm" => cmd_rm(args).await,
         _ => (
             format!(
                 "Command not recognized: '{}'. Type 'help' to see all available commands.",
@@ -402,8 +416,14 @@ async fn cmd_update(args: &[&str]) -> (String, String) {
                     if let Ok(j) = resp.json::<serde_json::Value>().await {
                         let tag = j["tag_name"].as_str().unwrap_or("unknown");
                         let cur = env!("CARGO_PKG_VERSION");
-                        let has_persistent = std::path::Path::new("/data/amardns").exists();
-                        let mut out = format!("Current binary version: v{}\nLatest release on GitHub: {}\nPersistent /data/amardns binary active: {}\n", cur, tag, has_persistent);
+                        let has_active = std::path::Path::new("/amardns").exists();
+                        let has_backup = std::path::Path::new("/amardns.bak").exists();
+                        let mut out = format!(
+                            "Current compiled version: v{}\nLatest release on GitHub: {}\nRunning software (/amardns): {}\nFallback backup (/amardns.bak): {}\n",
+                            cur, tag,
+                            if has_active { "PRESENT" } else { "ABSENT" },
+                            if has_backup { "READY" } else { "NONE" }
+                        );
                         if tag.contains(cur) {
                             out.push_str("Status: AmarDNS is up to date.\n");
                         } else {
@@ -424,21 +444,92 @@ async fn cmd_update(args: &[&str]) -> (String, String) {
             }
         }
         "rollback" => {
-            let p = std::path::Path::new("/data/amardns");
-            if p.exists() {
-                if let Err(e) = std::fs::remove_file(p) {
-                    return (format!("Failed to remove persistent binary: {}\n", e), "error".into());
-                }
-                tokio::spawn(async {
-                    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-                    std::process::exit(0);
-                });
-                ("Removed /data/amardns. Restarting to restore container base binary...\n".into(), "ok".into())
-            } else {
-                ("No persistent binary found at /data/amardns (already running base container binary).\n".into(), "error".into())
+            match crate::server::api::system::perform_rollback().await {
+                Ok(msg) => (format!("{}\n", msg), "ok".into()),
+                Err(e) => (format!("Rollback failed: {}\n", e), "error".into()),
             }
         }
         _ => ("Syntax: update [check | apply | rollback]\n".into(), "error".into()),
+    }
+}
+
+async fn cmd_software(args: &[&str]) -> (String, String) {
+    let sub = args.first().copied().unwrap_or("list");
+    match sub {
+        "list" | "ls" => {
+            let binaries = crate::server::api::system::list_software_binaries();
+            if binaries.is_empty() {
+                return ("No software binaries or backups discovered in /.\n".to_string(), "ok".into());
+            }
+
+            let mut out = String::new();
+            out.push_str("── [ AmarDNS On-Disk Software & Version Manifest ] ──────────────────────────────────────────\n\n");
+            out.push_str(&format!(
+                "  {:<18} {:<19} {:<12} {:>9}   {:<18} {}\n",
+                "FILE NAME", "STATUS", "VERSION", "SIZE", "MODIFIED / AGE", "PATH"
+            ));
+            out.push_str("  ─────────────────────────────────────────────────────────────────────────────────────────────\n");
+
+            for b in &binaries {
+                out.push_str(&format!(
+                    "  {:<18} {:<19} {:<12} {:>6.2} MB   {:<18} {}\n",
+                    b.name, b.status, b.version, b.size_mb, b.age_str, b.path
+                ));
+            }
+
+            let has_backup = std::path::Path::new("/amardns.bak").exists();
+            let backup_status = if has_backup { "READY (/amardns.bak present)" } else { "NONE (Run update or copy to /amardns.bak)" };
+
+            out.push('\n');
+            out.push_str("  Active Running Target : /amardns\n");
+            out.push_str(&format!("  Fallback Status       : {}\n", backup_status));
+            out.push_str(&format!("  Total Binaries Found  : {}\n\n", binaries.len()));
+            out.push_str("  Available Operations:\n");
+            out.push_str("    software list              Refresh this software catalog\n");
+            out.push_str("    software remove <file>     Delete binary or archive (alias: rm <file>)\n");
+            out.push_str("    software fallback          Restore /amardns.bak as /amardns & archive active\n");
+            out.push_str("    software prune             Purge all archived /amardns-* binaries\n");
+            out.push_str("    update apply               Download and install latest GitHub release\n");
+
+            (out, "ok".into())
+        }
+        "remove" | "rm" | "delete" => {
+            if args.len() < 2 {
+                return ("Syntax: software remove <file_name_or_path> (e.g. software remove amardns.bak)\n".into(), "error".into());
+            }
+            let target = args[1];
+            match crate::server::api::system::remove_software_binary(target).await {
+                Ok(msg) => (format!("{}\n", msg), "ok".into()),
+                Err(e) => (format!("Error removing '{}': {}\n", target, e), "error".into()),
+            }
+        }
+        "fallback" | "rollback" => {
+            match crate::server::api::system::perform_rollback().await {
+                Ok(msg) => (format!("{}\n", msg), "ok".into()),
+                Err(e) => (format!("Fallback failed: {}\n", e), "error".into()),
+            }
+        }
+        "prune" | "clean" => {
+            match crate::server::api::system::prune_software_binaries() {
+                Ok(msg) => (format!("{}\n", msg), "ok".into()),
+                Err(e) => (format!("Prune failed: {}\n", e), "error".into()),
+            }
+        }
+        _ => (
+            format!("Unknown software subcommand: '{}'. Valid commands: list, remove <file>, fallback, prune\n", sub),
+            "error".into()
+        ),
+    }
+}
+
+async fn cmd_rm(args: &[&str]) -> (String, String) {
+    if args.is_empty() {
+        return ("Syntax: rm <file_name_or_path> (e.g. rm amardns.bak, rm /amardns)\n".into(), "error".into());
+    }
+    let target = args[0];
+    match crate::server::api::system::remove_software_binary(target).await {
+        Ok(msg) => (format!("{}\n", msg), "ok".into()),
+        Err(e) => (format!("Error removing '{}': {}\n", target, e), "error".into()),
     }
 }
 
@@ -535,7 +626,7 @@ fn cmd_help(args: &[&str]) -> String {
         "AmarDNS Interactive Management Console — Available Commands:\n\n"
     );
 
-    let categories = ["Diagnostics", "Security", "Rules", "Cache", "Telemetry", "Network", "Config", "General"];
+    let categories = ["Diagnostics", "Security", "Rules", "Cache", "Telemetry", "Network", "Config", "System", "General"];
     for cat in categories {
         out.push_str(&format!("── [ {} ] ────────────────────────────────────────\n", cat));
         for c in list.iter().filter(|i| i.category == cat) {
@@ -1554,5 +1645,51 @@ mod tests {
         admin_headers.insert(header::AUTHORIZATION, "Bearer secret123".parse().unwrap());
         let res = handle_console_exec(&state, None, &admin_headers, "stats").await;
         assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_console_software_and_rm_commands() {
+        let state = Arc::new(AppState::new(mock_config()));
+
+        // Test software list & versions alias
+        let (out, status) = execute_command(&state, "software list").await;
+        assert_eq!(status, "ok");
+        assert!(out.contains("Active Running Target : /amardns") || out.contains("No software binaries"));
+
+        let (out_alias, status_alias) = execute_command(&state, "versions").await;
+        assert_eq!(status_alias, "ok");
+        assert_eq!(out, out_alias);
+
+        // Test software help & command list
+        let (help_sw, status) = execute_command(&state, "help software").await;
+        assert_eq!(status, "ok");
+        assert!(help_sw.contains("SOFTWARE"));
+
+        let (help_rm, status) = execute_command(&state, "help rm").await;
+        assert_eq!(status, "ok");
+        assert!(help_rm.contains("RM"));
+
+        let (general_help, status) = execute_command(&state, "help").await;
+        assert_eq!(status, "ok");
+        assert!(general_help.contains("[ System ]"));
+        assert!(general_help.contains("software"));
+        assert!(general_help.contains("rm"));
+
+        // Test invalid subcommands and missing args
+        let (out, status) = execute_command(&state, "software invalidsub").await;
+        assert_eq!(status, "error");
+        assert!(out.contains("Unknown software subcommand"));
+
+        let (out, status) = execute_command(&state, "software remove").await;
+        assert_eq!(status, "error");
+        assert!(out.contains("Syntax: software remove"));
+
+        let (out, status) = execute_command(&state, "rm").await;
+        assert_eq!(status, "error");
+        assert!(out.contains("Syntax: rm"));
+
+        let (out, status) = execute_command(&state, "rm nonexistent_binary_file_abc123.bak").await;
+        assert_eq!(status, "error");
+        assert!(out.contains("not found"));
     }
 }

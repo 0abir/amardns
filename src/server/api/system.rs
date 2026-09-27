@@ -118,6 +118,16 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/system/rollback", post(self_rollback_handler))
         .route("/api/system/rollback/", post(self_rollback_handler))
         .route("/api/system/rollback/{key}", post(self_rollback_key_handler))
+        // Software Binary Management
+        .route("/api/system/software", get(software_list_handler))
+        .route("/api/system/software/", get(software_list_handler))
+        .route("/api/system/software/{key}", get(software_list_key_handler))
+        .route("/api/system/software/remove", post(software_remove_handler))
+        .route("/api/system/software/remove/", post(software_remove_handler))
+        .route("/api/system/software/remove/{key}", post(software_remove_key_handler))
+        .route("/api/system/software/prune", post(software_prune_handler))
+        .route("/api/system/software/prune/", post(software_prune_handler))
+        .route("/api/system/software/prune/{key}", post(software_prune_key_handler))
 }
 
 // ── Query Logs ──────────────────────────────────────────────────────────────
@@ -1342,7 +1352,9 @@ async fn handle_self_update_check(
                         "current_version": current_version,
                         "latest_version": tag,
                         "update_available": has_update,
-                        "running_from_persistent": std::path::Path::new("/data/amardns").exists(),
+                        "running_software": "/amardns",
+                        "has_backup": std::path::Path::new("/amardns.bak").exists(),
+                        "local_binaries": list_software_binaries(),
                         "html_url": json["html_url"].as_str().unwrap_or("")
                     })),
                 )
@@ -1405,64 +1417,568 @@ async fn handle_self_rollback(
             .into_response();
     }
 
-    let persistent_bin = std::path::Path::new("/data/amardns");
-    if persistent_bin.exists() {
-        if let Err(e) = std::fs::remove_file(persistent_bin) {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "ok": false, "error": format!("Failed to remove persistent binary: {}", e) })),
-            )
-                .into_response();
+    match perform_rollback().await {
+        Ok(msg) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "message": msg,
+                "restarting": true
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": e
+            })),
+        )
+            .into_response(),
+    }
+}
+
+// ── Software Binary Management Handlers ──────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Deserialize, Default)]
+pub struct SoftwareRemoveReq {
+    pub target: Option<String>,
+    pub file: Option<String>,
+}
+
+pub async fn software_list_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    handle_software_list(&state, None, &headers).await
+}
+
+pub async fn software_list_key_handler(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_software_list(&state, Some(&key), &headers).await
+}
+
+async fn handle_software_list(
+    state: &Arc<AppState>,
+    key: Option<&str>,
+    headers: &HeaderMap,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/system/software");
+    if !auth.is_view_or_admin() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false, "error": "Unauthorized" })),
+        )
+            .into_response();
+    }
+    let binaries = list_software_binaries();
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "running": "/amardns",
+            "fallback": "/amardns.bak",
+            "has_fallback": std::path::Path::new("/amardns.bak").exists(),
+            "count": binaries.len(),
+            "binaries": binaries,
+        })),
+    )
+        .into_response()
+}
+
+pub async fn software_remove_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    payload: Option<Json<SoftwareRemoveReq>>,
+) -> Response {
+    handle_software_remove(&state, None, &headers, payload.map(|j| j.0)).await
+}
+
+pub async fn software_remove_key_handler(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+    payload: Option<Json<SoftwareRemoveReq>>,
+) -> Response {
+    handle_software_remove(&state, Some(&key), &headers, payload.map(|j| j.0)).await
+}
+
+async fn handle_software_remove(
+    state: &Arc<AppState>,
+    key: Option<&str>,
+    headers: &HeaderMap,
+    payload: Option<SoftwareRemoveReq>,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/system/software/remove");
+    if !auth.is_admin() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false, "error": "Admin credentials required" })),
+        )
+            .into_response();
+    }
+
+    let target = payload.as_ref()
+        .and_then(|p| p.target.as_ref().or(p.file.as_ref()))
+        .cloned()
+        .unwrap_or_default();
+
+    if target.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "ok": false, "error": "Missing 'target' or 'file' field" })),
+        )
+            .into_response();
+    }
+
+    match remove_software_binary(&target).await {
+        Ok(msg) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "ok": true, "message": msg })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "ok": false, "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn software_prune_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    handle_software_prune(&state, None, &headers).await
+}
+
+pub async fn software_prune_key_handler(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_software_prune(&state, Some(&key), &headers).await
+}
+
+async fn handle_software_prune(
+    state: &Arc<AppState>,
+    key: Option<&str>,
+    headers: &HeaderMap,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/system/software/prune");
+    if !auth.is_admin() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false, "error": "Admin credentials required" })),
+        )
+            .into_response();
+    }
+
+    match prune_software_binaries() {
+        Ok(msg) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "ok": true, "message": msg })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "ok": false, "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+// ── Software & Binary Management Architecture ────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SoftwareBinaryInfo {
+    pub name: String,
+    pub path: String,
+    pub status: String,
+    pub version: String,
+    pub size_bytes: u64,
+    pub size_mb: f64,
+    pub modified_iso: String,
+    pub age_str: String,
+}
+
+/// Detect the version string of an on-disk AmarDNS binary.
+fn detect_binary_version(path: &std::path::Path) -> Option<String> {
+    let fname = path.file_name().and_then(|n| n.to_str())?;
+    if fname.starts_with("amardns-") {
+        let suffix = fname.trim_start_matches("amardns-");
+        if !suffix.is_empty() {
+            return Some(if suffix.starts_with('v') {
+                suffix.to_string()
+            } else {
+                format!("v{}", suffix)
+            });
         }
+    }
+
+    // Try fast inspection by executing --version
+    let output = std::process::Command::new(path)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if line.contains("AmarDNS") {
+                if let Some(v_part) = line.split_whitespace().last() {
+                    return Some(v_part.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Scans local filesystems for all AmarDNS binaries, backups, and version archives.
+pub fn list_software_binaries() -> Vec<SoftwareBinaryInfo> {
+    let mut list = Vec::new();
+    let current_pkg_version = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let mut seen_paths = std::collections::HashSet::new();
+
+    // Scan root directory / (and fallback /data if present)
+    for dir_str in &["/", "/data"] {
+        let dir = std::path::Path::new(dir_str);
+        if !dir.is_dir() {
+            continue;
+        }
+
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let file_name = match path.file_name().and_then(|n| n.to_str()) {
+                    Some(s) => s.to_string(),
+                    None => continue,
+                };
+
+                // Only consider amardns binaries and backups
+                if !file_name.starts_with("amardns") {
+                    continue;
+                }
+
+                if !path.is_file() {
+                    continue;
+                }
+
+                let path_str = path.to_string_lossy().to_string();
+                if seen_paths.contains(&path_str) {
+                    continue;
+                }
+                seen_paths.insert(path_str.clone());
+
+                let metadata = match std::fs::metadata(&path) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+
+                let size_bytes = metadata.len();
+                let size_mb = (size_bytes as f64 / 1_048_576.0 * 100.0).round() / 100.0;
+
+                let (modified_iso, age_str) = match metadata.modified() {
+                    Ok(time) => {
+                        let duration = time.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                        let secs = duration.as_secs();
+                        let iso = match chrono::DateTime::from_timestamp(secs as i64, 0) {
+                            Some(dt) => dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                            None => "unknown".to_string(),
+                        };
+                        let age = match time.elapsed() {
+                            Ok(el) => {
+                                let el_secs = el.as_secs();
+                                if el_secs < 60 {
+                                    format!("{}s ago", el_secs)
+                                } else if el_secs < 3600 {
+                                    format!("{}m ago", el_secs / 60)
+                                } else if el_secs < 86400 {
+                                    format!("{}h ago", el_secs / 3600)
+                                } else {
+                                    format!("{}d ago", el_secs / 86400)
+                                }
+                            }
+                            Err(_) => "just now".to_string(),
+                        };
+                        (iso, age)
+                    }
+                    Err(_) => ("unknown".to_string(), "unknown".to_string()),
+                };
+
+                let (status, version) = if path_str == "/amardns" {
+                    ("ACTIVE / RUNNING".to_string(), current_pkg_version.clone())
+                } else if path_str == "/amardns.bak" {
+                    let ver = detect_binary_version(&path).unwrap_or_else(|| "backup".to_string());
+                    ("BACKUP / FALLBACK".to_string(), ver)
+                } else if file_name.starts_with("amardns-") {
+                    let ver = detect_binary_version(&path).unwrap_or_else(|| "archived".to_string());
+                    ("ARCHIVED".to_string(), ver)
+                } else if path_str == "/data/amardns" {
+                    ("LEGACY PERSISTENT".to_string(), detect_binary_version(&path).unwrap_or_else(|| "legacy".to_string()))
+                } else {
+                    ("STAGED / TEMP".to_string(), detect_binary_version(&path).unwrap_or_else(|| "temp".to_string()))
+                };
+
+                list.push(SoftwareBinaryInfo {
+                    name: file_name,
+                    path: path_str,
+                    status,
+                    version,
+                    size_bytes,
+                    size_mb,
+                    modified_iso,
+                    age_str,
+                });
+            }
+        }
+    }
+
+    // Sort order: ACTIVE first, then BACKUP, then ARCHIVED by age
+    list.sort_by(|a, b| {
+        let rank = |status: &str| match status {
+            "ACTIVE / RUNNING" => 0,
+            "BACKUP / FALLBACK" => 1,
+            "ARCHIVED" => 2,
+            _ => 3,
+        };
+        let r_a = rank(&a.status);
+        let r_b = rank(&b.status);
+        if r_a != r_b {
+            r_a.cmp(&r_b)
+        } else {
+            b.modified_iso.cmp(&a.modified_iso)
+        }
+    });
+
+    list
+}
+
+/// Fallback / Rollback: restores /amardns.bak to /amardns, and archives
+/// the current /amardns to /amardns-<version_number>.
+pub async fn perform_rollback() -> Result<String, String> {
+    let active_bin = std::path::Path::new("/amardns");
+    let backup_bin = std::path::Path::new("/amardns.bak");
+
+    // 1. Locate backup or best fallback candidate
+    let fallback_source = if backup_bin.is_file() {
+        backup_bin.to_path_buf()
+    } else {
+        // Search for newest /amardns-* archive
+        let mut archives: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir("/") {
+            for e in entries.flatten() {
+                let p = e.path();
+                if let Some(n) = p.file_name().and_then(|s| s.to_str()) {
+                    if n.starts_with("amardns-") && p.is_file() {
+                        archives.push(p);
+                    }
+                }
+            }
+        }
+        archives.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+        archives.reverse();
+        archives.into_iter().next().ok_or_else(|| {
+            "No backup binary found at /amardns.bak or /amardns-* to roll back to.".to_string()
+        })?
+    };
+
+    // 2. Read version of active binary to archive it as /amardns-<version_number>
+    let current_version = env!("CARGO_PKG_VERSION").trim_start_matches('v');
+    let archive_path = format!("/amardns-{}", current_version);
+
+    if active_bin.is_file() {
+        let _ = std::fs::rename(active_bin, &archive_path).or_else(|_| {
+            std::fs::copy(active_bin, &archive_path)?;
+            std::fs::remove_file(active_bin)
+        });
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&archive_path, std::fs::Permissions::from_mode(0o755));
+        }
+        tracing::info!("[system] Rollback: archived current binary /amardns -> {}", archive_path);
+    }
+
+    // 3. Copy fallback source into /amardns
+    std::fs::copy(&fallback_source, active_bin)
+        .map_err(|e| format!("Failed to restore {:?} to /amardns: {}", fallback_source, e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(active_bin, std::fs::Permissions::from_mode(0o755));
+    }
+
+    let source_display = fallback_source.to_string_lossy().to_string();
+    tracing::info!(
+        "[system] Rollback complete: /amardns restored from {}. Previous active binary archived as {}. Triggering in-place execve...",
+        source_display,
+        archive_path
+    );
+
+    // 4. Trigger in-place execve restart into /amardns
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        tracing::info!("[system] Rollback: in-place restart into /amardns via execve...");
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            let err = std::process::Command::new("/amardns")
+                .args(std::env::args().skip(1))
+                .envs(std::env::vars())
+                .exec();
+            tracing::error!("[system] In-place execve to /amardns failed: {}", err);
+            std::process::exit(1);
+        }
+        #[cfg(not(unix))]
+        std::process::exit(0);
+    });
+
+    Ok(format!(
+        "Rollback successful: active binary archived as '{}', fallback '{}' restored as /amardns. Restarting in-place...",
+        archive_path, source_display
+    ))
+}
+
+/// Removes a software binary or version archive.
+/// SAFETY WATCHDOG: If the running software (/amardns) is removed,
+/// immediately restores from the newest local version or /amardns.bak and restarts.
+pub async fn remove_software_binary(target_name: &str) -> Result<String, String> {
+    let clean = target_name.trim();
+    if clean.is_empty() {
+        return Err("Specify binary to remove (e.g. 'amardns.bak', 'amardns-1.0.10')".to_string());
+    }
+
+    let target_path = if clean.starts_with('/') {
+        std::path::PathBuf::from(clean)
+    } else {
+        std::path::PathBuf::from(format!("/{}", clean))
+    };
+
+    if !target_path.exists() {
+        let rel_path = std::path::Path::new(clean);
+        if !rel_path.exists() {
+            return Err(format!("File '{}' not found.", target_path.display()));
+        }
+    }
+
+    let target_str = target_path.to_string_lossy().to_string();
+
+    // Check if user is removing the active running binary /amardns
+    if target_str == "/amardns" {
+        tracing::warn!("[watchdog] Active software /amardns was targeted for removal! Engaging safety watchdog recovery...");
+        let _ = std::fs::remove_file(&target_path);
+
+        // Search for newest local /amardns-* or /amardns.bak
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir("/") {
+            for e in entries.flatten() {
+                let p = e.path();
+                if let Some(n) = p.file_name().and_then(|s| s.to_str()) {
+                    if n.starts_with("amardns-") && p.is_file() {
+                        candidates.push(p);
+                    }
+                }
+            }
+        }
+        candidates.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+        candidates.reverse();
+
+        let backup = std::path::Path::new("/amardns.bak");
+        let (recovery_src, recovery_desc) = if let Some(cand) = candidates.first() {
+            (cand.clone(), format!("local newer archive '{}'", cand.display()))
+        } else if backup.is_file() {
+            (backup.to_path_buf(), "fallback backup '/amardns.bak'".to_string())
+        } else if let Ok(exe) = std::env::current_exe() {
+            (exe.clone(), format!("running process image '{}'", exe.display()))
+        } else {
+            return Err("CRITICAL: Failed to locate recovery binary for /amardns!".to_string());
+        };
+
+        // Restore immediately to /amardns
+        std::fs::copy(&recovery_src, "/amardns")
+            .map_err(|e| format!("Watchdog failed to restore {:?} to /amardns: {}", recovery_src, e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions("/amardns", std::fs::Permissions::from_mode(0o755));
+        }
+
+        // Schedule immediate restart
         tokio::spawn(async {
-            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-            tracing::info!("[system] Rollback: switching back to base container binary via in-place execve...");
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            tracing::warn!("[watchdog] Triggering emergency in-place restart into restored /amardns...");
             #[cfg(unix)]
             {
                 use std::os::unix::process::CommandExt;
-                let target_bin = if std::path::Path::new("/amardns").is_file() {
-                    "/amardns".to_string()
-                } else {
-                    std::env::current_exe()
-                        .ok()
-                        .and_then(|p| p.to_str().map(|s| s.to_string()))
-                        .unwrap_or_else(|| "/amardns".to_string())
-                };
-                let err = std::process::Command::new(&target_bin)
+                let _ = std::process::Command::new("/amardns")
                     .args(std::env::args().skip(1))
                     .envs(std::env::vars())
                     .exec();
-                tracing::error!(
-                    "[system] In-place execve rollback to '{}' failed: {}. Exiting with code 1...",
-                    target_bin,
-                    err
-                );
                 std::process::exit(1);
             }
             #[cfg(not(unix))]
             std::process::exit(0);
         });
-        (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "ok": true,
-                "message": "Persistent binary removed. Restarting into base container binary...",
-                "restarting": true
-            })),
-        )
-            .into_response()
-    } else {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "ok": false,
-                "error": "No persistent binary found at /data/amardns (already running base container binary)"
-            })),
-        )
-            .into_response()
+
+        return Ok(format!(
+            "[SAFETY WATCHDOG ACTIVATED]\n\
+             Active running software '/amardns' was deleted!\n\
+             Watchdog immediately engaged automated recovery:\n\
+               -> Restored from: {}\n\
+               -> Reinstalled to: /amardns (0755)\n\
+               -> Fresh restart: In-place execve triggered for an instant fresh start.\n",
+            recovery_desc
+        ));
     }
+
+    // Normal file removal (e.g. /amardns.bak or /amardns-1.0.10)
+    let size_mb = std::fs::metadata(&target_path)
+        .map(|m| (m.len() as f64 / 1_048_576.0 * 100.0).round() / 100.0)
+        .unwrap_or(0.0);
+
+    std::fs::remove_file(&target_path)
+        .map_err(|e| format!("Failed to delete '{}': {}", target_path.display(), e))?;
+
+    Ok(format!(
+        "Successfully removed software file '{}' ({:.2} MB).",
+        target_path.display(),
+        size_mb
+    ))
 }
 
+/// Prunes all archived /amardns-* binaries, keeping /amardns and /amardns.bak.
+pub fn prune_software_binaries() -> Result<String, String> {
+    let mut removed_count = 0;
+    let mut freed_bytes = 0u64;
+
+    if let Ok(entries) = std::fs::read_dir("/") {
+        for e in entries.flatten() {
+            let p = e.path();
+            if let Some(n) = p.file_name().and_then(|s| s.to_str()) {
+                if (n.starts_with("amardns-") || n == "amardns.download") && p.is_file() {
+                    if let Ok(m) = std::fs::metadata(&p) {
+                        freed_bytes += m.len();
+                    }
+                    if std::fs::remove_file(&p).is_ok() {
+                        removed_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let freed_mb = (freed_bytes as f64 / 1_048_576.0 * 100.0).round() / 100.0;
+    Ok(format!(
+        "Pruned {} old archived binary file(s). Freed {:.2} MB. Active '/amardns' and backup '/amardns.bak' preserved.",
+        removed_count, freed_mb
+    ))
+}
+
+/// Download, verify, and install latest binary to /amardns, backing up current to /amardns.bak.
 pub async fn perform_download_and_install() -> Result<String, String> {
     let client = reqwest::Client::builder()
         .user_agent("AmarDNS")
@@ -1487,10 +2003,15 @@ pub async fn perform_download_and_install() -> Result<String, String> {
     let assets = release_json["assets"].as_array()
         .ok_or_else(|| "No assets attached to latest release".to_string())?;
 
+    let is_arm64 = std::env::consts::ARCH == "aarch64";
     let binary_asset = assets.iter().find(|a| {
         let name = a["name"].as_str().unwrap_or("");
-        name == "amardns" || name == "amardns-linux-amd64"
-    }).ok_or_else(|| "No static binary asset named 'amardns' found in latest release".to_string())?;
+        if is_arm64 {
+            name == "amardns-arm64" || name == "amardns-linux-arm64" || name == "amardns"
+        } else {
+            name == "amardns" || name == "amardns-linux-amd64"
+        }
+    }).ok_or_else(|| "No compatible static binary asset found in latest release".to_string())?;
 
     let download_url = binary_asset["browser_download_url"].as_str()
         .ok_or_else(|| "Missing download URL on binary asset".to_string())?;
@@ -1509,7 +2030,11 @@ pub async fn perform_download_and_install() -> Result<String, String> {
     }
 
     // Verify SHA256 checksum if provided
-    if let Some(sha_asset) = assets.iter().find(|a| a["name"].as_str().unwrap_or("") == "amardns.sha256") {
+    let expected_sha_name = if is_arm64 { "amardns-arm64.sha256" } else { "amardns.sha256" };
+    if let Some(sha_asset) = assets.iter().find(|a| {
+        let n = a["name"].as_str().unwrap_or("");
+        n == expected_sha_name || n == "amardns.sha256"
+    }) {
         if let Some(sha_url) = sha_asset["browser_download_url"].as_str() {
             if let Ok(sha_res) = client.get(sha_url).send().await {
                 if let Ok(sha_text) = sha_res.text().await {
@@ -1527,13 +2052,9 @@ pub async fn perform_download_and_install() -> Result<String, String> {
         }
     }
 
-    let target_dir = std::path::Path::new("/data");
-    if !target_dir.exists() {
-        let _ = std::fs::create_dir_all(target_dir);
-    }
-
-    let tmp_bin = "/data/amardns.download";
-    let target_bin = "/data/amardns";
+    let tmp_bin = "/amardns.download";
+    let target_bin = "/amardns";
+    let backup_bin = "/amardns.bak";
 
     std::fs::write(tmp_bin, &bin_bytes)
         .map_err(|e| format!("Failed to write binary to {}: {}", tmp_bin, e))?;
@@ -1564,23 +2085,39 @@ pub async fn perform_download_and_install() -> Result<String, String> {
         }
     }
 
+    // Rotate: current /amardns -> /amardns.bak
+    if std::path::Path::new(target_bin).exists() {
+        let _ = std::fs::copy(target_bin, backup_bin);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(backup_bin, std::fs::Permissions::from_mode(0o755));
+        }
+        tracing::info!("[update] Backed up current binary to {}", backup_bin);
+    }
+
     std::fs::rename(tmp_bin, target_bin)
         .map_err(|e| format!("Failed to atomically rename {} to {}: {}", tmp_bin, target_bin, e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(target_bin, std::fs::Permissions::from_mode(0o755));
+    }
 
     tracing::info!("[update] AmarDNS binary installed to {} (version {}). Triggering restart...", target_bin, tag_name);
 
     tokio::spawn(async {
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-        tracing::info!("[system] Hot-restarting AmarDNS into new persistent binary via in-place execve...");
+        tracing::info!("[system] Hot-restarting AmarDNS into new /amardns binary via in-place execve...");
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            let err = std::process::Command::new("/data/amardns")
+            let err = std::process::Command::new("/amardns")
                 .args(std::env::args().skip(1))
                 .envs(std::env::vars())
                 .exec();
             tracing::error!(
-                "[system] In-place execve failed: {}. Exiting with code 1 to trigger supervisor restart...",
+                "[system] In-place execve to /amardns failed: {}. Exiting with code 1 to trigger supervisor restart...",
                 err
             );
             std::process::exit(1);
@@ -1589,7 +2126,46 @@ pub async fn perform_download_and_install() -> Result<String, String> {
         std::process::exit(0);
     });
 
-    Ok(format!("Successfully upgraded to {} ({} MB). Restarting process...", tag_name, bin_bytes.len() / (1024 * 1024)))
+    Ok(format!(
+        "Successfully upgraded to {} ({:.2} MB). Previous binary saved to /amardns.bak. In-place restart triggered.",
+        tag_name, bin_bytes.len() as f64 / 1_048_576.0
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_list_software_binaries_structure() {
+        let binaries = list_software_binaries();
+        // Should execute cleanly without panicking
+        for b in &binaries {
+            assert!(!b.name.is_empty());
+            assert!(!b.path.is_empty());
+            assert!(!b.status.is_empty());
+            assert!(!b.version.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_remove_software_binary_validation() {
+        let err_empty = remove_software_binary("   ").await;
+        assert!(err_empty.is_err());
+        assert!(err_empty.unwrap_err().contains("Specify binary to remove"));
+
+        let err_not_found = remove_software_binary("nonexistent_binary_test_123.bak").await;
+        assert!(err_not_found.is_err());
+        assert!(err_not_found.unwrap_err().contains("not found"));
+    }
+
+    #[test]
+    fn test_prune_software_binaries_execution() {
+        let result = prune_software_binaries();
+        assert!(result.is_ok());
+        let msg = result.unwrap();
+        assert!(msg.contains("Active '/amardns' and backup '/amardns.bak' preserved"));
+    }
 }
 
 

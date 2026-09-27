@@ -1209,7 +1209,7 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
   <div class="ap" style="margin-bottom:18px">
     <div class="apb">
       <p style="font-size:9px;color:var(--mut);margin-bottom:10px;text-align:center">
-        Over-the-air hot updates for the AmarDNS static binary. Deploys directly to NVMe persistent storage (<code>/data/amardns</code>) with in-place <code>execve</code> kernel replacement without rebuilding the container.
+        Over-the-air hot updates for the AmarDNS static binary. Deploys directly to <code>/amardns</code> (with automatic backup to <code>/amardns.bak</code>) with in-place <code>execve</code> kernel replacement without rebuilding the container.
       </p>
       <div style="display:flex;justify-content:center;gap:16px;margin-bottom:12px;font-size:10px;font-family:var(--fm);flex-wrap:wrap">
         <div>Binary Source: <span id="fw-source" style="color:var(--acc);font-weight:700">Detecting…</span></div>
@@ -1219,7 +1219,7 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
       <div class="brow-c" style="gap:8px;justify-content:center">
         <button class="btn" id="btn-check-update">Check for Updates</button>
         <button class="btn btn-ok" id="btn-apply-update">Update Binary Now</button>
-        <button class="btn btn-w" id="btn-rollback-update">Rollback to Base Image</button>
+        <button class="btn btn-w" id="btn-rollback-update">Rollback to Fallback Backup</button>
       </div>
 
       <!-- Interactive OTA Update Progress & Log Machine -->
@@ -1293,6 +1293,7 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
       <button class="chip-cmd" data-cmd="cache stats">cache stats</button>
       <button class="chip-cmd" data-cmd="feed status">feed status</button>
       <button class="chip-cmd" data-cmd="sockets">sockets</button>
+      <button class="chip-cmd" data-cmd="software list">software list</button>
       <button class="chip-cmd" data-cmd="help">help</button>
     </div>
 
@@ -3654,7 +3655,7 @@ function checkBinaryUpdate(){
       var srcEl=document.getElementById('fw-source');
       var curEl=document.getElementById('fw-cur-ver');
       var latEl=document.getElementById('fw-lat-ver');
-      if(srcEl){srcEl.textContent=d.running_from_persistent?'Persistent (/data/amardns)':'Base Image (/amardns)';srcEl.style.color=d.running_from_persistent?'var(--warn)':'var(--acc)';}
+      if(srcEl){srcEl.textContent=d.has_backup?'Active (/amardns) [Fallback Ready]':'Active (/amardns)';srcEl.style.color=d.has_backup?'var(--good)':'var(--acc)';}
       if(curEl){curEl.textContent='v'+d.current_version;}
       if(latEl){latEl.textContent=d.latest_version;}
       if(msg){
@@ -3716,7 +3717,7 @@ function _fwHidePanelAfterSuccess() {
 }
 
 function applyBinaryUpdate() {
-  uiConfirm('Download and hot-deploy the latest AmarDNS binary to persistent storage (/data/amardns)? The server will seamlessly restart in-place via execve.', {
+  uiConfirm('Download and hot-deploy latest AmarDNS binary to /amardns (backing up current to /amardns.bak)? The server will seamlessly restart in-place via execve.', {
     title: 'FIRMWARE // LIVE UPDATE CONFIRMATION',
     confirmText: 'START HOT-DEPLOY',
     type: 'accent'
@@ -3735,7 +3736,7 @@ function applyBinaryUpdate() {
 
   _fwSetProgress(10, 'INITIALIZING OTA UPDATE…', 'Step 1/6: Handshake');
   _fwLog('Starting AmarDNS live firmware update pipeline...', 'var(--acc)');
-  _fwLog('Target architecture: Linux x86_64 Musl (Zero-GC Edition)', '#94a3b8');
+  _fwLog('Target architecture: Linux Musl Static (Zero-GC Edition)', '#94a3b8');
 
   setTimeout(function() {
     _fwSetProgress(25, 'QUERYING GITHUB RELEASES…', 'Step 2/6: Discovery');
@@ -3744,7 +3745,7 @@ function applyBinaryUpdate() {
 
   setTimeout(function() {
     _fwSetProgress(45, 'DOWNLOADING STATIC BINARY…', 'Step 3/6: Download');
-    _fwLog('Fetching binary stream (~14.4 MB) -> /data/amardns.download', 'var(--warn)');
+    _fwLog('Fetching binary stream -> /amardns.download', 'var(--warn)');
   }, 1000);
 
   toast('Downloading and verifying update…', 'wl', 8000);
@@ -3752,11 +3753,11 @@ function applyBinaryUpdate() {
   api('/api/system/update', 'POST').then(function(d) {
     _fwSetProgress(75, 'VERIFYING CHECKSUM & INTEGRITY…', 'Step 4/6: Verification');
     _fwLog('SHA-256 integrity check PASS: payload digest matches release.', 'var(--good)');
-    _fwLog('Running pre-flight test: /data/amardns.download --verify -> AMARDNS_OK', 'var(--good)');
+    _fwLog('Running pre-flight test: /amardns.download --verify -> AMARDNS_OK', 'var(--good)');
 
     setTimeout(function() {
       _fwSetProgress(90, 'HOT-SWAPPING BINARY (EXECVE)…', 'Step 5/6: Replacement');
-      _fwLog('Atomically renamed /data/amardns.download -> /data/amardns', '#94a3b8');
+      _fwLog('Backed up current binary to /amardns.bak and installed /amardns', '#94a3b8');
       _fwLog('Executing in-place execve process replacement into PID 1...', 'var(--acc)');
 
       // Poll for engine ping reconnect
@@ -3772,7 +3773,7 @@ function applyBinaryUpdate() {
             var srcEl = document.getElementById('fw-source');
             var curEl = document.getElementById('fw-cur-ver');
             var latEl = document.getElementById('fw-lat-ver');
-            if (srcEl) { srcEl.textContent = 'Persistent (/data/amardns)'; srcEl.style.color = 'var(--warn)'; }
+            if (srcEl) { srcEl.textContent = 'Active (/amardns) [Fallback Ready]'; srcEl.style.color = 'var(--good)'; }
             if (curEl) { curEl.textContent = 'v' + chk.current_version; curEl.style.color = 'var(--good)'; }
             if (latEl) { latEl.textContent = chk.latest_version; }
 
@@ -3811,9 +3812,9 @@ function applyBinaryUpdate() {
 }
 
 function rollbackBinaryUpdate() {
-  uiConfirm('Remove persistent binary (/data/amardns) and revert to the base container image? The server will seamlessly restart in-place via execve.', {
-    title: 'FIRMWARE // ROLLBACK CONFIRMATION',
-    confirmText: 'REVERT TO BASE IMAGE',
+  uiConfirm('Roll back /amardns to /amardns.bak (archiving active binary as /amardns-<version>)? The server will seamlessly restart in-place via execve.', {
+    title: 'FIRMWARE // FALLBACK ROLLBACK CONFIRMATION',
+    confirmText: 'RESTORE FALLBACK BACKUP',
     danger: true
   }, function(ok){
     if(!ok) return;
@@ -3828,33 +3829,33 @@ function rollbackBinaryUpdate() {
       panel.style.transform = '';
     }
 
-  _fwSetProgress(20, 'INITIALIZING ROLLBACK…', 'Step 1/4: Removal');
-  _fwLog('Removing persistent binary: /data/amardns...', 'var(--warn)');
+  _fwSetProgress(20, 'INITIALIZING ROLLBACK…', 'Step 1/4: Archiving & Swap');
+  _fwLog('Archiving active /amardns -> /amardns-<version> & restoring /amardns.bak...', 'var(--warn)');
 
   api('/api/system/rollback', 'POST').then(function(d) {
-    _fwSetProgress(60, 'REVERTING TO BASE IMAGE…', 'Step 2/4: Execve');
-    _fwLog('Persistent binary removed. Re-executing /amardns from container image...', 'var(--acc)');
+    _fwSetProgress(60, 'REVERTING TO FALLBACK…', 'Step 2/4: Execve');
+    _fwLog('Fallback restored to /amardns. Re-executing in-place via execve...', 'var(--acc)');
 
     var attempts = 0;
     var pollTimer = setInterval(function() {
       attempts++;
-      _fwLog('Pinging base container engine (attempt #' + attempts + ')...', '#64748b');
+      _fwLog('Pinging restored engine (attempt #' + attempts + ')...', '#64748b');
       api('/api/system/update/check').then(function(chk) {
         if (chk && chk.ok) {
           clearInterval(pollTimer);
           _fwSetProgress(100, 'ROLLBACK COMPLETE (ONLINE)', 'Step 4/4: Online');
-          _fwLog('Rollback succeeded! Running base container binary.', 'var(--good)');
+          _fwLog('Rollback succeeded! Running restored fallback binary.', 'var(--good)');
           var srcEl = document.getElementById('fw-source');
           var curEl = document.getElementById('fw-cur-ver');
-          if (srcEl) { srcEl.textContent = 'Base Image (/amardns)'; srcEl.style.color = 'var(--acc)'; }
+          if (srcEl) { srcEl.textContent = 'Active (/amardns)'; srcEl.style.color = 'var(--good)'; }
           if (curEl) { curEl.textContent = 'v' + chk.current_version; curEl.style.color = 'var(--txt)'; }
 
-          toast('Rollback complete! Running base binary.', 'ok', 6000);
+          toast('Rollback complete! Running fallback binary.', 'ok', 6000);
           if (msg) {
             msg.style.display = 'block';
             msg.style.background = 'rgba(0,255,100,0.15)';
             msg.style.color = 'var(--good)';
-            msg.textContent = 'Reverted to base container image successfully.';
+            msg.textContent = 'Restored fallback backup binary successfully.';
           }
           _fwHidePanelAfterSuccess();
           setTimeout(function() { go(); }, 1500);

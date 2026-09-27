@@ -168,11 +168,13 @@ Incoming Query (DoH / DoH3 / DoQ / DoT / Plain 53)
 - **Modern Cyberpunk Error Pages**: Dark glassmorphic error pages for `404 Not Found`, `401 Unauthorized`, `403 Forbidden`, `405 Method Not Allowed`, and `500 Internal Error` with live node diagnostics (Client IP, Edge Region, Node UID, Requested Path).
 - **Zero Emojis**: Clean typography, vector status indicators, and SVG icons.
 
-### 9. Over-The-Air (OTA) Binary Updates & Persistent Bootloader
-- **Persistent Volume Binary Execution**: On boot, AmarDNS inspects `/data/amardns` on the persistent NVMe volume. If an updated binary is present, execution transfers immediately via `execve` while preserving all file descriptors and environment variables.
-- **Zero-Redeploy Hot Updates**: Administrators can trigger `/api/system/update` or click "Update Binary Now" directly from the dashboard using the Master Key. The daemon queries GitHub Releases for the latest verified `amardns` binary, verifies its SHA256 checksum, atomically stages it to `/data/amardns`, and seamlessly restarts in under 3 seconds without rebuilding or redeploying the Docker container.
-- **Instant Rollback**: If an update needs to be reverted, `/api/system/rollback` purges `/data/amardns` and automatically falls back to the rock-solid base container image binary.
-- **Strict Secret Separation**: The released static binary contains zero embedded secrets or environment variables. All secrets (`DNS_MASTER_KEY`, `DESEC_TOKEN`, etc.) are inherited dynamically from the secure host/container runtime environment.
+### 9. Over-The-Air (OTA) Binary Updates & Self-Healing Watchdog
+- **Standardized Binary Path**: The active running AmarDNS engine is always located at `/amardns`.
+- **Automated Fallback Architecture**: Before applying an update, the current binary is automatically backed up to `/amardns.bak`. When a rollback or fallback is requested, `/amardns` is safely rotated to `/amardns-<version_number>` and `/amardns.bak` is restored to `/amardns`.
+- **Zero-Redeploy Hot Updates**: Administrators can trigger `/api/system/update`, click "Update Binary Now" in the dashboard, or run `update apply` in the console. The daemon downloads the multi-arch static binary, verifies SHA256 checksum and pre-flight `--verify`, and restarts seamlessly via in-place `execve` kernel process replacement in under 2 seconds.
+- **Safety Watchdog & Instant Auto-Recovery**: If `/amardns` is accidentally removed or corrupted, the built-in watchdog immediately intercepts the event, restores the software from the newest local archive (`/amardns-*`) or `/amardns.bak`, and triggers a fresh restart via `execve`.
+- **Software Lifecycle Management**: Full control from the interactive console (`software list`, `software remove <file>`, `software fallback`, `software prune`, `rm <file>`) and REST APIs (`/api/system/software`, `/api/system/software/remove`, `/api/system/software/prune`).
+- **Strict Secret Separation**: The released static binary contains zero embedded secrets. All secrets (`DNS_MASTER_KEY`, `DESEC_TOKEN`, etc.) are inherited dynamically from the environment.
 
 ---
 
@@ -465,8 +467,11 @@ All endpoints support authentication via `X-Master-Key` / `Authorization: Bearer
 | `/api/console/commands`, `/api/console/commands/{key}` | `GET` | Admin | List available interactive console commands. |
 | `/api/console/exec`, `/api/console/exec/{key}` | `POST` | Admin | Execute administrative console command. |
 | `/api/system/update/check`, `/api/system/update/check/{key}` | `GET` | View / Admin | Query GitHub Releases for binary update availability. |
-| `/api/system/update`, `/api/system/update/{key}` | `POST` | Admin | Hot-deploy latest verified static binary to `/data/amardns`. |
-| `/api/system/rollback`, `/api/system/rollback/{key}` | `POST` | Admin | Purge persistent binary and revert to container image base. |
+| `/api/system/update`, `/api/system/update/{key}` | `POST` | Admin | Hot-deploy latest verified static binary to `/amardns`. |
+| `/api/system/rollback`, `/api/system/rollback/{key}` | `POST` | Admin | Rotate active binary to `/amardns-<ver>` and restore `/amardns.bak`. |
+| `/api/system/software`, `/api/system/software/{key}` | `GET` | View / Admin | List on-disk software binaries, versions, sizes, and relative age. |
+| `/api/system/software/remove`, `/api/system/software/remove/{key}` | `POST` | Admin | Remove binary archive or backup (watchdog auto-recovers `/amardns`). |
+| `/api/system/software/prune`, `/api/system/software/prune/{key}` | `POST` | Admin | Purge archived `/amardns-*` binaries to free storage. |
 | `/internal/tls/bundle/{key}` | `GET` | Admin | Peer Anycast replica TLS certificate bundle sync. |
 | `/internal/acme/lock/{key}`, `/internal/acme/unlock/{key}` | `POST` | Admin | Distributed ACME renewal coordination locks. |
 
