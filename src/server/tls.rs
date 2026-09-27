@@ -246,6 +246,7 @@ where
 {
     let acceptor = TlsAcceptor::from(tls_config);
     let auto_builder = Builder::new(TokioExecutor::new());
+    let conn_limiter = Arc::new(tokio::sync::Semaphore::new(1024));
     tokio::pin!(shutdown);
 
     loop {
@@ -259,11 +260,21 @@ where
                     }
                 };
 
+                let permit = match conn_limiter.clone().try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        tracing::warn!("[tls] Max concurrent TLS connections (1024) reached; shedding connection from {}", remote_addr);
+                        drop(tcp_stream);
+                        continue;
+                    }
+                };
+
                 let acceptor = acceptor.clone();
                 let auto_builder = auto_builder.clone();
                 let app = app.clone();
 
                 tokio::spawn(async move {
+                    let _permit = permit;
                     let _ = tcp_stream.set_nodelay(true);
                     // Extract real client IP if PROXY protocol v2 header is present (Fly Anycast proxy)
                     let (real_client_addr, pre_read) = crate::server::dot::parse_proxy_v2_header(&mut tcp_stream, remote_addr).await;

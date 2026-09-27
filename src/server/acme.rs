@@ -79,6 +79,18 @@ pub fn b64url_decode(input: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// Writes private key bytes to disk, enforcing restrictive 0o600 permissions on Unix systems.
+fn write_private_key<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> std::io::Result<()> {
+    let p = path.as_ref();
+    fs::write(p, contents)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(p, fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
 #[derive(Deserialize, Debug)]
 struct Directory {
     #[serde(rename = "newNonce")]
@@ -131,7 +143,7 @@ impl AcmeClient {
                 let pkcs8_bytes =
                     EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng)
                         .map_err(|e| format!("generate_pkcs8 error: {:?}", e))?;
-                let _ = fs::write(account_key_path, pkcs8_bytes.as_ref());
+                let _ = write_private_key(account_key_path, pkcs8_bytes.as_ref());
                 EcdsaKeyPair::from_pkcs8(
                     &ECDSA_P256_SHA256_FIXED_SIGNING,
                     pkcs8_bytes.as_ref(),
@@ -142,7 +154,7 @@ impl AcmeClient {
         } else {
             let pkcs8_bytes = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng)
                 .map_err(|e| format!("generate_pkcs8 error: {:?}", e))?;
-            let _ = fs::write(account_key_path, pkcs8_bytes.as_ref());
+            let _ = write_private_key(account_key_path, pkcs8_bytes.as_ref());
             EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8_bytes.as_ref(), &rng)
                 .map_err(|e| format!("from_pkcs8 error: {:?}", e))?
         };
@@ -862,7 +874,7 @@ pub fn validate_existing_cert_and_key(
                     let _ = fs::create_dir_all(parent);
                 }
                 let _ = fs::write(cert_path, &cert_content);
-                let _ = fs::write(key_path, &key_content);
+                let _ = write_private_key(key_path, &key_content);
                 info!(
                     "[acme-supervisor] Restored valid certificate and key from candidate '{}' -> '{}' ({} days remaining)",
                     c_path, cert_path, days
@@ -1324,7 +1336,7 @@ async fn provision_acme_certificate_ca(
         let _ = f.sync_all();
     }
 
-    fs::write(&config.key_path, &key_pem)?;
+    write_private_key(&config.key_path, &key_pem)?;
     if let Ok(f) = std::fs::File::open(&config.key_path) {
         let _ = f.sync_all();
     }
@@ -1343,7 +1355,7 @@ async fn provision_acme_certificate_ca(
     // Also mirror to local fallback paths if saving in /data
     if config.cert_path.starts_with("/data/") {
         let _ = fs::write("cert.pem", &cert_pem);
-        let _ = fs::write("key.pem", &key_pem);
+        let _ = write_private_key("key.pem", &key_pem);
     }
 
     // Immediately update live QUIC / TLS in-memory certificate resolver
@@ -1770,10 +1782,10 @@ pub async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -
                                         let _ = fs::create_dir_all(parent);
                                     }
                                     let _ = fs::write(&config.cert_path, cert_pem);
-                                    let _ = fs::write(&config.key_path, key_pem);
+                                    let _ = write_private_key(&config.key_path, key_pem);
                                     if config.cert_path.starts_with("/data/") {
                                         let _ = fs::write("cert.pem", cert_pem);
-                                        let _ = fs::write("key.pem", key_pem);
+                                        let _ = write_private_key("key.pem", key_pem);
                                     }
                                     if let Some(ref resolver) = config.cert_resolver {
                                         if let Err(e) = resolver

@@ -218,6 +218,17 @@ pub async fn start_dot_server(
 
 const PROXY_V2_MAGIC: &[u8; 12] = b"\r\n\r\n\0\r\nQUIT\n";
 
+/// Determines if an IP is a trusted internal reverse proxy peer (loopback, RFC 1918 private IPv4, or unique-local / link-local IPv6).
+pub fn is_trusted_proxy_peer(ip: std::net::IpAddr) -> bool {
+    let canonical = ip.to_canonical();
+    match canonical {
+        std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00 || v6.is_unicast_link_local()
+        }
+    }
+}
+
 /// Attempts to parse HAProxy PROXY protocol v2 header from the incoming stream.
 /// If present, extracts the real client SocketAddr and returns any extra bytes read.
 /// If absent (e.g. direct TCP / health check), returns the original SocketAddr and the buffered bytes.
@@ -265,6 +276,15 @@ where
     }
 
     if total_read >= 12 && &header_buf[..12] == PROXY_V2_MAGIC {
+        // SECURITY: Reject PROXY v2 header injection from untrusted public peers
+        if !is_trusted_proxy_peer(fallback_addr.ip()) {
+            warn!(
+                "[dot] Untrusted peer {} attempted to inject PROXY v2 header; ignoring header to prevent IP spoofing",
+                fallback_addr
+            );
+            return (fallback_addr, Vec::new());
+        }
+
         // Ensure all 16 fixed header bytes are read
         if total_read < 16
             && tokio::time::timeout(
@@ -280,6 +300,11 @@ where
         let ver_cmd = header_buf[12];
         let fam_proto = header_buf[13];
         let addr_len = u16::from_be_bytes([header_buf[14], header_buf[15]]) as usize;
+
+        // HAProxy PROXY v2 specification defines max total header size as 536 bytes
+        if addr_len > 536 {
+            return (fallback_addr, Vec::new());
+        }
 
         if (ver_cmd & 0xF0) == 0x20 {
             let mut addr_buf = vec![0u8; addr_len];
@@ -558,6 +583,27 @@ mod tests {
         let res = read_exact_buffered(&mut cursor, &mut pre_read, &mut out).await;
         assert!(res.is_ok());
         assert_eq!(out, data);
+    }
+
+    #[tokio::test]
+    async fn test_parse_proxy_v2_rejected_from_untrusted_peer() {
+        let fallback: SocketAddr = "203.0.113.195:853".parse().unwrap();
+        // Attacker on public IP tries to spoof 127.0.0.1 via PROXY v2
+        let mut data = Vec::new();
+        data.extend_from_slice(PROXY_V2_MAGIC);
+        data.push(0x21); // v2, PROXY command
+        data.push(0x11); // AF_INET, STREAM (TCP)
+        data.extend_from_slice(&12u16.to_be_bytes()); // length 12
+        data.extend_from_slice(&[127, 0, 0, 1]); // fake src: 127.0.0.1
+        data.extend_from_slice(&[127, 0, 0, 1]); // dst
+        data.extend_from_slice(&1234u16.to_be_bytes()); // src port
+        data.extend_from_slice(&853u16.to_be_bytes()); // dst port
+
+        let mut cursor = Cursor::new(data);
+        let (extracted_addr, _pre_read) = parse_proxy_v2_header(&mut cursor, fallback).await;
+
+        // Must reject spoofed IP and retain the real direct peer fallback address
+        assert_eq!(extracted_addr, fallback);
     }
 
     #[tokio::test]

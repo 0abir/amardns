@@ -287,6 +287,9 @@ impl DnsCache {
                 pos += 1 + len;
             }
             pos += 4; // QTYPE(2) + QCLASS(2)
+            if pos > wire.len() {
+                return;
+            }
         }
 
         // Walk Answer, Authority, and Additional sections
@@ -325,7 +328,7 @@ impl DnsCache {
                 wire[ttl_offset..ttl_offset + 4].copy_from_slice(&remaining_ttl.to_be_bytes());
             }
             let rdlen = u16::from_be_bytes([wire[pos + 8], wire[pos + 9]]) as usize;
-            pos += 10 + rdlen;
+            pos = pos.saturating_add(10 + rdlen);
         }
     }
 

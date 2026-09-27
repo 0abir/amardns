@@ -96,14 +96,23 @@ pub async fn start_doq_server(
         "[doq] AmarDNS DoQ server listening on udp://{} (RFC 9250, ALPN: doq)",
         bind_addr
     );
+    let conn_limiter = Arc::new(tokio::sync::Semaphore::new(1024));
 
     loop {
         tokio::select! {
             incoming_conn = endpoint.accept() => {
                 match incoming_conn {
                     Some(incoming) => {
+                        let permit = match conn_limiter.clone().try_acquire_owned() {
+                            Ok(p) => p,
+                            Err(_) => {
+                                warn!("[doq] Max concurrent DoQ connections (1024) reached; shedding incoming connection");
+                                continue;
+                            }
+                        };
                         let state = state.clone();
                         tokio::spawn(async move {
+                            let _permit = permit;
                             match incoming.await {
                                 Ok(conn) => {
                                     handle_doq_connection(state, conn).await;

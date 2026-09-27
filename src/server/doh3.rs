@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::dns::parser::build_servfail_response;
 use crate::state::AppState;
@@ -92,14 +92,23 @@ pub async fn start_doh3_server(
         "[doh3] AmarDNS DoH3 server listening on udp://{} (RFC 9114, ALPN: h3)",
         bind_addr
     );
+    let conn_limiter = Arc::new(tokio::sync::Semaphore::new(1024));
 
     loop {
         tokio::select! {
             incoming_conn = endpoint.accept() => {
                 match incoming_conn {
                     Some(incoming) => {
+                        let permit = match conn_limiter.clone().try_acquire_owned() {
+                            Ok(p) => p,
+                            Err(_) => {
+                                warn!("[doh3] Max concurrent DoH3 connections (1024) reached; shedding incoming connection");
+                                continue;
+                            }
+                        };
                         let state = state.clone();
                         tokio::spawn(async move {
+                            let _permit = permit;
                             match incoming.await {
                                 Ok(conn) => {
                                     handle_doh3_connection(state, conn).await;

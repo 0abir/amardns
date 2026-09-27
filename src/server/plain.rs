@@ -235,6 +235,7 @@ pub async fn start_plain_tcp(
     };
 
     info!("[plain53] TCP DNS listener active on {}", addr);
+    let conn_limiter = Arc::new(tokio::sync::Semaphore::new(1024));
 
     loop {
         tokio::select! {
@@ -247,8 +248,19 @@ pub async fn start_plain_tcp(
             result = listener.accept() => {
                 match result {
                     Ok((stream, peer)) => {
+                        let permit = match conn_limiter.clone().try_acquire_owned() {
+                            Ok(p) => p,
+                            Err(_) => {
+                                warn!("[plain53] Max concurrent TCP connections (1024) reached; shedding connection from {}", peer);
+                                drop(stream);
+                                continue;
+                            }
+                        };
                         let state2 = state.clone();
-                        tokio::spawn(handle_plain_tcp_conn(state2, stream, peer));
+                        tokio::spawn(async move {
+                            let _permit = permit;
+                            handle_plain_tcp_conn(state2, stream, peer).await;
+                        });
                     }
                     Err(e) => {
                         error!("[plain53] TCP accept error: {}", e);
