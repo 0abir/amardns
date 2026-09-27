@@ -172,7 +172,7 @@ Incoming Query (DoH / DoH3 / DoQ / DoT / Plain 53)
 - **Persistent Volume Binary Execution**: On boot, AmarDNS inspects `/data/amardns` on the persistent NVMe volume. If an updated binary is present, execution transfers immediately via `execve` while preserving all file descriptors and environment variables.
 - **Zero-Redeploy Hot Updates**: Administrators can trigger `/api/system/update` or click "Update Binary Now" directly from the dashboard using the Master Key. The daemon queries GitHub Releases for the latest verified `amardns` binary, verifies its SHA256 checksum, atomically stages it to `/data/amardns`, and seamlessly restarts in under 3 seconds without rebuilding or redeploying the Docker container.
 - **Instant Rollback**: If an update needs to be reverted, `/api/system/rollback` purges `/data/amardns` and automatically falls back to the rock-solid base container image binary.
-- **Strict Secret Separation**: The released static binary contains zero embedded secrets or environment variables. All secrets (`DNS_MASTER_KEY`, `DESEC_TOKEN`, etc.) are inherited dynamically from Fly.io's encrypted microVM runtime environment.
+- **Strict Secret Separation**: The released static binary contains zero embedded secrets or environment variables. All secrets (`DNS_MASTER_KEY`, `DESEC_TOKEN`, etc.) are inherited dynamically from the secure host/container runtime environment.
 
 ---
 
@@ -230,13 +230,25 @@ docker run -d \
 
 ---
 
-## Deploy to Fly.io
+## Deployment (Docker / Container)
 
-AmarDNS deploys to Fly.io with multi-region Anycast, persistent storage volumes, and custom TLS termination:
+AmarDNS runs as a static zero-GC appliance inside a minimal scratch container (<12 MB) supporting both `linux/amd64` and `linux/arm64`:
 
 ```bash
-# Deploy to Fly.io
-fly deploy --ha=false
+# Pull and run directly from GitHub Container Registry
+docker run -d \
+  --name amardns \
+  --restart always \
+  -p 53:53/udp \
+  -p 53:53/tcp \
+  -p 443:443/tcp \
+  -p 443:443/udp \
+  -p 853:853/tcp \
+  -p 853:853/udp \
+  -v amardns_data:/data \
+  -e DNS_ACCESS_MODE=public \
+  -e LOG_LEVEL=info \
+  ghcr.io/0abir/amardns:latest
 ```
 
 ---
@@ -288,10 +300,9 @@ AmarDNS features built-in, autonomous Dynamic DNS (DDNS) and ACME DNS-01 certifi
 | **DuckDNS** | `*.duckdns.org` | `DUCKDNS_DOMAIN` | `DUCKDNS_TOKEN` | Automated `A` & `AAAA` IP sync + ACME DNS-01 challenge TXT records |
 | **Dynu** | `*.dynu.net`, `*.ddnsfree.com`, `*.freeddns.org`, `*.mywire.org`, etc. | `DYNU_DOMAIN` | `DYNU_API_KEY` | Automated `A` & `AAAA` IP sync via REST API v2 + ACME DNS-01 challenge TXT records |
 
-#### Configuration Example (`fly.toml`):
+#### Configuration Example (`.env` / container environment):
 ```toml
-[env]
-  # Platform Domain Access Policy:
+# Platform Domain Access Policy:
   # Set to "false" to restrict access exclusively to your custom domains below.
   # If no custom domains are defined, this automatically defaults/overrides to "true".
   PLATFORM_DOMAIN = "false"
