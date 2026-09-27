@@ -128,17 +128,17 @@ impl PassiveDnsStore {
             let entries: Vec<&PassiveDnsEntry> =
                 rec.entries.iter().filter(|e| e.seen_at >= cutoff).collect();
             if entries.len() >= 2 {
-                let first = entries.last().unwrap();
-                let last = entries.first().unwrap();
-                if first.ip != last.ip {
-                    out.push(serde_json::json!({
-                        "domain": domain,
-                        "newIp": last.ip,
-                        "oldIp": first.ip,
-                        "seenAt": last.seen_at
-                    }));
-                    if out.len() >= limit {
-                        break;
+                if let (Some(first), Some(last)) = (entries.last(), entries.first()) {
+                    if first.ip != last.ip {
+                        out.push(serde_json::json!({
+                            "domain": domain,
+                            "newIp": last.ip,
+                            "oldIp": first.ip,
+                            "seenAt": last.seen_at
+                        }));
+                        if out.len() >= limit {
+                            break;
+                        }
                     }
                 }
             }

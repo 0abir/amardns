@@ -1392,7 +1392,7 @@ function isNodeSelected(node){
     }
   }
   return false;
-}if(!_KEY){var _p=window.location.pathname.split('/').filter(Boolean);if(_p.length>0&&_p[0]!=='dashboard')_KEY=_p[0];}if(!_TARGET_INSTANCE&&typeof window!=='undefined'&&window.location.search){var _u=new URL(window.location.href);_TARGET_INSTANCE=_u.searchParams.get('instance')||'';}
+}if(!_KEY){var _p=window.location.pathname.split('/').filter(Boolean);if(_p.length>0&&_p[0]!=='dashboard'){_KEY=_p[0];try{sessionStorage.setItem('amardns_token',_KEY);}catch(_){}if(typeof history!=='undefined'&&history.replaceState){history.replaceState({},'','/dashboard');}}else if(typeof sessionStorage!=='undefined'){_KEY=sessionStorage.getItem('amardns_token')||sessionStorage.getItem('amardns_key')||'';}}else{try{sessionStorage.setItem('amardns_token',_KEY);}catch(_){}}if(!_TARGET_INSTANCE&&typeof window!=='undefined'&&window.location.search){var _u=new URL(window.location.href);_TARGET_INSTANCE=_u.searchParams.get('instance')||'';}
 function wp(p){return BASE+p;}
 function tc(r){if(!r)return'var(--sub)';var ru=r.toUpperCase();if(ru.includes('ABIR'))return'#00e5cc';if(ru.includes('GSB'))return'#4285f4';if(ru.includes('MALWARE')||ru.includes('RANSOMWARE'))return'#ff2d6b';if(ru.includes('DGA'))return'#9d4edd';if(ru.includes('PHISH')||ru.includes('SOCIAL_ENGINEERING'))return'#fbbf24';if(ru.includes('TYPOSQUAT'))return'#f97316';if(ru.includes('BRAND_IMPERSONAT')||ru.includes('LEET_IMPERSONAT'))return'#e879f9';if(ru.includes('ALIKE')||ru.includes('LOOKALIKE')||ru.includes('SCRIPT_MIX')||ru.includes('IDN'))return'#f43f5e';if(ru.includes('REBIND'))return'#fb7185';if(ru.includes('TRACK'))return'#00ffe7';if(ru.includes('MINER'))return'#c084fc';if(ru.includes('C2')||ru.includes('BEACON'))return'#a855f7';if(ru.includes('TUNNEL'))return'#34d399';if(ru.includes('BURST')||ru.includes('FLOOD'))return'#38bdf8';if(ru.includes('SCAN'))return'#facc15';if(ru.includes('AI'))return'#b8ff57';if(ru.includes('MANUAL')||ru.includes('BLOCKLIST'))return'#fcd34d';if(ru.includes('AD'))return'#6ee7b7';if(ru.includes('AUTO'))return'#ff8c00';return'var(--sub)';}
 function fd(s){if(!s)return'';if(s<60)return s+'s';var m=Math.round(s/60);if(m<60)return m+'m';var h=Math.round(m/60);if(h<24)return h+'h';var d=Math.round(h/24);if(d<7)return d+'d';var w=Math.round(d/7);if(w<4)return w+'w';var mo=Math.round(d/30);if(mo<12)return mo+'mo';return Math.round(d/365)+'y';}
@@ -3659,7 +3659,9 @@ function genToken(){
   var num=Math.max(1,parseInt(numEl?numEl.value:'1',10)||1);
   var unit=unitEl?unitEl.value:'d';
   var ttl=num+unit;
-  fetch(BASE+'/api/token/'+_KEY+'?path='+encodeURIComponent(p)+'&ttl='+encodeURIComponent(ttl),{headers:{'cache-control':'no-store'}}).then(function(r){
+  var tokHdrs={'cache-control':'no-store'};
+  if(_KEY){tokHdrs['authorization']='Bearer '+_KEY;tokHdrs['x-auth-key']=_KEY;}
+  fetch(BASE+'/api/token?path='+encodeURIComponent(p)+'&ttl='+encodeURIComponent(ttl),{headers:tokHdrs}).then(function(r){
     return r.text().then(function(t){
       var j;try{j=JSON.parse(t);}catch(_){j={error:t||('HTTP '+r.status)};}
       if(!r.ok)throw new Error(j.error||('HTTP '+r.status));
@@ -4192,7 +4194,9 @@ function nuclearWipe(){
 function _doNuke(btn,res){
   var _nukeToken=null;
   res.innerHTML='<span style="color:var(--warn)">Requesting nuke token…</span>';
-  fetch(BASE+'/api/nuke-token/'+_KEY,{headers:{'cache-control':'no-store'}}).then(function(tk_r){return tk_r.json();}).then(function(tk){if(!tk.nukeToken){throw new Error(tk.error||'Token error');}
+  var nukeHdrs={'cache-control':'no-store'};
+  if(_KEY){nukeHdrs['authorization']='Bearer '+_KEY;nukeHdrs['x-auth-key']=_KEY;}
+  fetch(BASE+'/api/nuke-token',{headers:nukeHdrs}).then(function(tk_r){return tk_r.json();}).then(function(tk){if(!tk.nukeToken){throw new Error(tk.error||'Token error');}
   _nukeToken=tk.nukeToken;res.innerHTML='<span style="color:var(--warn)">Executing nuclear wipe…</span>';
   api('/api/nuclear-wipe','POST',{confirm:'NUCLEAR_WIPE_CONFIRMED',nukeToken:_nukeToken}).then(function(d){
     res.innerHTML='<span style="color:var(--good)"> '+d.message+'</span>';
@@ -4208,7 +4212,7 @@ function _doNuke(btn,res){
   }).catch(function(e){res.innerHTML='<span style="color:var(--bad)">Token error: '+e.message+'</span>';btn.disabled=false;toast(e.message,'er');});
 }
 
-// API helper — URL scheme: BASE/<route>/<key>  (key always last segment)
+// API helper — header-only authorization (clean URL paths)
 function api(p,method,body){
   var o={method:method||'GET',headers:{'cache-control':'no-store'}};
   if(_KEY){o.headers['x-auth-key']=_KEY;o.headers['authorization']='Bearer '+_KEY;}
@@ -4217,7 +4221,7 @@ function api(p,method,body){
   var qIdx=p.indexOf('?');
   var ep=qIdx!==-1?p.slice(0,qIdx):p;
   var q=qIdx!==-1?p.slice(qIdx):'';
-  var u=BASE+ep+(_KEY?('/'+_KEY):'')+q;
+  var u=BASE+ep+q;
   return fetch(u,o).then(function(r){
     return r.text().then(function(t){
       var j;try{j=JSON.parse(t);}catch(_){j={error:t||('HTTP '+r.status)};}
@@ -4231,8 +4235,9 @@ function go(){
   var pill=document.getElementById('pill');
   var ac=new AbortController,tout=setTimeout(function(){ac.abort();},4000);
   var hdrs={accept:'application/json','cache-control':'no-store'};
+  if(_KEY){hdrs['authorization']='Bearer '+_KEY;hdrs['x-auth-key']=_KEY;}
   if(_TARGET_INSTANCE&&_TARGET_INSTANCE!=='rust-machine'&&_TARGET_INSTANCE.length>=14){hdrs['fly-force-instance-id']=_TARGET_INSTANCE;}
-  var statusUrl=BASE+(_KEY?('/'+_KEY):'/');
+  var statusUrl=BASE+'/api/status';
   fetch(statusUrl,{headers:hdrs,cache:'no-store',signal:ac.signal})
   .then(function(r){
     if(!r.ok)throw new Error('HTTP '+r.status);

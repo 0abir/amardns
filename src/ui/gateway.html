@@ -451,7 +451,11 @@ h1 {
         } catch(_) {}
       }
       val = val.replace(/^\/+/, '');
-      window.location.href = '/' + val;
+      try {
+        sessionStorage.setItem('amardns_token', val);
+        sessionStorage.setItem('amardns_key', val);
+      } catch(_) {}
+      window.location.href = '/dashboard';
     });
   }
 })();

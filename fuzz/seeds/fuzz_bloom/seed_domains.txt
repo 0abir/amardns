@@ -1,0 +1,5 @@
+google.com
+cloudflare.com
+apple.com
+malicious-c2-tracker.biz
+tracker.telemetry.ad

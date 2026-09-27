@@ -108,6 +108,70 @@ pub fn generate_hmac_token(secret: &str, target_path: &str, ttl_secs: u64) -> St
     format!("{}{}{}", ts_hex, ttl_hex, sig_hex)
 }
 
+/// Generates a signed, short-lived admin session token.
+/// Allows admin authentication without exposing the permanent DNS_MASTER_KEY in client DOM/transports.
+pub fn generate_admin_token(secret: &str, ttl_secs: u64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let ts_hex = format!("{:08x}", now);
+    let ttl_val = ttl_secs.max(60);
+    let ttl_hex = format!("{:08x}", ttl_val);
+    let scope = "ADMIN_SESSION";
+
+    let msg = format!("{}{}{}", ts_hex, ttl_hex, scope);
+    let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
+    let tag = hmac::sign(&key, msg.as_bytes());
+    let sig_hex = hex_encode(tag.as_ref());
+
+    format!("{}{}{}", ts_hex, ttl_hex, sig_hex)
+}
+
+/// Verifies an admin session token against the secret and expiration window.
+pub fn verify_admin_token(token: &str, secret: &str) -> bool {
+    if !is_token_well_formed(token) {
+        return false;
+    }
+    if secret.is_empty() || token.len() != 80 {
+        return false;
+    }
+
+    let ts_hex = &token[0..8];
+    let ttl_hex = &token[8..16];
+    let sig_hex = &token[16..80];
+
+    let ttl_seconds = match u64::from_str_radix(ttl_hex, 16) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let ts = match u64::from_str_radix(ts_hex, 16) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    // Check validity window with 60s clock skew tolerance
+    if now + 60 < ts || now > ts + ttl_seconds {
+        return false;
+    }
+
+    let sig_bytes = match hex_decode(sig_hex) {
+        Some(b) => b,
+        None => return false,
+    };
+
+    let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
+    let admin_msg = format!("{}{}{}", ts_hex, ttl_hex, "ADMIN_SESSION");
+    hmac::verify(&key, admin_msg.as_bytes(), &sig_bytes).is_ok()
+}
+
 /// Verifies a token string against the secret and target path.
 ///
 /// # Security
@@ -231,6 +295,10 @@ pub fn check_auth(
     let candidate = if let Some(p) = key_param {
         let p_clean = p.trim();
         if !p_clean.is_empty() && p_clean != "dashboard" && p_clean != "status" {
+            tracing::warn!(
+                "[auth-deprecate] Authentication via URL path parameter ('{}') is deprecated for security. Use 'Authorization: Bearer <token>' or 'x-auth-key' headers.",
+                path
+            );
             Some(p_clean.to_string())
         } else {
             None
@@ -265,10 +333,17 @@ pub fn check_auth(
         None => return AuthRole::None,
     };
 
-    // 3. Admin Authentication: Compare with DNS_MASTER_KEY
+    // 3. Admin Authentication: Compare with DNS_MASTER_KEY or verify signed ADMIN_SESSION token
     let master_key = &state.config.dns_master_key;
     if !master_key.is_empty() && constant_time_eq_str(&token, master_key) {
         return AuthRole::Admin;
+    }
+    if verify_admin_token(&token, &state.config.dns_token_secret) {
+        let ts_hex = &token[0..8];
+        let ts = u64::from_str_radix(ts_hex, 16).unwrap_or(0);
+        if !state.is_token_revoked(&token, ts) {
+            return AuthRole::Admin;
+        }
     }
 
     // 4. View-Only Authentication: HMAC-signed token only.
@@ -291,6 +366,65 @@ pub fn check_auth(
         .auth_fails
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     AuthRole::None
+}
+
+/// Curated list of friendly dictionary words for DoT/DoQ device slugs.
+pub const FRIENDLY_DICTIONARY_WORDS: &[&str] = &[
+    "acorn", "amber", "apple", "arrow", "atlas", "aurora", "beacon", "berry", "birch", "blaze",
+    "bloom", "breeze", "bright", "brook", "cedar", "clover", "comet", "coral", "cosmos", "crest",
+    "crystal", "dawn", "delta", "dove", "drift", "eagle", "echo", "ember", "falcon", "feather",
+    "fern", "flame", "forest", "frost", "galaxy", "gem", "glade", "glow", "grove", "harbor",
+    "haven", "hawk", "hazel", "heart", "honey", "horizon", "island", "ivy", "jade", "jasper",
+    "joy", "jungle", "lake", "lark", "leaf", "light", "lily", "lion", "lotus", "love",
+    "luna", "maple", "meadow", "moon", "moss", "mountain", "nebula", "nest", "nova", "oak",
+    "oasis", "ocean", "olive", "onyx", "opal", "orbit", "otter", "owl", "panda", "peak",
+    "pearl", "pebble", "petal", "pine", "planet", "pond", "pulse", "quartz", "quill", "rain",
+    "raven", "reef", "ridge", "river", "robin", "rose", "ruby", "sage", "sapphire", "shadow",
+    "shore", "silver", "sky", "solar", "spark", "spring", "star", "stone", "storm", "stream",
+    "summit", "sun", "sunset", "swift", "tiger", "timber", "topaz", "trail", "valley", "wave",
+    "willow", "wind", "winter", "wolf", "zenith",
+];
+
+/// Parses and validates a friendly device slug from an SNI domain or slug string.
+/// Format must be `<dictionary_word><number>` (e.g. `love8` in `love8.dns.example.com`).
+pub fn parse_friendly_device_slug(sni_or_slug: &str) -> Option<String> {
+    let clean = sni_or_slug.trim().to_ascii_lowercase();
+    if clean.is_empty() {
+        return None;
+    }
+    // Take the first subdomain label if full domain is passed
+    let slug = clean.split('.').next().unwrap_or("");
+    if slug.is_empty() {
+        return None;
+    }
+
+    // Must contain both letters and digits: split at first ASCII digit
+    let first_digit_idx = slug.find(|c: char| c.is_ascii_digit())?;
+    if first_digit_idx == 0 {
+        return None; // Cannot start with digit
+    }
+
+    let (word, digits) = slug.split_at(first_digit_idx);
+    if word.is_empty() || digits.is_empty() {
+        return None;
+    }
+
+    // Word must be purely ASCII alphabetic
+    if !word.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+
+    // Digits must be purely ASCII digits
+    if !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+
+    // Verify word exists in the curated dictionary list
+    if !FRIENDLY_DICTIONARY_WORDS.contains(&word) {
+        return None;
+    }
+
+    Some(slug.to_string())
 }
 
 #[cfg(test)]
@@ -465,5 +599,47 @@ mod tests {
             check_auth(&state, Some(&token_epoch), &HeaderMap::new(), "/api/status"),
             AuthRole::None
         );
+    }
+
+    #[test]
+    fn test_admin_session_token() {
+        let mut config = Config::from_env();
+        config.dns_master_key = "secret_master_key".to_string();
+        config.dns_token_secret = "secret_token_key".to_string();
+        let state = AppState::new(config);
+
+        let admin_token = generate_admin_token(&state.config.dns_token_secret, 3600);
+        assert!(verify_admin_token(&admin_token, &state.config.dns_token_secret));
+        assert!(!verify_admin_token(&admin_token, "wrong_secret"));
+        assert_eq!(
+            check_auth(&state, Some(&admin_token), &HeaderMap::new(), "/api/console/exec"),
+            AuthRole::Admin
+        );
+        state.revoke_token(&admin_token);
+        assert_eq!(
+            check_auth(&state, Some(&admin_token), &HeaderMap::new(), "/api/console/exec"),
+            AuthRole::None
+        );
+    }
+
+    #[test]
+    fn test_parse_friendly_device_slug() {
+        // Valid slugs (with or without domain suffixes, case-insensitive)
+        assert_eq!(parse_friendly_device_slug("love8.dns.example.com"), Some("love8".to_string()));
+        assert_eq!(parse_friendly_device_slug("LOVE8.DNS.EXAMPLE.COM"), Some("love8".to_string()));
+        assert_eq!(parse_friendly_device_slug("love8"), Some("love8".to_string()));
+        assert_eq!(parse_friendly_device_slug("star3.example.org"), Some("star3".to_string()));
+        assert_eq!(parse_friendly_device_slug("swift42.internal.net"), Some("swift42".to_string()));
+        assert_eq!(parse_friendly_device_slug("haven7"), Some("haven7".to_string()));
+        assert_eq!(parse_friendly_device_slug("tiger999"), Some("tiger999".to_string()));
+
+        // Invalid slugs
+        assert_eq!(parse_friendly_device_slug("love"), None); // No number
+        assert_eq!(parse_friendly_device_slug("8love"), None); // Starts with number
+        assert_eq!(parse_friendly_device_slug("12345"), None); // No word
+        assert_eq!(parse_friendly_device_slug("random8.dns.example.com"), None); // Not in dictionary
+        assert_eq!(parse_friendly_device_slug("love8xyz"), None); // Letters after digits
+        assert_eq!(parse_friendly_device_slug("love-8"), None); // Non-alphanumeric separator
+        assert_eq!(parse_friendly_device_slug(""), None); // Empty
     }
 }

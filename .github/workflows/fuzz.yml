@@ -1,0 +1,111 @@
+name: Continuous Fuzzing & Protocol Hardening
+
+on:
+  schedule:
+    # Daily at 04:00 UTC
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      duration_seconds:
+        description: 'Fuzz duration per target in seconds (default: 600 = 10 minutes)'
+        required: false
+        default: '600'
+        type: string
+  pull_request:
+    paths:
+      - 'src/dns/**'
+      - 'src/security/**'
+      - 'fuzz/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/fuzz.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_dns_parser
+          - fuzz_dnssec
+          - fuzz_bloom
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@cargo-fuzz
+
+      - name: Cache Cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            fuzz/target
+          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('**/Cargo.lock') }}-${{ matrix.target }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-fuzz-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-fuzz-
+
+      - name: Cache persistent fuzzing corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      - name: Seed initial corpus
+        run: |
+          mkdir -p "fuzz/corpus/${{ matrix.target }}"
+          if [ -d "fuzz/seeds/${{ matrix.target }}" ]; then
+            echo "Populating corpus from fuzz/seeds/${{ matrix.target }}..."
+            cp -n fuzz/seeds/${{ matrix.target }}/* "fuzz/corpus/${{ matrix.target }}/" 2>/dev/null || true
+          fi
+          echo "Seeded corpus count: $(find "fuzz/corpus/${{ matrix.target }}" -maxdepth 1 -type f | wc -l) files"
+
+      - name: Determine fuzzing duration
+        id: duration
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # Fast smoke fuzzing for PR quality gate (60 seconds per target)
+            echo "seconds=60" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ inputs.duration_seconds }}" ]; then
+            echo "seconds=${{ inputs.duration_seconds }}" >> "$GITHUB_OUTPUT"
+          else
+            # 600 seconds = 10 minutes continuous fuzzing per target
+            echo "seconds=600" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Execute libFuzzer (${{ steps.duration.outputs.seconds }}s)
+        run: |
+          mkdir -p "fuzz/artifacts/${{ matrix.target }}"
+          DURATION="${{ steps.duration.outputs.seconds }}"
+          echo "Starting continuous fuzzing for ${{ matrix.target }} (${DURATION} seconds)..."
+          cargo fuzz run "${{ matrix.target }}" -- \
+            -max_total_time="${DURATION}" \
+            -artifact_prefix="fuzz/artifacts/${{ matrix.target }}/" \
+            -print_final_stats=1
+
+      - name: Upload crash reproducer artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-reproducer-${{ matrix.target }}-${{ github.run_id }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

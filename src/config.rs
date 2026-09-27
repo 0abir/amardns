@@ -38,6 +38,7 @@ pub struct Config {
     pub doq_port: u16,
     pub doh3_enabled: bool,
     pub doh3_port: u16,
+    pub rfc1035_8bit_labels: bool,
 }
 
 /// Parse a port number from the named environment variable.  If the variable
@@ -246,6 +247,9 @@ impl Config {
             doq_port,
             doh3_enabled,
             doh3_port,
+            rfc1035_8bit_labels: env::var("RFC1035_8BIT_LABELS")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(true),
         }
     }
 

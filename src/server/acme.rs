@@ -1048,7 +1048,9 @@ async fn provision_acme_certificate_ca(
     let mut challenge_triggers: Vec<(String, String)> = Vec::new();
 
     for authz_val in authz_urls {
-        let authz_url = authz_val.as_str().unwrap();
+        let authz_url = authz_val
+            .as_str()
+            .ok_or("Malformed authz URL in ACME response")?;
         let authz_data: serde_json::Value = client
             .post_jws(authz_url, &serde_json::Value::Null)
             .await?
@@ -1056,7 +1058,7 @@ async fn provision_acme_certificate_ca(
             .await?;
         let domain = authz_data["identifier"]["value"]
             .as_str()
-            .unwrap()
+            .ok_or("Missing domain identifier in ACME authz response")?
             .to_string();
         let authz_status = authz_data["status"].as_str().unwrap_or("pending");
 
@@ -1070,13 +1072,18 @@ async fn provision_acme_certificate_ca(
 
         let challenges = authz_data["challenges"]
             .as_array()
-            .ok_or("No challenges array")?;
+            .ok_or("No challenges array in ACME authz response")?;
         let dns_challenge = challenges
             .iter()
             .find(|c| c["type"] == "dns-01")
-            .ok_or("No dns-01 challenge found")?;
-        let token = dns_challenge["token"].as_str().unwrap();
-        let challenge_url = dns_challenge["url"].as_str().unwrap().to_string();
+            .ok_or("No dns-01 challenge found in ACME authz response")?;
+        let token = dns_challenge["token"]
+            .as_str()
+            .ok_or("Missing token in ACME dns-01 challenge")?;
+        let challenge_url = dns_challenge["url"]
+            .as_str()
+            .ok_or("Missing URL in ACME dns-01 challenge")?
+            .to_string();
 
         let key_auth = format!("{}.{}", token, client.jwk_thumbprint);
         let digest_hash = ring::digest::digest(&ring::digest::SHA256, key_auth.as_bytes());
@@ -1707,31 +1714,18 @@ pub async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -
 
     let mut peer_urls = vec![
         format!(
-            "http://{}.{}.internal:443/internal/tls/bundle/{}",
-            primary_region, app_name, key
-        ),
-        format!(
-            "http://{}.internal:443/internal/tls/bundle/{}",
-            app_name, key
-        ),
-        format!(
             "http://{}.{}.internal:443/internal/tls/bundle",
             primary_region, app_name
         ),
-        format!("http://{}.internal:443/internal/tls/bundle/{}", app_name, key),
         format!("http://{}.internal:443/internal/tls/bundle", app_name),
-        format!("http://_apps.internal:443/internal/tls/bundle/{}", key),
-        format!(
-            "http://top1.nearest.of.{}.internal:443/internal/tls/bundle/{}",
-            app_name, key
-        ),
+        "http://_apps.internal:443/internal/tls/bundle".to_string(),
         format!(
             "http://top1.nearest.of.{}.internal:443/internal/tls/bundle",
             app_name
         ),
     ];
 
-    // Direct IPv6 resolution across all Fly mesh instances in cluster
+    // Direct IPv6 resolution across all mesh instances in cluster
     for lookup in &[
         format!("{}.{}.internal:443", primary_region, app_name),
         format!("{}.internal:443", app_name),
@@ -1739,11 +1733,6 @@ pub async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -
     ] {
         if let Ok(addrs) = tokio::net::lookup_host(lookup).await {
             for addr in addrs {
-                peer_urls.push(format!(
-                    "http://[{}]:443/internal/tls/bundle/{}",
-                    addr.ip(),
-                    key
-                ));
                 peer_urls.push(format!(
                     "http://[{}]:443/internal/tls/bundle",
                     addr.ip()
@@ -1844,24 +1833,16 @@ async fn try_acquire_cluster_lock(
         *lock = Some((machine_id.to_string(), now + 600));
     }
 
-    // 2. Query peer nodes across Fly 6PN to acquire lock
+    // 2. Query peer nodes across mesh to acquire lock
     let mut lock_urls = vec![
         format!(
-            "https://{}.{}.internal:443/internal/acme/lock/{}",
-            primary_region, app_name, key
+            "http://{}.{}.internal:443/internal/acme/lock",
+            primary_region, app_name
         ),
+        format!("http://{}.internal:443/internal/acme/lock", app_name),
         format!(
-            "https://{}.internal:443/internal/acme/lock/{}",
-            app_name, key
-        ),
-        format!(
-            "http://{}.{}.internal:443/internal/acme/lock/{}",
-            primary_region, app_name, key
-        ),
-        format!("http://{}.internal:443/internal/acme/lock/{}", app_name, key),
-        format!(
-            "http://top1.nearest.of.{}.internal:443/internal/acme/lock/{}",
-            app_name, key
+            "http://top1.nearest.of.{}.internal:443/internal/acme/lock",
+            app_name
         ),
     ];
 
@@ -1872,9 +1853,8 @@ async fn try_acquire_cluster_lock(
         if let Ok(addrs) = tokio::net::lookup_host(lookup).await {
             for addr in addrs {
                 lock_urls.push(format!(
-                    "http://[{}]:443/internal/acme/lock/{}",
-                    addr.ip(),
-                    key
+                    "http://[{}]:443/internal/acme/lock",
+                    addr.ip()
                 ));
             }
         }
@@ -1948,21 +1928,10 @@ async fn try_release_cluster_lock(
 
     let mut unlock_urls = vec![
         format!(
-            "https://{}.{}.internal:443/internal/acme/unlock/{}",
-            primary_region, app_name, key
+            "http://{}.{}.internal:443/internal/acme/unlock",
+            primary_region, app_name
         ),
-        format!(
-            "https://{}.internal:443/internal/acme/unlock/{}",
-            app_name, key
-        ),
-        format!(
-            "http://{}.{}.internal:443/internal/acme/unlock/{}",
-            primary_region, app_name, key
-        ),
-        format!(
-            "http://{}.internal:443/internal/acme/unlock/{}",
-            app_name, key
-        ),
+        format!("http://{}.internal:443/internal/acme/unlock", app_name),
     ];
 
     for lookup in &[
@@ -1972,9 +1941,8 @@ async fn try_release_cluster_lock(
         if let Ok(addrs) = tokio::net::lookup_host(lookup).await {
             for addr in addrs {
                 unlock_urls.push(format!(
-                    "http://[{}]:443/internal/acme/unlock/{}",
-                    addr.ip(),
-                    key
+                    "http://[{}]:443/internal/acme/unlock",
+                    addr.ip()
                 ));
             }
         }

@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::dns::parser::build_servfail_response;
 use crate::state::AppState;
@@ -135,9 +135,35 @@ pub async fn start_doq_server(
 /// Handles a single established QUIC connection for DoQ.
 async fn handle_doq_connection(state: Arc<AppState>, conn: quinn::Connection) {
     let client_ip = conn.remote_address().ip();
+    let is_private = state.is_private_mode.load(std::sync::atomic::Ordering::Relaxed);
 
-    // Connection-level rate limit check
-    if !state.check_rate_limit(client_ip, None) {
+    // Extract SNI from Quinn QUIC handshake
+    let sni = conn
+        .handshake_data()
+        .and_then(|any| any.downcast::<quinn::crypto::rustls::HandshakeData>().ok())
+        .and_then(|hd| hd.server_name);
+
+    let dev_tag = if is_private {
+        match sni.as_deref().and_then(crate::security::auth::parse_friendly_device_slug) {
+            Some(slug) => {
+                debug!("[doq] Authenticated private device slug '{}' via SNI {:?}", slug, sni);
+                Some(slug)
+            }
+            None => {
+                warn!(
+                    "[doq] Unauthorized DoQ connection from {}: Private mode requires a friendly device slug SNI (e.g. love8.dns.example.com), got {:?}",
+                    client_ip, sni
+                );
+                conn.close(0x01u32.into(), b"Private DoQ requires friendly device slug SNI (e.g. love8.dns.example.com)");
+                return;
+            }
+        }
+    } else {
+        sni.as_deref().and_then(crate::security::auth::parse_friendly_device_slug)
+    };
+
+    // Connection-level rate limit check with device identity
+    if !state.check_rate_limit(client_ip, dev_tag.as_deref()) {
         conn.close(0x01u32.into(), b"rate limit exceeded");
         return;
     }
@@ -146,8 +172,9 @@ async fn handle_doq_connection(state: Arc<AppState>, conn: quinn::Connection) {
         match conn.accept_bi().await {
             Ok((send, recv)) => {
                 let state_c = state.clone();
+                let dev_tag_c = dev_tag.clone();
                 tokio::spawn(async move {
-                    handle_doq_stream(state_c, send, recv, client_ip).await;
+                    handle_doq_stream(state_c, send, recv, client_ip, dev_tag_c).await;
                 });
             }
             Err(quinn::ConnectionError::ApplicationClosed { .. })
@@ -170,6 +197,7 @@ async fn handle_doq_stream(
     mut send: quinn::SendStream,
     mut recv: quinn::RecvStream,
     client_ip: std::net::IpAddr,
+    dev_tag: Option<String>,
 ) {
     // Read 2-octet length prefix in network byte order
     let mut len_buf = [0u8; 2];
@@ -197,20 +225,20 @@ async fn handle_doq_stream(
 
     let mut query = vec![0u8; msg_len];
     let body_res = tokio::time::timeout(DOQ_READ_TIMEOUT, recv.read_exact(&mut query)).await;
-    if body_res.is_err() || body_res.unwrap().is_err() {
+    if !matches!(body_res, Ok(Ok(_))) {
         debug!("[doq] Stream read query body error");
         return;
     }
 
     // Per-query rate limit check
-    let resp_bytes = if !state.check_rate_limit(client_ip, None) {
+    let resp_bytes = if !state.check_rate_limit(client_ip, dev_tag.as_deref()) {
         build_servfail_response(&query)
     } else {
         crate::server::doh::process_dns_wire_packet(
             state.clone(),
             &query,
             client_ip,
-            None,
+            dev_tag.as_deref(),
             "DoQ",
         )
         .await

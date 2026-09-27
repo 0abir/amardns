@@ -16,8 +16,14 @@ RUN rm -f target/release/deps/amardns* target/release/amardns && cargo build --r
 RUN mkdir -p /empty-tmp /empty-data /staging-certs && chmod 1777 /empty-tmp
 COPY cert[s] /staging-certs/
 
-# Stage 2: Minimal Scratch container (< 12MB). Runs as root (UID 0) —
-# no USER directive — so the binary can bind privileged ports 53/443/853
+# Create minimal user/group entries for rootless / least-privilege mode
+RUN echo "amardns:x:10001:10001:AmarDNS Resolver:/data:/bin/false" > /staging-passwd && \
+    echo "amardns:x:10001:" > /staging-group && \
+    chown -R 10001:10001 /empty-data
+
+# Stage 2: Minimal Scratch container (< 12MB).
+# By default runs with NET_BIND_SERVICE. For rootless execution:
+#   docker run --cap-add=NET_BIND_SERVICE -u 10001:10001 ...
 FROM scratch
 WORKDIR /
 
@@ -27,6 +33,10 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifi
 # 2. Essential directories (/tmp and /data persistent mount)
 COPY --from=builder /empty-tmp /tmp
 COPY --from=builder /empty-data /data
+
+# 3. User and group database for rootless / least-privilege execution
+COPY --from=builder /staging-passwd /etc/passwd
+COPY --from=builder /staging-group /etc/group
 
 # 3. Ultra-optimized static binary
 COPY --from=builder /app/target/release/amardns /amardns

@@ -184,16 +184,17 @@ async fn handle_doh3_request<S>(
 
     // Check CORS OPTIONS request
     if method == http::Method::OPTIONS {
-        let resp = http::Response::builder()
+        if let Ok(resp) = http::Response::builder()
             .status(http::StatusCode::OK)
             .header("access-control-allow-origin", "*")
             .header("access-control-allow-methods", "GET, POST, OPTIONS")
             .header("access-control-allow-headers", "content-type, accept")
             .header("access-control-max-age", "86400")
             .body(())
-            .unwrap();
-        let _ = stream.send_response(resp).await;
-        let _ = stream.finish().await;
+        {
+            let _ = stream.send_response(resp).await;
+            let _ = stream.finish().await;
+        }
         return;
     }
 
@@ -232,14 +233,15 @@ async fn handle_doh3_request<S>(
         };
 
         if query_wire.is_empty() {
-            let resp = http::Response::builder()
+            if let Ok(resp) = http::Response::builder()
                 .status(http::StatusCode::BAD_REQUEST)
                 .header(http::header::CONTENT_TYPE, "text/plain")
                 .body(())
-                .unwrap();
-            let _ = stream.send_response(resp).await;
-            let _ = stream.send_data(Bytes::from("Missing or empty DNS query wire payload\n")).await;
-            let _ = stream.finish().await;
+            {
+                let _ = stream.send_response(resp).await;
+                let _ = stream.send_data(Bytes::from("Missing or empty DNS query wire payload\n")).await;
+                let _ = stream.finish().await;
+            }
             return;
         }
 
@@ -257,28 +259,29 @@ async fn handle_doh3_request<S>(
             .await
         };
 
-        let resp = http::Response::builder()
+        if let Ok(resp) = http::Response::builder()
             .status(http::StatusCode::OK)
             .header(http::header::CONTENT_TYPE, "application/dns-message")
             .header(http::header::CACHE_CONTROL, "public, max-age=60")
             .header("access-control-allow-origin", "*")
             .body(())
-            .unwrap();
-
-        if stream.send_response(resp).await.is_ok() {
-            let _ = stream.send_data(Bytes::from(resp_bytes)).await;
-            let _ = stream.finish().await;
+        {
+            if stream.send_response(resp).await.is_ok() {
+                let _ = stream.send_data(Bytes::from(resp_bytes)).await;
+                let _ = stream.finish().await;
+            }
         }
     } else {
         // Fallback for non-DNS queries on HTTP/3 port
-        let resp = http::Response::builder()
+        if let Ok(resp) = http::Response::builder()
             .status(http::StatusCode::NOT_FOUND)
             .header(http::header::CONTENT_TYPE, "text/plain")
             .body(())
-            .unwrap();
-        let _ = stream.send_response(resp).await;
-        let _ = stream.send_data(Bytes::from("AmarDNS HTTP/3 Edge (RFC 9114)\n")).await;
-        let _ = stream.finish().await;
+        {
+            let _ = stream.send_response(resp).await;
+            let _ = stream.send_data(Bytes::from("AmarDNS HTTP/3 Edge (RFC 9114)\n")).await;
+            let _ = stream.finish().await;
+        }
     }
 }
 

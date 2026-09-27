@@ -154,6 +154,94 @@ pub fn sanitize_time(time_str: &str) -> Result<String, &'static str> {
     Ok(format!("{:02}:{:02}", hour, min))
 }
 
+/// Checks whether a domain name strictly adheres to RFC 1123 / RFC 952 hostname rules.
+///
+/// Under RFC 1123:
+/// - Max total length: 253 characters (255 wire octets).
+/// - Labels separated by dots (1 to 63 chars each).
+/// - Allowed characters: ASCII alphanumeric (`[a-zA-Z0-9]`) and hyphens (`-`).
+/// - Labels must not start or end with a hyphen.
+/// - Allows optional leading wildcard `*.` or service prefix `_`.
+#[allow(dead_code)]
+pub fn is_rfc1123_hostname(domain: &str) -> bool {
+    let clean = domain.trim().trim_end_matches('.');
+    if clean.is_empty() || clean.len() > 253 {
+        return false;
+    }
+    let to_check = if let Some(stripped) = clean.strip_prefix("*.") {
+        stripped
+    } else {
+        clean
+    };
+    if to_check.is_empty() {
+        return false;
+    }
+    for label in to_check.split('.') {
+        if label.is_empty() || label.len() > 63 {
+            return false;
+        }
+        let label_body = if let Some(stripped) = label.strip_prefix('_') {
+            stripped
+        } else {
+            label
+        };
+        if label_body.is_empty() {
+            return false;
+        }
+        if label_body.starts_with('-') || label_body.ends_with('-') {
+            return false;
+        }
+        for b in label_body.bytes() {
+            if !(b.is_ascii_alphanumeric() || b == b'-') {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Validates whether a domain name is a syntactically valid RFC 1123 hostname.
+/// Returns Ok(()) if valid, or an explanatory error message.
+#[allow(dead_code)]
+pub fn validate_hostname_syntax(domain: &str) -> Result<(), &'static str> {
+    if is_rfc1123_hostname(domain) {
+        Ok(())
+    } else {
+        Err("domain is not a valid RFC 1123 hostname")
+    }
+}
+
+/// Checks whether a domain name conforms to RFC 1035 / RFC 2181 DNS name syntax.
+///
+/// Unlike strict hostnames, RFC 1035 / RFC 2181 permits any 8-bit octets in labels,
+/// including service tags, binary octets, and presentation-escaped characters,
+/// provided that:
+/// - Total wire length does not exceed 255 octets (presentation length <= 253 unescaped).
+/// - Individual labels do not exceed 63 octets.
+#[allow(dead_code)]
+pub fn is_rfc1035_dns_name(domain: &str) -> bool {
+    let clean = domain.trim().trim_end_matches('.');
+    if clean.is_empty() {
+        return domain.trim() == ".";
+    }
+    let labels = crate::dns::parser::split_domain_labels(clean);
+    if labels.is_empty() {
+        return false;
+    }
+    let mut total_wire_len = 1; // root label null byte
+    for label in labels {
+        let raw = crate::dns::parser::unescape_label_to_bytes(&label);
+        if raw.is_empty() || raw.len() > 63 {
+            return false;
+        }
+        total_wire_len += 1 + raw.len();
+        if total_wire_len > 255 {
+            return false;
+        }
+    }
+    true
+}
+
 /// Validates DNS mode setting.
 pub fn sanitize_mode(mode_str: &str) -> Result<String, &'static str> {
     let m = mode_str.trim().to_ascii_lowercase();
@@ -220,5 +308,38 @@ mod tests {
         assert_eq!(sanitize_mode("strict").unwrap(), "strict");
         assert_eq!(sanitize_mode("BALANCE").unwrap(), "balance");
         assert!(sanitize_mode("invalid_mode").is_err());
+    }
+
+    #[test]
+    fn test_rfc1123_hostname_and_rfc1035_dns_name_separation() {
+        // Valid RFC 1123 hostnames
+        assert!(is_rfc1123_hostname("example.com"));
+        assert!(is_rfc1123_hostname("sub-domain.example.co.uk"));
+        assert!(is_rfc1123_hostname("*.wildcard.org"));
+        assert!(is_rfc1123_hostname("_sip._tcp.example.com"));
+        assert!(validate_hostname_syntax("google.com").is_ok());
+
+        // Non-RFC 1123 hostnames (contain colons, spaces, equals, brackets, etc.)
+        assert!(!is_rfc1123_hostname("bad:1.com"));
+        assert!(!is_rfc1123_hostname("domain with spaces.com"));
+        assert!(!is_rfc1123_hostname("Printer (Room 101)._ipp._tcp.local"));
+        assert!(!is_rfc1123_hostname("v=spf1.example.com"));
+        assert!(!is_rfc1123_hostname("-badlabel.com"));
+        assert!(!is_rfc1123_hostname("badlabel-.com"));
+        assert!(!is_rfc1123_hostname("test\r\ninj.com"));
+        assert!(validate_hostname_syntax("bad:1.com").is_err());
+
+        // Valid RFC 1035 / RFC 2181 DNS names (all valid DNS queries)
+        assert!(is_rfc1035_dns_name("example.com"));
+        assert!(is_rfc1035_dns_name("bad:1.com"));
+        assert!(is_rfc1035_dns_name("Printer (Room 101)._ipp._tcp.local"));
+        assert!(is_rfc1035_dns_name("v=spf1.example.com"));
+        assert!(is_rfc1035_dns_name("foo+bar.example.com"));
+        assert!(is_rfc1035_dns_name("foo\\.bar.com"));
+        assert!(is_rfc1035_dns_name("."));
+
+        // Overlong label or name exceeds RFC 1035 limits
+        let overlong_label = format!("{}.com", "a".repeat(64));
+        assert!(!is_rfc1035_dns_name(&overlong_label));
     }
 }

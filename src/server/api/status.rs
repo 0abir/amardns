@@ -393,7 +393,10 @@ pub async fn dashboard_handler(State(state): State<Arc<AppState>>, headers: Head
         let fly_machine_id = std::env::var("FLY_MACHINE_ID").unwrap_or_default();
         let fly_region = std::env::var("FLY_REGION").unwrap_or_else(|_| "sin".to_string());
         let view_token = if auth.is_admin() {
-            state.config.dns_master_key.clone()
+            crate::security::auth::generate_admin_token(
+                &state.config.dns_token_secret,
+                7200, // 2-hour ephemeral admin session
+            )
         } else {
             crate::security::auth::generate_hmac_token(
                 &state.config.dns_token_secret,

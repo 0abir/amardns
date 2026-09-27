@@ -20,11 +20,35 @@ pub struct ParsedDnsQuery {
 /// Safely parses a domain name from a DNS buffer starting at `pos`, following compression pointers.
 /// Returns `Some((domain_name, next_stream_pos))` where `next_stream_pos` is the position
 /// in the original packet stream immediately following the domain name (or the first pointer).
-pub fn parse_name_with_offset(buf: &[u8], mut pos: usize) -> Option<(String, usize)> {
+/// By default, enables full RFC 1035 / RFC 2181 8-bit octet decoding with presentation escaping.
+pub fn parse_name_with_offset(buf: &[u8], pos: usize) -> Option<(String, usize)> {
+    parse_name_with_offset_opts(buf, pos, true)
+}
+
+/// Parses a domain name from a DNS buffer with configurable 8-bit RFC 1035 compliance vs legacy strict hostname mode.
+///
+/// - When `allow_8bit` is true (RFC 1035 / RFC 2181 mode):
+///   Permits all 8-bit octets within 1..=63 byte labels up to 255 total wire octets.
+///   Applies RFC 1035 §5.1 / RFC 4343 presentation escaping:
+///   - ASCII letters are normalized to lowercase for canonical DNS matching.
+///   - Printable ASCII (except `.` and `\`) is emitted directly.
+///   - Dots inside labels are escaped as `\.`
+///   - Backslashes are escaped as `\\`
+///   - Control characters (< 0x20 and 0x7F) are escaped as `\DDD` decimal escapes.
+///   - Valid UTF-8 sequences (>= 0x80) are decoded as unicode characters.
+///   - Invalid UTF-8 octets are escaped as `\DDD`.
+/// - When `allow_8bit` is false (legacy strict RFC 1123 hostname mode):
+///   Labels are restricted to `[a-zA-Z0-9-_*]`.
+pub fn parse_name_with_offset_opts(
+    buf: &[u8],
+    mut pos: usize,
+    allow_8bit: bool,
+) -> Option<(String, usize)> {
     let mut name = String::with_capacity(64);
     let mut jumps = 0;
     let mut next_pos = None;
     let mut label_count = 0;
+    let mut total_wire_len = 0;
 
     while pos < buf.len() {
         label_count += 1;
@@ -33,6 +57,10 @@ pub fn parse_name_with_offset(buf: &[u8], mut pos: usize) -> Option<(String, usi
         }
         let len = buf[pos] as usize;
         if len == 0 {
+            total_wire_len += 1;
+            if total_wire_len > 255 {
+                return None;
+            }
             if next_pos.is_none() {
                 next_pos = Some(pos + 1);
             }
@@ -53,6 +81,9 @@ pub fn parse_name_with_offset(buf: &[u8], mut pos: usize) -> Option<(String, usi
             jumps += 1;
             continue;
         }
+        if (len & 0xc0) != 0 {
+            return None; // Reserved label types per RFC 6891
+        }
         if len > 63 {
             return None; // RFC 1035 max label length is 63 octets
         }
@@ -60,18 +91,76 @@ pub fn parse_name_with_offset(buf: &[u8], mut pos: usize) -> Option<(String, usi
         if pos + len > buf.len() {
             return None;
         }
+        total_wire_len += 1 + len;
+        if total_wire_len > 255 {
+            return None; // RFC 1035 max wire domain length is 255 octets
+        }
         if !name.is_empty() {
             name.push('.');
         }
-        if name.len() + len > 253 {
-            return None; // RFC 1035 max domain length
-        }
-        for &b in &buf[pos..pos + len] {
-            if !(b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'*') {
-                return None; // RFC 1035 / RFC 1123 label charset validation: drop control chars, spaces, colons, injection chars
+
+        let label_bytes = &buf[pos..pos + len];
+        if !allow_8bit {
+            for &b in label_bytes {
+                if !(b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'*') {
+                    return None; // Strict RFC 1123 hostname charset validation
+                }
+                name.push((b as char).to_ascii_lowercase());
             }
-            name.push((b as char).to_ascii_lowercase());
+        } else {
+            let mut i = 0;
+            while i < label_bytes.len() {
+                let b = label_bytes[i];
+                if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'*' {
+                    name.push((b as char).to_ascii_lowercase());
+                    i += 1;
+                } else if b == b'.' {
+                    name.push_str("\\.");
+                    i += 1;
+                } else if b == b'\\' {
+                    name.push_str("\\\\");
+                    i += 1;
+                } else if (0x20..=0x7E).contains(&b) {
+                    name.push(b as char);
+                    i += 1;
+                } else if b < 0x20 || b == 0x7F {
+                    use std::fmt::Write;
+                    let _ = write!(name, "\\{:03}", b);
+                    i += 1;
+                } else {
+                    match std::str::from_utf8(&label_bytes[i..]) {
+                        Ok(s) => {
+                            if let Some(ch) = s.chars().next() {
+                                name.push(ch);
+                                i += ch.len_utf8();
+                            } else {
+                                i += 1;
+                            }
+                        }
+                        Err(e) => {
+                            let valid_len = e.valid_up_to();
+                            if valid_len > 0 {
+                                if let Ok(s) = std::str::from_utf8(&label_bytes[i..i + valid_len]) {
+                                    if let Some(ch) = s.chars().next() {
+                                        name.push(ch);
+                                        i += ch.len_utf8();
+                                        continue;
+                                    }
+                                }
+                            }
+                            use std::fmt::Write;
+                            let _ = write!(name, "\\{:03}", b);
+                            i += 1;
+                        }
+                    }
+                }
+            }
         }
+
+        if name.len() > 1024 {
+            return None; // Protection against excessive presentation string expansion
+        }
+
         pos += len;
     }
 
@@ -104,7 +193,13 @@ pub fn skip_dns_name(buf: &[u8], mut pos: usize) -> Option<usize> {
 }
 
 /// Parses a DNS packet header and question section with zero unnecessary allocations.
+/// By default, decodes all RFC 1035 / RFC 2181 8-bit octets.
 pub fn parse_dns_query(buf: &[u8]) -> Option<ParsedDnsQuery> {
+    parse_dns_query_opts(buf, true)
+}
+
+/// Parses a DNS packet header and question section with configurable 8-bit label mode vs strict hostname mode.
+pub fn parse_dns_query_opts(buf: &[u8], allow_8bit: bool) -> Option<ParsedDnsQuery> {
     if buf.len() < 12 {
         return None;
     }
@@ -122,7 +217,7 @@ pub fn parse_dns_query(buf: &[u8]) -> Option<ParsedDnsQuery> {
         });
     }
 
-    let (name, pos) = parse_name_with_offset(buf, 12)?;
+    let (name, pos) = parse_name_with_offset_opts(buf, 12, allow_8bit)?;
 
     if pos + 4 > buf.len() {
         return None;
@@ -1251,20 +1346,6 @@ pub fn append_cookie_to_response(wire: &mut Vec<u8>, client_cookie: &[u8], serve
 mod tests {
     use super::*;
 
-    fn build_query_wire(name: &str, qtype: u16) -> Vec<u8> {
-        let mut wire = vec![
-            0xAB, 0xCD, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ];
-        for label in name.split('.') {
-            wire.push(label.len() as u8);
-            wire.extend_from_slice(label.as_bytes());
-        }
-        wire.push(0);
-        wire.extend_from_slice(&qtype.to_be_bytes());
-        wire.extend_from_slice(&1u16.to_be_bytes()); // IN
-        wire
-    }
-
     #[test]
     fn test_parse_dns_query() {
         // Simple A query for "example.com" with TXID 0x1234
@@ -1507,18 +1588,62 @@ mod tests {
         ];
         assert!(parse_dns_query(&pkt_trunc).is_none());
 
-        // Illegal characters (control chars, newline, space, colon)
+        // Strict mode (allow_8bit: false) rejects non-hostname characters (newline, colon)
         let pkt_newline = [
             0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x04, b'b', b'a', b'd', b'\n', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
         ];
-        assert!(parse_dns_query(&pkt_newline).is_none());
+        assert!(parse_dns_query_opts(&pkt_newline, false).is_none());
 
         let pkt_colon = [
             0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x05, b'b', b'a', b'd', b':', b'1', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
         ];
-        assert!(parse_dns_query(&pkt_colon).is_none());
+        assert!(parse_dns_query_opts(&pkt_colon, false).is_none());
+
+        // Full RFC 1035 / RFC 2181 8-bit mode (allow_8bit: true, default) safely accepts and decodes
+        let parsed_colon = parse_dns_query(&pkt_colon).expect("RFC 1035 allows colons in labels");
+        assert_eq!(parsed_colon.question.unwrap().name, "bad:1.com");
+
+        let parsed_nl = parse_dns_query(&pkt_newline).expect("RFC 1035 presentation escapes control chars");
+        assert_eq!(parsed_nl.question.unwrap().name, "bad\\010.com");
+    }
+
+    #[test]
+    fn test_parse_dns_query_rfc1035_8bit_labels() {
+        // 1. DNS-SD service instance with spaces and parentheses
+        let sd_name = "Printer (Room 101)._ipp._tcp.local";
+        let wire = build_query_wire(sd_name, 1);
+        let parsed = parse_dns_query(&wire).expect("DNS-SD query with spaces should parse");
+        assert_eq!(parsed.question.unwrap().name, "printer (room 101)._ipp._tcp.local");
+
+        // 2. Specialized TXT / SPF / DKIM characters (=, +, /)
+        let txt_name = "v=spf1._tag+1.example.com";
+        let wire = build_query_wire(txt_name, 16);
+        let parsed = parse_dns_query(&wire).expect("Query with = and + should parse");
+        assert_eq!(parsed.question.unwrap().name, "v=spf1._tag+1.example.com");
+
+        // 3. Label containing an internal dot escaped as \.
+        let dot_name = "foo\\.bar.example.com";
+        let wire = build_query_wire(dot_name, 1);
+        let parsed = parse_dns_query(&wire).expect("Query with internal escaped dot should parse");
+        assert_eq!(parsed.question.unwrap().name, "foo\\.bar.example.com");
+
+        // 4. Non-ASCII UTF-8 label (e.g. café.fr)
+        let utf8_name = "café.fr";
+        let wire = build_query_wire(utf8_name, 1);
+        let parsed = parse_dns_query(&wire).expect("UTF-8 label should parse");
+        assert_eq!(parsed.question.unwrap().name, "café.fr");
+
+        // 5. Binary octet escaped via \DDD (e.g. 0xFF = 255)
+        let mut bin_pkt = vec![
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        bin_pkt.push(1);
+        bin_pkt.push(0xFF);
+        bin_pkt.extend_from_slice(&[0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01]);
+        let parsed = parse_dns_query(&bin_pkt).expect("Binary 8-bit octet should parse with decimal escape");
+        assert_eq!(parsed.question.unwrap().name, "\\255.com");
     }
 
     #[test]
@@ -1765,6 +1890,85 @@ pub fn extract_answer_ttl(buf: &[u8]) -> Option<u32> {
     ]))
 }
 
+/// Splits a domain name on unescaped dots (RFC 1035 §5.1), preserving escaped dots (`\.`).
+pub fn split_domain_labels(domain: &str) -> Vec<String> {
+    let clean = domain.trim();
+    if clean.is_empty() || clean == "." {
+        return Vec::new();
+    }
+    let mut labels = Vec::new();
+    let mut current = String::new();
+    let mut escaped = false;
+
+    for ch in clean.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+            current.push(ch);
+        } else if ch == '.' {
+            if !current.is_empty() {
+                labels.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        labels.push(current);
+    }
+    labels
+}
+
+/// Unescapes an RFC 1035 §5.1 presentation label back to raw wire bytes.
+pub fn unescape_label_to_bytes(label: &str) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(label.len());
+    let mut chars = label.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            // Check if next 3 chars are decimal digits (\DDD)
+            let mut is_ddd = false;
+            if let Some(&c1) = chars.peek() {
+                if c1.is_ascii_digit() {
+                    let mut ddd_str = String::with_capacity(3);
+                    ddd_str.push(c1);
+                    let mut clone = chars.clone();
+                    clone.next(); // skip c1
+                    if let Some(c2) = clone.next() {
+                        if c2.is_ascii_digit() {
+                            ddd_str.push(c2);
+                            if let Some(c3) = clone.next() {
+                                if c3.is_ascii_digit() {
+                                    ddd_str.push(c3);
+                                    if let Ok(val) = ddd_str.parse::<u8>() {
+                                        bytes.push(val);
+                                        chars.next(); // consume c1
+                                        chars.next(); // consume c2
+                                        chars.next(); // consume c3
+                                        is_ddd = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if !is_ddd {
+                if let Some(next_ch) = chars.next() {
+                    let mut b = [0u8; 4];
+                    bytes.extend_from_slice(next_ch.encode_utf8(&mut b).as_bytes());
+                }
+            }
+        } else {
+            let mut b = [0u8; 4];
+            bytes.extend_from_slice(ch.encode_utf8(&mut b).as_bytes());
+        }
+    }
+    bytes
+}
+
 /// Builds a standard recursive DNS query wire packet for a domain and qtype.
 pub fn build_query_wire(domain: &str, qtype: u16) -> Vec<u8> {
     let mut buf = Vec::with_capacity(64);
@@ -1777,10 +1981,13 @@ pub fn build_query_wire(domain: &str, qtype: u16) -> Vec<u8> {
     // ANCOUNT: 0, NSCOUNT: 0, ARCOUNT: 0
     buf.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
     // Question: domain labels
-    for part in domain.trim_end_matches('.').split('.') {
+    for part in split_domain_labels(domain) {
         if !part.is_empty() {
-            buf.push(part.len() as u8);
-            buf.extend_from_slice(part.as_bytes());
+            let raw = unescape_label_to_bytes(&part);
+            if !raw.is_empty() && raw.len() <= 63 {
+                buf.push(raw.len() as u8);
+                buf.extend_from_slice(&raw);
+            }
         }
     }
     buf.push(0x00); // root label

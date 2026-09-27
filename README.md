@@ -6,10 +6,11 @@
 [![Rust](https://img.shields.io/badge/Rust-2024_Edition-orange.svg)](https://www.rust-lang.org/)
 [![Security Policy](https://img.shields.io/badge/Security-Policy_Active-brightgreen.svg)](SECURITY.md)
 [![Security Audit](https://github.com/0abir/amardns/actions/workflows/security-audit.yml/badge.svg)](https://github.com/0abir/amardns/actions/workflows/security-audit.yml)
+[![Fuzzing](https://github.com/0abir/amardns/actions/workflows/fuzz.yml/badge.svg)](https://github.com/0abir/amardns/actions/workflows/fuzz.yml)
 [![Docker](https://github.com/0abir/amardns/actions/workflows/build-and-publish.yml/badge.svg)](https://github.com/0abir/amardns/actions/workflows/build-and-publish.yml)
 [![Memory](https://img.shields.io/badge/Memory-Zero_GC_~12MB-green.svg)](#zero-allocation-memory-architecture)
 [![Latency](https://img.shields.io/badge/Latency-P95_<5ms-brightgreen.svg)](#singleflight-coalescing--hedged-upstream-racing)
-[![Tests](https://img.shields.io/badge/Tests-160%20Passed%20(100%25)-success.svg)](#testing--verification)
+[![Tests](https://img.shields.io/badge/Tests-180%20Passed%20(100%25)-success.svg)](#testing--verification)
 
 ---
 
@@ -483,12 +484,19 @@ All endpoints support authentication via `X-Master-Key` / `Authorization: Bearer
 AmarDNS includes an exhaustive unit and integration test suite covering RFC 1035 wire parsing, S/MIME PKCS#7 verification, DNSSEC validation, rate limiting, and singleflight deduplication:
 
 ```bash
-# Execute test suite (155 tests)
+# Execute test suite (180 unit and integration tests)
 cargo test --all-targets
 
 # Execute strict linter verification
 cargo clippy --all-targets -- -D warnings
+
+# Execute LLVM libFuzzer suites locally (nightly)
+cargo +nightly fuzz run fuzz_dns_parser -- -max_total_time=600
+cargo +nightly fuzz run fuzz_dnssec -- -max_total_time=600
+cargo +nightly fuzz run fuzz_bloom -- -max_total_time=600
 ```
+
+Continuous fuzzing runs automatically in [GitHub Actions](.github/workflows/fuzz.yml) on every schedule, pull request, and manual dispatch with seeded corpora and artifact crash reporters.
 
 ---
 

@@ -1561,6 +1561,7 @@ mod tests {
             doq_port: 853,
             doh3_enabled: true,
             doh3_port: 443,
+            rfc1035_8bit_labels: true,
         }
     }
 

@@ -564,8 +564,8 @@ pub async fn handle_nuclear_wipe(
             let master_key = state.config.dns_master_key.clone();
             tokio::spawn(async move {
                 let peer_host = format!(
-                    "http://{}.internal:{}/api/nuclear-wipe/{}",
-                    app_name, port, master_key
+                    "http://{}.internal:{}/api/nuclear-wipe",
+                    app_name, port
                 );
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(5))
@@ -575,6 +575,7 @@ pub async fn handle_nuclear_wipe(
                     .post(&peer_host)
                     .header("x-peer-sync", "1")
                     .header("x-master-key", &master_key)
+                    .header("Authorization", format!("Bearer {}", master_key))
                     .json(&serde_json::json!({ "confirm": "NUCLEAR_WIPE_CONFIRMED" }))
                     .send()
                     .await;
@@ -2163,8 +2164,77 @@ pub async fn fetch_remote_releases() -> Result<Vec<RemoteReleaseInfo>, String> {
     Ok(results)
 }
 
+/// Official AmarDNS release signing public key (Ed25519, 32 bytes).
+pub const AMARDNS_RELEASE_ED25519_PUBKEY_HEX: &str =
+    "a85b9b7816f8ef1907de3bf270c3298a09cf932bb82f5b6164e2292fca3b3064";
+
+/// Verifies Ed25519 release signature over binary bytes or SHA256 digest
+pub fn verify_release_signature(
+    bin_bytes: &[u8],
+    actual_sha: &str,
+    sig_raw: &[u8],
+    override_pubkey: Option<&[u8]>,
+) -> Result<(), String> {
+    let pubkey_bytes = if let Some(pk) = override_pubkey {
+        pk.to_vec()
+    } else if let Ok(custom_hex) = std::env::var("AMARDNS_RELEASE_PUBKEY") {
+        crate::dns::dnssec::hex_decode(&custom_hex)
+            .map_err(|e| format!("Invalid AMARDNS_RELEASE_PUBKEY hex: {}", e))?
+    } else {
+        crate::dns::dnssec::hex_decode(AMARDNS_RELEASE_ED25519_PUBKEY_HEX)
+            .map_err(|e| format!("Invalid embedded release pubkey hex: {}", e))?
+    };
+
+    if pubkey_bytes.len() != 32 {
+        return Err("Invalid Ed25519 public key length (expected 32 bytes)".to_string());
+    }
+
+    let sig_bytes = if sig_raw.len() == 64 {
+        sig_raw.to_vec()
+    } else if let Ok(s) = std::str::from_utf8(sig_raw) {
+        let trimmed = s.trim();
+        if let Ok(b) = crate::dns::dnssec::hex_decode(trimmed) {
+            b
+        } else if let Ok(b) = crate::server::acme::b64url_decode(trimmed) {
+            b
+        } else {
+            return Err("Malformed Ed25519 signature format (must be 64 raw bytes, hex, or base64)".to_string());
+        }
+    } else {
+        return Err("Malformed Ed25519 signature bytes".to_string());
+    };
+
+    if sig_bytes.len() != 64 {
+        return Err(format!("Invalid Ed25519 signature length (expected 64 bytes, got {})", sig_bytes.len()));
+    }
+
+    let peer_public_key = ring::signature::UnparsedPublicKey::new(
+        &ring::signature::ED25519,
+        &pubkey_bytes,
+    );
+
+    // Verify signature over the raw binary bytes, or over the 64-char lowercase SHA256 hex string
+    if peer_public_key.verify(bin_bytes, &sig_bytes).is_ok()
+        || peer_public_key.verify(actual_sha.as_bytes(), &sig_bytes).is_ok()
+    {
+        Ok(())
+    } else {
+        Err("Security alert: Ed25519 cryptographic signature verification failed! Untrusted binary.".to_string())
+    }
+}
+
 /// Download, verify, and install binary (latest or specific target version) to /amardns, backing up current to /amardns.bak.
 pub async fn perform_download_and_install(target_version: Option<&str>) -> Result<String, String> {
+    if std::env::var("DISABLE_IN_PLACE_UPDATES")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return Err(
+            "In-place binary updates are disabled in this environment. Updates are managed via container image deployment."
+                .to_string(),
+        );
+    }
+
     let client = reqwest::Client::builder()
         .user_agent("AmarDNS")
         .timeout(std::time::Duration::from_secs(60))
@@ -2232,27 +2302,58 @@ pub async fn perform_download_and_install(target_version: Option<&str>) -> Resul
         return Err(format!("Downloaded file is too small ({} bytes) to be a valid binary", bin_bytes.len()));
     }
 
-    // Verify SHA256 checksum if provided
+    // MANDATORY Cryptographic Checksum Verification (Pre-execution gate)
     let expected_sha_name = if is_arm64 { "amardns-arm64.sha256" } else { "amardns.sha256" };
-    if let Some(sha_asset) = assets.iter().find(|a| {
+    let sha_asset = assets.iter().find(|a| {
         let n = a["name"].as_str().unwrap_or("");
         n == expected_sha_name || n == "amardns.sha256"
-    }) {
-        if let Some(sha_url) = sha_asset["browser_download_url"].as_str() {
-            if let Ok(sha_res) = client.get(sha_url).send().await {
-                if let Ok(sha_text) = sha_res.text().await {
-                    let expected_sha = sha_text.split_whitespace().next().unwrap_or("").to_lowercase();
-                    if !expected_sha.is_empty() {
-                        let actual_digest = ring::digest::digest(&ring::digest::SHA256, &bin_bytes);
-                        let actual_sha: String = actual_digest.as_ref().iter().map(|b| format!("{:02x}", b)).collect();
-                        if actual_sha != expected_sha {
-                            return Err(format!("SHA256 checksum verification failed: expected {}, got {}", expected_sha, actual_sha));
-                        }
-                        tracing::info!("[update] SHA256 checksum verified: {}", actual_sha);
-                    }
-                }
-            }
-        }
+    }).ok_or_else(|| "Security violation: Release has no published SHA256 checksum asset. Update refused.".to_string())?;
+
+    let sha_url = sha_asset["browser_download_url"].as_str()
+        .ok_or_else(|| "Missing download URL for SHA256 asset".to_string())?;
+    let sha_res = client.get(sha_url).send().await
+        .map_err(|e| format!("Failed to download SHA256 checksum: {}", e))?;
+    let sha_text = sha_res.text().await
+        .map_err(|e| format!("Failed to read SHA256 checksum text: {}", e))?;
+    let expected_sha = sha_text.split_whitespace().next().unwrap_or("").to_lowercase();
+    if expected_sha.len() != 64 {
+        return Err("Security violation: Malformed SHA256 checksum asset.".to_string());
+    }
+
+    let actual_digest = ring::digest::digest(&ring::digest::SHA256, &bin_bytes);
+    let actual_sha: String = actual_digest.as_ref().iter().map(|b| format!("{:02x}", b)).collect();
+    if actual_sha != expected_sha {
+        return Err(format!("Security alert: SHA256 checksum verification failed! Expected {}, got {}", expected_sha, actual_sha));
+    }
+    tracing::info!("[update] Cryptographic SHA256 checksum verified: {}", actual_sha);
+
+    // MANDATORY Ed25519 Cryptographic Signature Verification (Pre-execution gate)
+    let expected_sig_name = if is_arm64 { "amardns-arm64.sig" } else { "amardns.sig" };
+    let sig_asset = assets.iter().find(|a| {
+        let n = a["name"].as_str().unwrap_or("");
+        n == expected_sig_name || n == "amardns.sig" || n.ends_with(".sig") || n.ends_with(".minisig")
+    });
+
+    let bypass_sig = std::env::var("DISABLE_OTA_SIGNATURE_CHECK")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if !bypass_sig {
+        let sig_asset = sig_asset.ok_or_else(|| {
+            "Security violation: Release has no published Ed25519 signature asset (.sig). Update refused."
+                .to_string()
+        })?;
+        let sig_url = sig_asset["browser_download_url"].as_str()
+            .ok_or_else(|| "Missing download URL for signature asset".to_string())?;
+        let sig_res = client.get(sig_url).send().await
+            .map_err(|e| format!("Failed to download Ed25519 signature: {}", e))?;
+        let sig_raw = sig_res.bytes().await
+            .map_err(|e| format!("Failed to read Ed25519 signature: {}", e))?;
+
+        verify_release_signature(&bin_bytes, &actual_sha, &sig_raw, None)?;
+        tracing::info!("[update] Cryptographic Ed25519 signature verified successfully.");
+    } else {
+        tracing::warn!("[update] WARNING: Ed25519 release signature check bypassed by environment flag.");
     }
 
     let tmp_bin = "/amardns.download";
@@ -2423,6 +2524,24 @@ mod tests {
 
         // 5. Cleanup
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_verify_release_signature() {
+        // RFC 8032 Test Vector 1 for Ed25519
+        let pubkey_hex = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+        let pubkey_bytes = crate::dns::dnssec::hex_decode(pubkey_hex).unwrap();
+        let msg = b"";
+        let sig_hex = "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b";
+        let sig_bytes = crate::dns::dnssec::hex_decode(sig_hex).unwrap();
+
+        // Valid signature over binary content
+        assert!(verify_release_signature(msg, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", &sig_bytes, Some(&pubkey_bytes)).is_ok());
+
+        // Tampered signature should fail
+        let mut bad_sig = sig_bytes.clone();
+        bad_sig[0] ^= 0xFF;
+        assert!(verify_release_signature(msg, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", &bad_sig, Some(&pubkey_bytes)).is_err());
     }
 }
 

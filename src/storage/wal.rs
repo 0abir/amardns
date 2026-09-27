@@ -453,8 +453,22 @@ impl WalStorage {
                     continue;
                 }
                 let payload = if let Some(idx) = trimmed_raw.rfind(" #crc=") {
-                    let (body, _) = trimmed_raw.split_at(idx);
-                    body.trim_matches(|c: char| c == '\0' || c.is_whitespace())
+                    let (body, crc_part) = trimmed_raw.split_at(idx);
+                    let body_clean = body.trim_matches(|c: char| c == '\0' || c.is_whitespace());
+                    if body_clean.is_empty() {
+                        continue;
+                    }
+                    let stored_crc =
+                        u32::from_str_radix(crc_part.trim_start_matches(" #crc="), 16).unwrap_or(0);
+                    let computed = line_checksum(body);
+                    if stored_crc != computed {
+                        tracing::warn!(
+                            "[wal] compact: skipping corrupt record (CRC mismatch): {:?}",
+                            &trimmed_raw[..trimmed_raw.len().min(60)]
+                        );
+                        continue;
+                    }
+                    body
                 } else {
                     trimmed_raw
                 };
@@ -566,5 +580,67 @@ impl WalStorage {
             }
             self.total_records.store(0, Ordering::Relaxed);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wal_checksum_and_record_recovery_roundtrip() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "amardns_wal_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let wal_path = temp_dir.join("test.wal");
+        let wal_path_str = match wal_path.to_str() {
+            Some(s) => s.to_string(),
+            None => return,
+        };
+
+        {
+            let wal = WalStorage::new(&wal_path_str);
+            assert!(wal.is_open());
+
+            // 1. Add blocks and whitelists
+            wal.append_block("malware.com");
+            wal.append_block("ad.doubleclick.net");
+            wal.append_unblock("ad.doubleclick.net"); // removed
+            wal.append_whitelist("trusted.org");
+            wal.append_whitelist("apple.com");
+            wal.append_unwhitelist("apple.com"); // removed
+
+            // 2. Inject a corrupt line with bad CRC directly to the file
+            if let Ok(mut f) = OpenOptions::new().append(true).open(&wal_path) {
+                let corrupt_line = "+B:bad-checksum.evil #crc=ffffffff\n";
+                let _ = f.write_all(corrupt_line.as_bytes());
+            }
+        }
+
+        // 3. Re-open WAL in a new instance and verify recovery
+        {
+            let wal_recovered = WalStorage::new(&wal_path_str);
+            let (blocks, whitelists) = wal_recovered.load_lists();
+
+            assert!(blocks.contains("malware.com"));
+            assert!(!blocks.contains("ad.doubleclick.net")); // properly unblocked
+            assert!(!blocks.contains("bad-checksum.evil")); // corrupt line was skipped
+            assert!(whitelists.contains("trusted.org"));
+            assert!(!whitelists.contains("apple.com")); // properly unwhitelisted
+
+            // 4. Test compaction preserves state
+            wal_recovered.compact();
+            let (blocks_after, whitelists_after) = wal_recovered.load_lists();
+            assert_eq!(blocks, blocks_after);
+            assert_eq!(whitelists, whitelists_after);
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

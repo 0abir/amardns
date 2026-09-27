@@ -1,6 +1,7 @@
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::SystemTime;
 use tracing::info;
@@ -144,6 +145,8 @@ pub struct AppState {
     // Graceful shutdown coordination channel (false = running, true = shutdown)
     pub shutdown_tx: tokio::sync::watch::Sender<bool>,
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    // Bounded concurrency gate for predictive prefetch background workers
+    pub prefetch_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl AppState {
@@ -258,6 +261,7 @@ impl AppState {
             revoked_tokens: RwLock::new(HashSet::new()),
             shutdown_tx,
             shutdown_rx,
+            prefetch_semaphore: Arc::new(tokio::sync::Semaphore::new(16)),
         }
     }
 
@@ -1869,9 +1873,16 @@ mod tests {
         assert_eq!(q.qtype, 1);
         assert_eq!(q.qclass, 1);
 
-        // RFC 1035 label charset injection protection
-        let malicious_query = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x08test\r\ninj\x03com\x00\x00\x01\x00\x01";
-        assert!(crate::dns::parser::parse_dns_query(malicious_query).is_none());
+        // Malformed wire packet with invalid label boundary
+        let truncated_query = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x08test\r\ninj\x03com\x00\x00\x01\x00\x01";
+        assert!(crate::dns::parser::parse_dns_query(truncated_query).is_none());
+
+        // RFC 1035 label charset injection protection (strict vs 8-bit mode)
+        let crlf_query = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x09test\r\ninj\x03com\x00\x00\x01\x00\x01";
+        assert!(crate::dns::parser::parse_dns_query_opts(crlf_query, false).is_none());
+        let parsed_8bit = crate::dns::parser::parse_dns_query_opts(crlf_query, true).expect("RFC 1035 compliant");
+        assert_eq!(parsed_8bit.question.as_ref().unwrap().name, "test\\013\\010inj.com");
+        assert!(!crate::security::sanitizer::is_rfc1123_hostname(&parsed_8bit.question.unwrap().name));
 
         // 8. Heuristic Threat Analysis Subsystem
         assert!(crate::security::heuristics::is_dga_threat("xqzkjbvxmnqwertylkjhgfdsazxcv.biz"));

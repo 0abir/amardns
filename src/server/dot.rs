@@ -165,7 +165,23 @@ pub async fn start_dot_server(
                             if let Some(acceptor) = acceptor_clone {
                                 match acceptor.accept(stream).await {
                                     Ok(tls_stream) => {
-                                        handle_dot_connection(tls_stream, real_client_addr, state_clone).await;
+                                        let sni = tls_stream.get_ref().1.server_name().map(|s| s.to_string());
+                                        let is_private = state_clone.is_private_mode.load(std::sync::atomic::Ordering::Relaxed);
+                                        let dev_tag = if is_private {
+                                            match sni.as_deref().and_then(crate::security::auth::parse_friendly_device_slug) {
+                                                Some(slug) => {
+                                                    debug!("[dot] Authenticated private device slug '{}' via SNI {:?}", slug, sni);
+                                                    Some(slug)
+                                                }
+                                                None => {
+                                                    warn!("[dot] Rejecting DoT connection from {}: Private mode requires a friendly device slug SNI (e.g. love8.dns.example.com), got {:?}", real_client_addr, sni);
+                                                    return;
+                                                }
+                                            }
+                                        } else {
+                                            sni.as_deref().and_then(crate::security::auth::parse_friendly_device_slug)
+                                        };
+                                        handle_dot_connection(tls_stream, real_client_addr, state_clone, dev_tag).await;
                                     }
                                     Err(e) => {
                                         let err_str = e.to_string().to_lowercase();
@@ -180,7 +196,7 @@ pub async fn start_dot_server(
                                     }
                                 }
                             } else {
-                                handle_dot_connection(stream, real_client_addr, state_clone).await;
+                                handle_dot_connection(stream, real_client_addr, state_clone, None).await;
                             }
                         });
                     }
@@ -340,15 +356,19 @@ where
     Ok(needed)
 }
 
-async fn handle_dot_connection<S>(socket: S, client_addr: SocketAddr, state: Arc<AppState>)
-where
+async fn handle_dot_connection<S>(
+    socket: S,
+    client_addr: SocketAddr,
+    state: Arc<AppState>,
+    dev_tag: Option<String>,
+) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let client_ip = client_addr.ip().to_canonical();
 
     // Check rate limiter (private/internal Fly.io proxy IPs are automatically exempt).
-    if !state.check_rate_limit(client_ip, None) {
+    if !state.check_rate_limit(client_ip, dev_tag.as_deref()) {
         let mut s = socket;
         let _ = s.shutdown().await;
         return;
@@ -388,11 +408,11 @@ where
 
         let mut query = vec![0u8; msg_len];
         let body_res = tokio::time::timeout(DOT_READ_TIMEOUT, reader.read_exact(&mut query)).await;
-        if body_res.is_err() || body_res.unwrap().is_err() {
+        if !matches!(body_res, Ok(Ok(_))) {
             break;
         }
 
-        if !state.check_rate_limit(client_ip, None) {
+        if !state.check_rate_limit(client_ip, dev_tag.as_deref()) {
             let fail = build_servfail_response(&query);
             let _ = tx.send(fail).await;
             break;
@@ -400,9 +420,14 @@ where
 
         let state_c = state.clone();
         let tx_c = tx.clone();
+        let dev_tag_c = dev_tag.clone();
         tokio::spawn(async move {
             let resp_bytes = crate::server::doh::process_dns_wire_packet(
-                state_c, &query, client_ip, None, "DoT",
+                state_c,
+                &query,
+                client_ip,
+                dev_tag_c.as_deref(),
+                "DoT",
             )
             .await;
             let _ = tx_c.send(resp_bytes).await;

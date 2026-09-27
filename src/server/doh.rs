@@ -16,7 +16,9 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::dns::dnssec::{DnssecStatus, validate_dnssec};
-use crate::dns::parser::{build_blocked_response, build_servfail_response, parse_dns_query};
+use crate::dns::parser::{
+    build_blocked_response, build_servfail_response, parse_dns_query_opts,
+};
 use crate::security::auth::check_auth;
 use crate::server::api::DnsQueryParam;
 use crate::state::AppState;
@@ -61,7 +63,7 @@ pub fn create_doh_router(state: Arc<AppState>) -> Router {
             state.clone(),
             host_shield_middleware,
         ))
-        .layer(axum::middleware::map_response(add_security_headers))
+        .layer(axum::middleware::from_fn(security_headers_middleware))
         .with_state(state)
 }
 
@@ -339,8 +341,14 @@ pub async fn doh_options_handler() -> Response {
         .into_response()
 }
 
-pub async fn add_security_headers(mut response: Response) -> Response {
+pub async fn security_headers_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let path = req.uri().path().to_string();
+    let mut response = next.run(req).await;
     let headers = response.headers_mut();
+
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         header::HeaderValue::from_static("nosniff"),
@@ -352,6 +360,10 @@ pub async fn add_security_headers(mut response: Response) -> Response {
     headers.insert(
         header::X_XSS_PROTECTION,
         header::HeaderValue::from_static("1; mode=block"),
+    );
+    headers.insert(
+        header::STRICT_TRANSPORT_SECURITY,
+        header::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
     );
     headers.insert(
         header::HeaderName::from_static("x-dns-prefetch-control"),
@@ -366,20 +378,6 @@ pub async fn add_security_headers(mut response: Response) -> Response {
         header::HeaderValue::from_static("cross-origin"),
     );
     headers.insert(
-        header::ACCESS_CONTROL_ALLOW_ORIGIN,
-        header::HeaderValue::from_static("*"),
-    );
-    headers.insert(
-        header::ACCESS_CONTROL_ALLOW_METHODS,
-        header::HeaderValue::from_static("GET, POST, OPTIONS, HEAD"),
-    );
-    headers.insert(
-        header::ACCESS_CONTROL_ALLOW_HEADERS,
-        header::HeaderValue::from_static(
-            "Content-Type, Accept, X-Device-Id, X-Client-Id, Authorization",
-        ),
-    );
-    headers.insert(
         header::CONTENT_SECURITY_POLICY,
         header::HeaderValue::from_static(
             "default-src 'self' 'unsafe-inline' data:; connect-src 'self' *; img-src 'self' data: https:;",
@@ -389,43 +387,65 @@ pub async fn add_security_headers(mut response: Response) -> Response {
         header::HeaderName::from_static("alt-svc"),
         header::HeaderValue::from_static("clear"),
     );
+
+    // RFC 8484 DoH CORS: allow wildcard CORS strictly for DNS resolution endpoints (/dns-query, /),
+    // NEVER expose administrative or control APIs (/api/*, /internal/*) to wildcard origins.
+    if path == "/dns-query" || path == "/" {
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            header::HeaderValue::from_static("*"),
+        );
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            header::HeaderValue::from_static("GET, POST, OPTIONS, HEAD"),
+        );
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_HEADERS,
+            header::HeaderValue::from_static(
+                "Content-Type, Accept, X-Device-Id, X-Client-Id, Authorization",
+            ),
+        );
+    }
+
     response
 }
 
 // ── DNS Query Handlers (DoH) ────────────────────────────────────────────────
 
 pub fn extract_client_ip(headers: &HeaderMap, peer_addr: SocketAddr) -> IpAddr {
-    if let Some(fly_ip) = headers
-        .get("fly-client-ip")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.trim().parse::<IpAddr>().ok())
-    {
-        return fly_ip.to_canonical();
-    }
-
-    if let Some(cf_ip) = headers
-        .get("cf-connecting-ip")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.trim().parse::<IpAddr>().ok())
-    {
-        return cf_ip.to_canonical();
-    }
-
-    if let Some(real_ip) = headers
-        .get("x-real-ip")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.trim().parse::<IpAddr>().ok())
-    {
-        return real_ip.to_canonical();
-    }
-
     let peer_ip = peer_addr.ip().to_canonical();
-    let is_peer_private = match peer_ip {
+    let is_peer_trusted = match peer_ip {
         IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
         IpAddr::V6(v6) => v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00,
     };
 
-    if is_peer_private {
+    // SECURITY: Only trust upstream proxy forwarding headers if the direct socket peer is
+    // an internal/private proxy. Public callers cannot spoof client IPs via HTTP headers.
+    if is_peer_trusted {
+        if let Some(fly_ip) = headers
+            .get("fly-client-ip")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.trim().parse::<IpAddr>().ok())
+        {
+            return fly_ip.to_canonical();
+        }
+
+        if let Some(cf_ip) = headers
+            .get("cf-connecting-ip")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.trim().parse::<IpAddr>().ok())
+        {
+            return cf_ip.to_canonical();
+        }
+
+        if let Some(real_ip) = headers
+            .get("x-real-ip")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.trim().parse::<IpAddr>().ok())
+        {
+            return real_ip.to_canonical();
+        }
+
         if let Some(xff) = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()) {
             for part in xff.rsplit(',') {
                 if let Ok(ip) = part.trim().parse::<IpAddr>() {
@@ -638,7 +658,7 @@ pub async fn process_dns_wire_packet_full(
     };
     state.metrics.record_query(log_id, proto_metric);
 
-    let parsed = match parse_dns_query(query_wire) {
+    let parsed = match parse_dns_query_opts(query_wire, state.config.rfc1035_8bit_labels) {
         Some(p) => p,
         None => {
             state.metrics.record_latency(query_start.elapsed());
@@ -704,12 +724,14 @@ pub async fn process_dns_wire_packet_full(
     let prefetch_cands = state.brain.get_prefetch_candidates(&q.name);
     for cand in prefetch_cands {
         if !state.is_domain_blocked(&cand) {
-            let state_p = state.clone();
-            tokio::spawn(async move {
-                state_p
-                    .metrics
-                    .prefetch_triggers
-                    .fetch_add(1, Ordering::Relaxed);
+            if let Ok(permit) = state.prefetch_semaphore.clone().try_acquire_owned() {
+                let state_p = state.clone();
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    state_p
+                        .metrics
+                        .prefetch_triggers
+                        .fetch_add(1, Ordering::Relaxed);
                 state_p
                     .brain
                     .prefetch_triggers
@@ -735,6 +757,7 @@ pub async fn process_dns_wire_packet_full(
                     state_p.cache.insert(&cand, 1, resp, 300).await;
                 }
             });
+            }
         }
     }
 
@@ -1042,7 +1065,10 @@ pub async fn process_dns_wire_packet_full(
                         crate::dns::parser::extract_answer_ttl(&upstream_resp)
                     {
                         state_bg.ttl_learner.observe(&q_name, raw_ttl);
-                        state_bg.ttl_learner.smart_ttl_and_grace(&q_name, raw_ttl)
+                        let (sttl, sgrace) =
+                            state_bg.ttl_learner.smart_ttl_and_grace(&q_name, raw_ttl);
+                        // RFC 1035 / 2181: Bound fresh cache TTL by upstream authoritative declaration
+                        (raw_ttl.min(sttl), sgrace)
                     } else {
                         (300, 300)
                     };
@@ -1339,7 +1365,9 @@ pub async fn process_dns_wire_packet_full(
         let (smart_ttl, smart_grace) =
             if let Some(raw_ttl) = crate::dns::parser::extract_answer_ttl(&upstream_resp) {
                 state.ttl_learner.observe(&q.name, raw_ttl);
-                state.ttl_learner.smart_ttl_and_grace(&q.name, raw_ttl)
+                let (sttl, sgrace) = state.ttl_learner.smart_ttl_and_grace(&q.name, raw_ttl);
+                // RFC 1035 / 2181: Bound fresh cache TTL by upstream authoritative declaration
+                (raw_ttl.min(sttl), sgrace)
             } else {
                 (300, 300)
             };
@@ -1700,9 +1728,11 @@ pub async fn doh_json_handler(
             let (ttl, grace) =
                 if let Some(raw_ttl) = crate::dns::parser::extract_answer_ttl(&resp_bytes) {
                     state.ttl_learner.observe(&clean_domain, raw_ttl);
-                    state
+                    let (sttl, sgrace) = state
                         .ttl_learner
-                        .smart_ttl_and_grace(&clean_domain, raw_ttl)
+                        .smart_ttl_and_grace(&clean_domain, raw_ttl);
+                    // RFC 1035 / 2181: Bound fresh cache TTL by upstream authoritative declaration
+                    (raw_ttl.min(sttl), sgrace)
                 } else {
                     (300, 300)
                 };
@@ -1825,12 +1855,19 @@ mod tests {
     }
 
     #[test]
-    fn test_create_doh_router_building() {
-        let config = crate::config::Config::from_env();
-        let state = Arc::new(AppState::new(config));
-        let router = create_doh_router(state);
-        assert!(std::mem::size_of_val(&router) > 0);
+    fn test_extract_client_ip_rejects_spoofed_headers_from_public_peer() {
+        let mut headers = HeaderMap::new();
+        headers.insert("fly-client-ip", "127.0.0.1".parse().unwrap());
+        headers.insert("cf-connecting-ip", "10.0.0.1".parse().unwrap());
+        headers.insert("x-real-ip", "192.168.1.1".parse().unwrap());
+
+        let pub_peer: SocketAddr = "198.51.100.1:12345".parse().unwrap();
+        assert_eq!(
+            extract_client_ip(&headers, pub_peer),
+            IpAddr::from([198, 51, 100, 1])
+        );
     }
+
 
     #[test]
     fn test_prometheus_text_format() {

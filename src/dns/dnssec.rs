@@ -987,6 +987,77 @@ pub fn verify_dnskey_with_ds(dnskey: &DnskeyRecord, ds: &DsRecord) -> bool {
     }
 }
 
+/// Helper to encode an ASN.1 length indicator
+fn encode_asn1_length(out: &mut Vec<u8>, len: usize) {
+    if len < 128 {
+        out.push(len as u8);
+    } else if len <= 0xFF {
+        out.push(0x81);
+        out.push(len as u8);
+    } else {
+        out.push(0x82);
+        out.push((len >> 8) as u8);
+        out.push((len & 0xFF) as u8);
+    }
+}
+
+/// Helper to encode an unsigned byte slice as an ASN.1 positive INTEGER
+fn encode_asn1_integer(val: &[u8]) -> Vec<u8> {
+    let mut trimmed = val;
+    while trimmed.len() > 1 && trimmed[0] == 0 {
+        trimmed = &trimmed[1..];
+    }
+    let needs_zero_prefix = trimmed.is_empty() || (trimmed[0] & 0x80) != 0;
+    let content_len = trimmed.len() + if needs_zero_prefix { 1 } else { 0 };
+
+    let mut out = Vec::with_capacity(content_len + 4);
+    out.push(0x02); // INTEGER tag
+    encode_asn1_length(&mut out, content_len);
+    if needs_zero_prefix {
+        out.push(0x00);
+    }
+    out.extend_from_slice(trimmed);
+    out
+}
+
+/// Converts an RFC 3110 / RFC 4034 RSA DNSKEY public key wire payload into PKCS#1 DER format.
+/// Wire format: [exponent_len: 1 or 3 bytes, exponent, modulus].
+/// Output: DER-encoded RSAPublicKey ::= SEQUENCE { modulus INTEGER, publicExponent INTEGER }
+pub fn rsa_dnskey_to_pkcs1_der(public_key: &[u8]) -> Option<Vec<u8>> {
+    if public_key.is_empty() {
+        return None;
+    }
+    let (exp_len, offset) = if public_key[0] == 0 {
+        if public_key.len() < 3 {
+            return None;
+        }
+        let len = u16::from_be_bytes([public_key[1], public_key[2]]) as usize;
+        (len, 3)
+    } else {
+        (public_key[0] as usize, 1)
+    };
+
+    if public_key.len() < offset + exp_len {
+        return None;
+    }
+    let exponent = &public_key[offset..offset + exp_len];
+    let modulus = &public_key[offset + exp_len..];
+    if modulus.is_empty() || exponent.is_empty() {
+        return None;
+    }
+
+    let mod_der = encode_asn1_integer(modulus);
+    let exp_der = encode_asn1_integer(exponent);
+    let seq_content_len = mod_der.len() + exp_der.len();
+
+    let mut der = Vec::with_capacity(seq_content_len + 4);
+    der.push(0x30); // SEQUENCE tag
+    encode_asn1_length(&mut der, seq_content_len);
+    der.extend_from_slice(&mod_der);
+    der.extend_from_slice(&exp_der);
+    Some(der)
+}
+
 /// Verifies a cryptographic signature locally using ring (ECDSA P-256, Ed25519, RSA SHA-256 / SHA-512)
 pub fn verify_dnssec_signature(
     algorithm: DnssecAlgorithm,
@@ -1021,22 +1092,25 @@ pub fn verify_dnssec_signature(
             peer_public_key.verify(signed_data, signature).is_ok()
         }
         DnssecAlgorithm::RsaSha256 => {
-            if public_key.is_empty() {
-                return false;
-            }
-            let peer_public_key = UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA256, public_key);
+            let der = match rsa_dnskey_to_pkcs1_der(public_key) {
+                Some(d) => d,
+                None => return false,
+            };
+            let peer_public_key = UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA256, &der);
             peer_public_key.verify(signed_data, signature).is_ok()
         }
         DnssecAlgorithm::RsaSha512 => {
-            if public_key.is_empty() {
-                return false;
-            }
-            let peer_public_key = UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA512, public_key);
+            let der = match rsa_dnskey_to_pkcs1_der(public_key) {
+                Some(d) => d,
+                None => return false,
+            };
+            let peer_public_key = UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA512, &der);
             peer_public_key.verify(signed_data, signature).is_ok()
         }
         _ => {
-            // Fallback for pre-validated records: ensure non-empty structure
-            !public_key.is_empty() && !signature.is_empty()
+            // Strictly reject any algorithm not cryptographically supported.
+            // Never assume a signature is valid based on non-empty bytes.
+            false
         }
     }
 }
@@ -1637,7 +1711,7 @@ pub fn validate_dnssec(wire: &[u8], now_epoch: Option<u64>) -> DnssecValidationD
         return DnssecValidationDetails {
             status: DnssecStatus::Secure,
             authenticated_data: true,
-            algorithm: Some("ECDSA P-256 (Upstream Validated)".to_string()),
+            algorithm: Some("Upstream Validated (AD)".to_string()),
             key_tag: None,
             signer: None,
             rrsig_count: 0,
@@ -2053,5 +2127,49 @@ mod tests {
         // Non-matching domain should return empty
         let rrset_diff = extract_covered_rrset(&wire, 1, "other.com");
         assert!(rrset_diff.is_empty());
+    }
+
+    #[test]
+    fn test_rsa_dnskey_to_pkcs1_der() {
+        // Wire format: 1-byte exponent length (3), exponent (65537: 0x01, 0x00, 0x01), modulus (e.g. 256 bytes)
+        let mut wire_key = Vec::new();
+        wire_key.push(3u8); // exponent length
+        wire_key.extend_from_slice(&[0x01, 0x00, 0x01]); // 65537
+        wire_key.extend_from_slice(&[0x80; 256]); // 2048-bit modulus starting with high-bit set
+
+        let der = rsa_dnskey_to_pkcs1_der(&wire_key);
+        assert!(der.is_some());
+        let der_bytes = der.unwrap();
+        // PKCS#1 DER must start with SEQUENCE tag 0x30
+        assert_eq!(der_bytes[0], 0x30);
+        // High-bit modulus must have prepended 0x00 byte for positive ASN.1 integer
+        assert!(der_bytes.windows(3).any(|w| w == [0x02, 0x82, 0x01])); // INTEGER with length 257 (0x0101)
+
+        // Invalid empty key
+        assert!(rsa_dnskey_to_pkcs1_der(&[]).is_none());
+        // Truncated key
+        assert!(rsa_dnskey_to_pkcs1_der(&[3, 1, 0]).is_none());
+    }
+
+    #[test]
+    fn test_unsupported_algorithms_strictly_rejected() {
+        // Any algorithm that is not implemented (e.g., Unknown or DSA) must return false
+        // even if non-empty dummy bytes are passed.
+        let dummy_key = vec![1, 2, 3, 4];
+        let dummy_data = b"some data";
+        let dummy_sig = vec![5, 6, 7, 8];
+
+        assert!(!verify_dnssec_signature(
+            DnssecAlgorithm::Unknown(99),
+            &dummy_key,
+            dummy_data,
+            &dummy_sig,
+        ));
+        assert!(!verify_dnssec_signature(
+            DnssecAlgorithm::DsaSha1,
+            &dummy_key,
+            dummy_data,
+            &dummy_sig,
+        ));
     }
 }

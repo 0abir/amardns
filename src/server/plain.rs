@@ -79,6 +79,8 @@ pub async fn start_plain_udp(
         NUM_UDP_WORKERS, addr
     );
 
+    let udp_concurrency = Arc::new(tokio::sync::Semaphore::new(2048));
+
     for worker_id in 0..NUM_UDP_WORKERS {
         let std_sock = match create_reuseport_udp(addr) {
             Ok(s) => s,
@@ -104,6 +106,7 @@ pub async fn start_plain_udp(
 
         let state_worker = state.clone();
         let mut shutdown_rx_worker = shutdown_rx.clone();
+        let udp_concurrency_worker = udp_concurrency.clone();
 
         tokio::spawn(async move {
             let mut buf = [0u8; 4096]; // Pre-allocated reusable receive arena
@@ -120,8 +123,14 @@ pub async fn start_plain_udp(
                             Ok((len, peer)) => {
                                 if len < 12 { continue; }
 
+                                // Rate Limiting (RRL & Reflection / Amplification Mitigation)
+                                if !state_worker.check_rate_limit(peer.ip(), None) {
+                                    state_worker.metrics.burst_events.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    continue;
+                                }
+
                                 // Fast-Path Microsecond Negative Absorber (<1µs zero-alloc drop)
-                                if let Some(parsed) = crate::dns::parser::parse_dns_query(&buf[..len]) {
+                                if let Some(parsed) = crate::dns::parser::parse_dns_query_opts(&buf[..len], state_worker.config.rfc1035_8bit_labels) {
                                     if let Some(ref q) = parsed.question {
                                         let clean = q.name.trim_end_matches('.').to_ascii_lowercase();
                                         if let Some((reason, is_nx)) = state_worker.fast_neg_filter.get(&clean) {
@@ -135,11 +144,20 @@ pub async fn start_plain_udp(
                                     }
                                 }
 
+                                let permit = match udp_concurrency_worker.clone().try_acquire_owned() {
+                                    Ok(p) => p,
+                                    Err(_) => {
+                                        state_worker.metrics.burst_events.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                        continue;
+                                    }
+                                };
+
                                 let query = buf[..len].to_vec();
                                 let state_c = state_worker.clone();
                                 let sock_c = sock.clone();
 
                                 tokio::spawn(async move {
+                                    let _permit = permit;
                                     // RFC 7873: Parse incoming client cookie
                                     let cookie_opt = crate::dns::parser::parse_dns_cookie(&query);
 
@@ -247,6 +265,12 @@ async fn handle_plain_tcp_conn(
     peer: SocketAddr,
 ) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // Connection-level rate limit check
+    if !state.check_rate_limit(peer.ip(), None) {
+        return;
+    }
+
     let (mut reader, mut writer) = stream.into_split();
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
 
@@ -280,6 +304,14 @@ async fn handle_plain_tcp_conn(
         {
             break;
         }
+
+        // Per-query rate limit check within persistent TCP connection
+        if !state.check_rate_limit(peer.ip(), None) {
+            let fail = crate::dns::parser::build_servfail_response(&query);
+            let _ = tx.send(fail).await;
+            break;
+        }
+
         let state_c = state.clone();
         let tx_c = tx.clone();
         tokio::spawn(async move {
@@ -297,4 +329,85 @@ async fn handle_plain_tcp_conn(
 
     drop(tx);
     let _ = writer_task.await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn test_resolve_socket_addr_and_plain_dns_cookie_contract() {
+        // 1. Dual-stack unspecified IPv6 wildcard
+        let addr_v6_wildcard = resolve_socket_addr("::", 53);
+        assert_eq!(
+            addr_v6_wildcard,
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 53)
+        );
+
+        // 2. Standard IPv4 wildcard
+        let addr_v4_wildcard = resolve_socket_addr("0.0.0.0", 53);
+        assert_eq!(
+            addr_v4_wildcard,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 53)
+        );
+
+        // 3. Localhost IPv4
+        let addr_v4_local = resolve_socket_addr("127.0.0.1", 5053);
+        assert_eq!(
+            addr_v4_local,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5053)
+        );
+
+        // 4. Localhost IPv6 bracketed
+        let addr_v6_bracketed = resolve_socket_addr("[::1]", 5053);
+        assert_eq!(
+            addr_v6_bracketed,
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 5053)
+        );
+
+        // 5. Bare IPv6 address (without brackets)
+        let addr_v6_bare = resolve_socket_addr("::1", 5053);
+        assert_eq!(
+            addr_v6_bare,
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 5053)
+        );
+
+        // 6. Unknown invalid string fallback
+        let addr_invalid = resolve_socket_addr("invalid-host-string-xyz", 53);
+        assert_eq!(
+            addr_invalid,
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 53)
+        );
+
+        // 7. Verify RFC 7873 cookie generation and verification contract used by UDP worker
+        let secret = b"super-secure-production-cookie-token-secret-64-characters-long!";
+        let client_cookie = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+        let client_ip = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 42));
+        let timestamp = 1700000000u32;
+
+        let server_cookie = crate::dns::parser::generate_server_cookie(
+            secret,
+            client_ip,
+            &client_cookie,
+            timestamp,
+        );
+
+        assert!(crate::dns::parser::verify_server_cookie(
+            secret,
+            client_ip,
+            &client_cookie,
+            &server_cookie,
+            timestamp + 60,
+        ));
+
+        // Mismatched client IP must fail verification
+        assert!(!crate::dns::parser::verify_server_cookie(
+            secret,
+            IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1)),
+            &client_cookie,
+            &server_cookie,
+            timestamp + 60,
+        ));
+    }
 }
