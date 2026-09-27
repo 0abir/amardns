@@ -2211,13 +2211,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_b64url_encoding() {
+    fn test_b64url_roundtrip() {
         assert_eq!(b64url(b"hello world"), "aGVsbG8gd29ybGQ");
         assert_eq!(b64url(b"\x00\x01\x02"), "AAEC");
-    }
-
-    #[test]
-    fn test_b64url_roundtrip() {
         let original = b"testing base64url roundtrip with arbitrary bytes \x00\xff\x12\x34";
         let encoded = b64url(original);
         let decoded = b64url_decode(&encoded).expect("decode failed");
