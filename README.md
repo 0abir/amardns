@@ -266,7 +266,7 @@ All settings are configured via environment variables matching `src/config.rs`:
 | `PLAIN_DNS_PORT` | `53` | Local plain UDP/TCP DNS listening port. |
 | `PLAIN53_ENABLED` | `true` | Enables/disables port 53 plain UDP/TCP DNS listener. |
 | `HOST` | `::` | Network binding interface (`::` for dual-stack IPv4/IPv6). |
-| `UDP_HOST` | `fly-global-services` | Binding interface for UDP Plain 53 service (`fly-global-services` or `::`). |
+| `UDP_HOST` | `::` | Binding interface for UDP Plain 53 service (`::` for dual-stack or custom IP). |
 | `DB_PATH` | `/data/amardns.wal` | Filesystem path to the persistent Write-Ahead Log. |
 | `LOG_LEVEL` | `info` | Logging verbosity (`error`, `warn`, `info`, `debug`, `trace`). |
 | `DNS_MASTER_KEY` | *(empty)* | Master administrative API key for authentication and management. |
