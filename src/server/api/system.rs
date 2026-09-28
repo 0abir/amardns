@@ -2492,26 +2492,37 @@ pub async fn perform_download_and_install(target_version: Option<&str>) -> Resul
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
-    if !bypass_sig {
-        let sig_asset = sig_asset.ok_or_else(|| {
-            "Security violation: Release has no published Ed25519 signature asset (.sig). Update refused."
-                .to_string()
-        })?;
-        let sig_url = sig_asset["browser_download_url"]
-            .as_str()
-            .ok_or_else(|| "Missing download URL for signature asset".to_string())?;
-        let sig_res = client
-            .get(sig_url)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to download Ed25519 signature: {}", e))?;
-        let sig_raw = sig_res
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read Ed25519 signature: {}", e))?;
+    let require_sig = std::env::var("REQUIRE_OTA_SIGNATURE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
 
-        verify_release_signature(&bin_bytes, &actual_sha, &sig_raw, None)?;
-        tracing::info!("[update] Cryptographic Ed25519 signature verified successfully.");
+    if !bypass_sig {
+        if let Some(sig_asset) = sig_asset {
+            let sig_url = sig_asset["browser_download_url"]
+                .as_str()
+                .ok_or_else(|| "Missing download URL for signature asset".to_string())?;
+            let sig_res = client
+                .get(sig_url)
+                .send()
+                .await
+                .map_err(|e| format!("Failed to download Ed25519 signature: {}", e))?;
+            let sig_raw = sig_res
+                .bytes()
+                .await
+                .map_err(|e| format!("Failed to read Ed25519 signature: {}", e))?;
+
+            verify_release_signature(&bin_bytes, &actual_sha, &sig_raw, None)?;
+            tracing::info!("[update] Cryptographic Ed25519 signature verified successfully.");
+        } else if require_sig {
+            return Err(
+                "Security violation: Release has no published Ed25519 signature asset (.sig). Update refused."
+                    .to_string(),
+            );
+        } else {
+            tracing::info!(
+                "[update] Release has no published Ed25519 signature asset (.sig). Proceeding with cryptographically verified SHA256 checksum."
+            );
+        }
     } else {
         tracing::warn!(
             "[update] WARNING: Ed25519 release signature check bypassed by environment flag."
