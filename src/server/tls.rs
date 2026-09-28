@@ -1,13 +1,12 @@
 use axum::extract::ConnectInfo;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
-use std::fs::File;
-use std::io::BufReader;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::rustls;
-use tokio_rustls::rustls::pki_types::CertificateDer;
+use tokio_rustls::rustls::pki_types::pem::PemObject;
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tower_service::Service;
 
 /// Loads certificates and private key from PEM files and creates a rustls::ServerConfig.
@@ -17,10 +16,8 @@ pub fn load_tls_config(
     alpn_protocols: Vec<Vec<u8>>,
 ) -> Result<Arc<rustls::ServerConfig>, Box<dyn std::error::Error>> {
     // 1. Read PEM certificate chain
-    let cert_file = File::open(cert_path)
-        .map_err(|e| format!("Failed to open TLS certificate file '{}': {}", cert_path, e))?;
-    let mut cert_reader = BufReader::new(cert_file);
-    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert_path)
+        .map_err(|e| format!("Failed to open TLS certificate file '{}': {}", cert_path, e))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| {
             format!(
@@ -34,12 +31,8 @@ pub fn load_tls_config(
     }
 
     // 2. Read PEM private key (supports PKCS8, RSA PKCS1, and SEC1 EC keys)
-    let key_file = File::open(key_path)
-        .map_err(|e| format!("Failed to open TLS private key file '{}': {}", key_path, e))?;
-    let mut key_reader = BufReader::new(key_file);
-    let key = rustls_pemfile::private_key(&mut key_reader)
-        .map_err(|e| format!("Failed to parse TLS private key from '{}': {}", key_path, e))?
-        .ok_or_else(|| format!("No private key found in '{}'", key_path))?;
+    let key = PrivateKeyDer::from_pem_file(key_path)
+        .map_err(|e| format!("Failed to parse TLS private key from '{}': {}", key_path, e))?;
 
     // 3. Build rustls ServerConfig
     let mut config = rustls::ServerConfig::builder()
@@ -96,19 +89,14 @@ impl DynamicCertResolver {
         cert_path: &str,
         key_path: &str,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let cert_file = File::open(cert_path)?;
-        let mut cert_reader = BufReader::new(cert_file);
-        let certs: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut cert_reader).collect::<Result<Vec<_>, _>>()?;
+        let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert_path)?
+            .collect::<Result<Vec<_>, _>>()?;
 
         if certs.is_empty() {
             return Err(format!("No certificates found in '{}'", cert_path).into());
         }
 
-        let key_file = File::open(key_path)?;
-        let mut key_reader = BufReader::new(key_file);
-        let key = rustls_pemfile::private_key(&mut key_reader)?
-            .ok_or_else(|| format!("No private key found in '{}'", key_path))?;
+        let key = PrivateKeyDer::from_pem_file(key_path)?;
 
         let signing_key = tokio_rustls::rustls::crypto::ring::sign::any_supported_type(&key)
             .map_err(|e| format!("Signing key error: {}", e))?;
@@ -155,19 +143,14 @@ impl DynamicCertResolver {
         cert_path: &str,
         key_path: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let cert_file = File::open(cert_path)?;
-        let mut cert_reader = BufReader::new(cert_file);
-        let certs: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut cert_reader).collect::<Result<Vec<_>, _>>()?;
+        let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert_path)?
+            .collect::<Result<Vec<_>, _>>()?;
 
         if certs.is_empty() {
             return Err(format!("No certificates found in '{}'", cert_path).into());
         }
 
-        let key_file = File::open(key_path)?;
-        let mut key_reader = BufReader::new(key_file);
-        let key = rustls_pemfile::private_key(&mut key_reader)?
-            .ok_or_else(|| format!("No private key found in '{}'", key_path))?;
+        let key = PrivateKeyDer::from_pem_file(key_path)?;
 
         let signing_key = tokio_rustls::rustls::crypto::ring::sign::any_supported_type(&key)
             .map_err(|e| format!("Signing key error: {}", e))?;

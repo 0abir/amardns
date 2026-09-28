@@ -13,6 +13,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio_rustls::rustls::pki_types::pem::PemObject;
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tracing::{debug, error, info, warn};
 
 const ZEROSSL_ACME_DIR: &str = "https://acme.zerossl.com/v2/DV90";
@@ -701,9 +703,8 @@ pub fn extract_cert_expiry_der(der_bytes: &[u8]) -> Option<DateTime<Utc>> {
 
 /// Checks the days remaining before expiration for a PEM certificate file.
 pub fn get_cert_days_remaining(cert_path: &str) -> Option<i64> {
-    let cert_data = fs::read_to_string(cert_path).ok()?;
-    let mut reader = std::io::BufReader::new(cert_data.as_bytes());
-    let certs: Vec<_> = rustls_pemfile::certs(&mut reader)
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert_path)
+        .ok()?
         .collect::<Result<Vec<_>, _>>()
         .ok()?;
     let first_cert = certs.first()?;
@@ -794,14 +795,10 @@ pub fn extract_cert_sans_der(der_bytes: &[u8]) -> Vec<String> {
 
 /// Extracts all domain names (SANs) from a PEM certificate file.
 pub fn extract_cert_domains(cert_path: &str) -> Vec<String> {
-    let cert_data = match fs::read_to_string(cert_path) {
-        Ok(d) => d,
+    let certs: Vec<CertificateDer<'static>> = match CertificateDer::pem_file_iter(cert_path) {
+        Ok(iter) => iter.collect::<Result<Vec<_>, _>>().unwrap_or_default(),
         Err(_) => return Vec::new(),
     };
-    let mut reader = std::io::BufReader::new(cert_data.as_bytes());
-    let certs: Vec<_> = rustls_pemfile::certs(&mut reader)
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap_or_default();
     let first_cert = match certs.first() {
         Some(c) => c,
         None => return Vec::new(),
@@ -832,9 +829,7 @@ pub fn validate_cert_key_pair(
     }
 
     // Verify key exists and is a valid supported private key
-    let key_data = fs::read_to_string(key_path).ok()?;
-    let mut key_reader = std::io::BufReader::new(key_data.as_bytes());
-    let key = rustls_pemfile::private_key(&mut key_reader).ok()??;
+    let key = PrivateKeyDer::from_pem_file(key_path).ok()?;
     let _signing_key = tokio_rustls::rustls::crypto::ring::sign::any_supported_type(&key).ok()?;
 
     Some(days)
