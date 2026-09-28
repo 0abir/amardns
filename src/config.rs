@@ -189,7 +189,7 @@ impl Config {
             .ok()
             .and_then(|v| v.trim().parse::<f64>().ok())
             .filter(|&v| (50.0..=16384.0).contains(&v))
-            .unwrap_or(200.0);
+            .unwrap_or(160.0);
 
         let base_mem = env::var("BASE_MEM")
             .or_else(|_| env::var("BASE_MEM_MB"))
