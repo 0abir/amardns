@@ -23,6 +23,7 @@ target/
 # Deployment configurations
 fly.toml
 fly.toml.example
+scripts/
 .github/
 
 # Documentation & licensing

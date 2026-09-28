@@ -4,8 +4,10 @@ target/
 **/*.rs.bk
 *.pdb
 
-# Fly.io Deployment & Secrets
+# Fly.io Deployment & Secrets (Local Only)
 fly.toml
+fly.toml.*
+scripts/deploy.sh
 
 
 # Environment & Secrets
