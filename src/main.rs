@@ -554,6 +554,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
             hygiene_state.metrics.prune_idle();
             hygiene_state.fingerprint.prune_idle();
             hygiene_state.passive_dns.prune_idle();
+            hygiene_state.brain.prune_noise();
             hygiene_state.cache.run_pending_tasks().await;
             hygiene_state.fast_neg_filter.run_pending_tasks();
             crate::telemetry::metrics::trim_process_memory();
@@ -589,6 +590,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 mem_gov_state.cache.clear().await;
                 mem_gov_state.fast_neg_filter.invalidate_all();
                 mem_gov_state.rate_limiter.clear();
+                mem_gov_state.brain.prune_noise();
                 mem_gov_state.metrics.prune_idle();
                 mem_gov_state.fingerprint.prune_idle();
                 mem_gov_state.passive_dns.prune_idle();
@@ -616,6 +618,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 mem_gov_state.cache.run_pending_tasks().await;
                 mem_gov_state.fast_neg_filter.run_pending_tasks();
                 mem_gov_state.rate_limiter.prune_idle();
+                mem_gov_state.brain.prune_noise();
                 mem_gov_state.metrics.prune_idle();
                 mem_gov_state.fingerprint.prune_idle();
                 mem_gov_state.passive_dns.prune_idle();

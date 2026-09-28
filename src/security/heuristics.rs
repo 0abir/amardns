@@ -371,7 +371,7 @@ impl ClientFingerprintTracker {
 
         // Prevent unbounded memory growth — cap at 3000 clients.
         // Retain: flagged clients (still serving out flag expiry) OR recently active (within 120s)
-        if map.len() > 3_000 {
+        if map.len() >= 3_000 {
             map.retain(|_, v| {
                 let recently_active = now.duration_since(v.window_start).as_secs() < 120;
                 let flagged_valid = v.flagged.is_some()
@@ -380,6 +380,11 @@ impl ClientFingerprintTracker {
                     });
                 recently_active || flagged_valid
             });
+            if map.len() >= 3_000 && !map.contains_key(&client_ip) {
+                if let Some(oldest) = map.keys().next().cloned() {
+                    map.remove(&oldest);
+                }
+            }
         }
 
         let fp = map.entry(client_ip).or_insert_with(|| ClientFp {
@@ -459,10 +464,15 @@ impl ClientFingerprintTracker {
         let now = Instant::now();
         let mut nx_map = self.nx_map.write();
 
-        if nx_map.len() > 3000 {
+        if nx_map.len() >= 3000 {
             nx_map.retain(|_, v| {
                 now.duration_since(v.window_start).as_millis() < NX_WINDOW_MS as u128
             });
+            if nx_map.len() >= 3000 && !nx_map.contains_key(&client_ip) {
+                if let Some(oldest) = nx_map.keys().next().cloned() {
+                    nx_map.remove(&oldest);
+                }
+            }
         }
 
         let rec = nx_map.entry(client_ip).or_insert_with(|| ClientNx {

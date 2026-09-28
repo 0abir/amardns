@@ -203,10 +203,10 @@ impl AppState {
 
         let safe_browsing = SafeBrowsingClient::new(config.safe_browsing_keys.clone());
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        let cache_capacity = ((config.total_mem_cap / 200.0) * 150_000.0)
+        let cache_capacity = ((config.total_mem_cap / 160.0) * 120_000.0)
             .round()
             .clamp(10_000.0, 500_000.0) as u64;
-        let neg_capacity = ((config.total_mem_cap / 200.0) * 20_000.0)
+        let neg_capacity = ((config.total_mem_cap / 160.0) * 20_000.0)
             .round()
             .clamp(2_000.0, 100_000.0) as u64;
 
@@ -989,6 +989,11 @@ impl AppState {
     #[allow(dead_code)]
     pub fn revoke_token(&self, token: &str) {
         let mut guard = self.revoked_tokens.write();
+        if guard.len() >= 10_000 && !guard.contains(token) {
+            if let Some(oldest) = guard.iter().next().cloned() {
+                guard.remove(&oldest);
+            }
+        }
         guard.insert(token.to_string());
     }
 

@@ -365,14 +365,22 @@ impl Metrics {
         let cutoff = now_ms.saturating_sub(60_000);
         if let Ok(mut map) = self.nx_window.lock() {
             // Evict old global map entries first
-            if map.len() > 5_000 {
+            if map.len() >= 5_000 {
                 map.retain(|_, q| q.back().map(|&t| t >= cutoff).unwrap_or(false));
+                if map.len() >= 5_000 && !map.contains_key(client_ip) {
+                    if let Some(oldest) = map.keys().next().cloned() {
+                        map.remove(&oldest);
+                    }
+                }
             }
             let queue = map
                 .entry(client_ip.to_string())
                 .or_insert_with(VecDeque::new);
             // Evict old timestamps for this client
             while queue.front().map(|&t| t < cutoff).unwrap_or(false) {
+                queue.pop_front();
+            }
+            if queue.len() >= 20 {
                 queue.pop_front();
             }
             queue.push_back(now_ms);
@@ -392,14 +400,22 @@ impl Metrics {
             .as_millis() as u64;
         let cutoff = now_ms.saturating_sub(10_000);
         if let Ok(mut map) = self.swarm_window.lock() {
-            if map.len() > 2_000 {
+            if map.len() >= 2_000 {
                 map.retain(|_, (q, _)| q.back().map(|&t| t >= cutoff).unwrap_or(false));
+                if map.len() >= 2_000 && !map.contains_key(domain) {
+                    if let Some(oldest) = map.keys().next().cloned() {
+                        map.remove(&oldest);
+                    }
+                }
             }
             let entry = map
                 .entry(domain.to_string())
                 .or_insert_with(|| (VecDeque::new(), 0));
             let (queue, ip_count) = entry;
             while queue.front().map(|&t| t < cutoff).unwrap_or(false) {
+                queue.pop_front();
+            }
+            if queue.len() >= 20 {
                 queue.pop_front();
             }
             // Use client_ip length as a simple hash contribution to track unique-ish IPs
