@@ -204,6 +204,8 @@ impl AppState {
 
         let safe_browsing = SafeBrowsingClient::new(config.safe_browsing_keys.clone());
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let cache_capacity = ((config.total_mem_cap / 200.0) * 150_000.0).round().clamp(10_000.0, 500_000.0) as u64;
+        let neg_capacity = ((config.total_mem_cap / 200.0) * 20_000.0).round().clamp(2_000.0, 100_000.0) as u64;
 
         Self {
             config,
@@ -214,7 +216,7 @@ impl AppState {
             fingerprint: crate::security::heuristics::ClientFingerprintTracker::new(),
             custom_blocklist: RwLock::new(custom_blocklist),
             custom_whitelist: RwLock::new(custom_whitelist),
-            cache: DnsCache::new(150_000), // 150k entries ≈ 70-100 MB — dynamic expansion, governed under 200 MB hard cap
+            cache: DnsCache::new(cache_capacity),
             upstreams: UpstreamPool::new(),
             rate_limiter: RateLimiter::new(100.0, 50.0, 500.0, 200.0), // 100 capacity, 50/sec refill; 500 IP ceiling, 200/sec refill
             metrics: Metrics::new(),
@@ -233,7 +235,7 @@ impl AppState {
             expected_whitelist_total: AtomicUsize::new(0),
             feed_overlap_count: AtomicUsize::new(0),
             fast_neg_filter: moka::sync::Cache::builder()
-                .max_capacity(20_000) // 20k fast negative-cache entries ≈ 4 MB
+                .max_capacity(neg_capacity)
                 .time_to_live(std::time::Duration::from_secs(60))
                 .build(),
             passive_dns: PassiveDnsStore::new(),
