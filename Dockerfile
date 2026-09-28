@@ -1,12 +1,15 @@
 FROM rust:alpine AS builder
-RUN apk update && apk upgrade --no-cache && \
-    apk add --no-cache musl-dev build-base ca-certificates
+RUN apk add --no-cache musl-dev make gcc ca-certificates
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 
-# Dummy build to cache dependencies layer
-RUN mkdir -p src && touch src/lib.rs && echo "fn main() {}" > src/main.rs && cargo build --release && rm -rf src
+# Pre-cache dependencies layer
+RUN mkdir -p src && \
+    echo "pub fn dummy() {}" > src/lib.rs && \
+    echo "fn main() {}" > src/main.rs && \
+    cargo build --release && \
+    rm -rf src
 
 # Copy real source code and rebuild only the app binary
 COPY src ./src

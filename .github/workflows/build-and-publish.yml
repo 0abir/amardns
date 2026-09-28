@@ -10,10 +10,13 @@ permissions:
   packages: write
 
 jobs:
-  build:
-    name: Build & Publish Scratch Image and Binary
+  prepare:
+    name: Determine Version & Changelog
     runs-on: ubuntu-latest
-
+    outputs:
+      version: ${{ steps.versioning.outputs.version }}
+      prev_tag: ${{ steps.versioning.outputs.prev_tag }}
+      git_ref: ${{ steps.versioning.outputs.git_ref }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -55,6 +58,7 @@ jobs:
           TARGET_TAG="v$TARGET_VERSION"
           echo "version=$TARGET_TAG" >> "$GITHUB_OUTPUT"
           echo "prev_tag=$LATEST_RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "git_ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "Final target release tag: $TARGET_TAG"
 
       - name: Generate Release Notes & Changelog
@@ -85,17 +89,47 @@ jobs:
             echo ""
             echo "---"
             echo "**Release Tag**: \`$TARGET_TAG\`"
-            echo "**Built for**: Linux x86_64 & AArch64/ARM64 (Musl static, zero-GC, Z+ security)"
+            echo "**Built for**: Linux x86_64 & AArch64/ARM64 (Native silicon, zero-emulation, zero-GC, Z+ security)"
             echo "**OTA Hot-Deploy Ready**: Compatible with in-place \`execve\` dashboard firmware updater."
           } > release_notes.md
 
           echo "--- Generated Release Notes ---"
           cat release_notes.md
 
+      - name: Upload Release Notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release_notes.md
+
+  build-native:
+    name: Build Native ${{ matrix.arch }} (${{ matrix.platform }})
+    needs: prepare
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+            bin_name: amardns
+            archive_name: amardns-linux-amd64.tar.gz
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            bin_name: amardns-arm64
+            archive_name: amardns-linux-arm64.tar.gz
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.git_ref }}
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
           components: clippy
 
       - name: Cache Cargo registry and build artifacts
@@ -105,22 +139,19 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-native-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-${{ runner.arch }}-cargo-native-
 
-      - name: Quality Gate — Run full test suite
+      - name: Native Quality Gate — Test suite (${{ matrix.arch }})
         run: cargo test --all-targets --all-features
         env:
           CARGO_TERM_COLOR: always
 
-      - name: Quality Gate — Lint check (zero warnings policy)
+      - name: Native Quality Gate — Clippy check (${{ matrix.arch }})
         run: cargo clippy --all-targets --all-features -- -D warnings
         env:
           CARGO_TERM_COLOR: always
-
-      - name: Set up QEMU (multi-arch cross-compilation support)
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -132,78 +163,117 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest
-            type=raw,value=${{ steps.versioning.outputs.version }}
-
-      - name: Build and push Docker image
+      - name: Build and push native Docker image
         uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ needs.prepare.outputs.version }}-${{ matrix.arch }}
+            ghcr.io/${{ github.repository }}:latest-${{ matrix.arch }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Extract static binaries from multi-arch container
+      - name: Extract & verify static binary natively
         run: |
-          # 1. Extract and verify AMD64 static binary
-          docker pull --platform linux/amd64 ghcr.io/${{ github.repository }}:latest
-          CID_AMD=$(docker create --platform linux/amd64 ghcr.io/${{ github.repository }}:latest)
-          docker cp "$CID_AMD":/amardns ./amardns
-          docker rm -v "$CID_AMD"
-          chmod +x ./amardns
-          ./amardns --verify
-          tar -czvf amardns-linux-amd64.tar.gz amardns
-          sha256sum amardns > amardns.sha256
-          sha256sum amardns-linux-amd64.tar.gz > amardns-linux-amd64.tar.gz.sha256
+          IMAGE_TAG="ghcr.io/${{ github.repository }}:${{ needs.prepare.outputs.version }}-${{ matrix.arch }}"
+          docker pull "$IMAGE_TAG"
+          CID=$(docker create "$IMAGE_TAG")
+          mkdir -p artifacts
+          docker cp "$CID":/amardns "./artifacts/${{ matrix.bin_name }}"
+          docker rm -v "$CID"
+          chmod +x "./artifacts/${{ matrix.bin_name }}"
 
-          # 2. Extract and verify ARM64 static binary (via QEMU)
-          docker pull --platform linux/arm64 ghcr.io/${{ github.repository }}:latest
-          CID_ARM=$(docker create --platform linux/arm64 ghcr.io/${{ github.repository }}:latest)
-          docker cp "$CID_ARM":/amardns ./amardns-arm64
-          docker rm -v "$CID_ARM"
-          chmod +x ./amardns-arm64
-          ./amardns-arm64 --verify
-          tar -czvf amardns-linux-arm64.tar.gz amardns-arm64
-          sha256sum amardns-arm64 > amardns-arm64.sha256
-          sha256sum amardns-linux-arm64.tar.gz > amardns-linux-arm64.tar.gz.sha256
+          # Verify native execution on actual runner hardware (Zero emulation!)
+          "./artifacts/${{ matrix.bin_name }}" --verify
+
+          # Package and generate SHA-256 checksums
+          cd artifacts
+          tar -czvf "${{ matrix.archive_name }}" "${{ matrix.bin_name }}"
+          sha256sum "${{ matrix.bin_name }}" > "${{ matrix.bin_name }}.sha256"
+          sha256sum "${{ matrix.archive_name }}" > "${{ matrix.archive_name }}.sha256"
+          cd ..
+
+      - name: Upload native artifacts (${{ matrix.arch }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.arch }}
+          path: artifacts/*
+
+  release:
+    name: Multi-Arch Manifest & GitHub Release
+    needs: [prepare, build-native]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create & push multi-arch Docker manifest
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          echo "Merging native images into multi-arch manifest for $VERSION & latest..."
+          docker buildx imagetools create \
+            -t "ghcr.io/${{ github.repository }}:latest" \
+            -t "ghcr.io/${{ github.repository }}:${VERSION}" \
+            "ghcr.io/${{ github.repository }}:${VERSION}-amd64" \
+            "ghcr.io/${{ github.repository }}:${VERSION}-arm64"
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+
+      - name: Download amd64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: artifacts-amd64
+          path: ./release-assets
+
+      - name: Download arm64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: artifacts-arm64
+          path: ./release-assets
 
       - name: Publish or Update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${{ steps.versioning.outputs.version }}"
+          VERSION="${{ needs.prepare.outputs.version }}"
           echo "Publishing GitHub Release: $VERSION"
+
+          cd release-assets
+          ls -la
 
           RELEASE_ASSETS=(
             ./amardns
-            ./amardns-linux-amd64.tar.gz
             ./amardns.sha256
+            ./amardns-linux-amd64.tar.gz
             ./amardns-linux-amd64.tar.gz.sha256
             ./amardns-arm64
-            ./amardns-linux-arm64.tar.gz
             ./amardns-arm64.sha256
+            ./amardns-linux-arm64.tar.gz
             ./amardns-linux-arm64.tar.gz.sha256
           )
 
           if gh release view "$VERSION" >/dev/null 2>&1; then
             echo "Release $VERSION already exists. Uploading assets and updating notes..."
             gh release upload "$VERSION" "${RELEASE_ASSETS[@]}" --clobber
-            gh release edit "$VERSION" --title "AmarDNS $VERSION" --notes-file release_notes.md --latest
+            gh release edit "$VERSION" --title "AmarDNS $VERSION" --notes-file ../release_notes.md --latest
           else
             echo "Creating release $VERSION..."
             gh release create "$VERSION" "${RELEASE_ASSETS[@]}" \
               --title "AmarDNS $VERSION" \
-              --notes-file release_notes.md \
+              --notes-file ../release_notes.md \
               --generate-notes \
               --latest
           fi
