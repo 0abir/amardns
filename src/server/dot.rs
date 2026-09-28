@@ -82,7 +82,26 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for PrefixedStream<S> {
 }
 
 /// Creates a dual-stack TCP listener that accepts both IPv4 and IPv6 connections when bound to an IPv6 address.
+/// If IPv6 is unsupported or disabled in the container network namespace, automatically falls back to IPv4 0.0.0.0.
 pub fn create_dual_stack_tcp_listener(addr: SocketAddr) -> Result<TcpListener, std::io::Error> {
+    match bind_tcp_socket(addr) {
+        Ok(listener) => Ok(listener),
+        Err(e) if addr.is_ipv6() => {
+            warn!(
+                "[tcp] IPv6 bind failed for {} ({}). Falling back to IPv4 0.0.0.0:{}...",
+                addr, e, addr.port()
+            );
+            let v4_addr = SocketAddr::new(
+                std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+                addr.port(),
+            );
+            bind_tcp_socket(v4_addr)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn bind_tcp_socket(addr: SocketAddr) -> Result<TcpListener, std::io::Error> {
     let domain = if addr.is_ipv6() {
         socket2::Domain::IPV6
     } else {
