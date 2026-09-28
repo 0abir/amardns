@@ -321,15 +321,16 @@ pub async fn prometheus_metrics_handler(
         healthy_up
     );
 
-    let rss_mb = crate::telemetry::metrics::get_process_rss_mb();
+    let raw_rss_mb = crate::telemetry::metrics::get_process_rss_mb();
+    let rss_mb = ((raw_rss_mb + state.config.base_mem) * 10.0).round() / 10.0;
     gauge!(
         "amardns_process_rss_mb",
-        "Process resident set size in megabytes",
+        "Process actual memory usage in megabytes (base memory + RSS)",
         rss_mb
     );
     gauge!(
         "amardns_process_resident_memory_bytes",
-        "Process resident set size in bytes",
+        "Process actual memory usage in bytes (base memory + RSS)",
         (rss_mb * 1024.0 * 1024.0) as u64
     );
 
@@ -560,7 +561,8 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
     let (wal_bytes, wal_mb) = state.wal.get_stats();
     let total_records = state.wal.total_records().max((blk_cnt + wl_cnt) as u64);
 
-    let rss_mb = crate::telemetry::metrics::get_process_rss_mb();
+    let raw_rss_mb = crate::telemetry::metrics::get_process_rss_mb();
+    let rss_mb = ((raw_rss_mb + state.config.base_mem) * 10.0).round() / 10.0;
 
     let valid_lats: Vec<u32> = upstreams
         .iter()
@@ -717,6 +719,8 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "deviceList": devices_list,
             "memory": {
                 "rssMB": rss_mb,
+                "rawRssMB": raw_rss_mb,
+                "actualMemMB": rss_mb,
                 "engine": "Rust (Zero GC)",
                 "totalCapMB": state.config.total_mem_cap,
                 "baseMemMB": state.config.base_mem
@@ -724,6 +728,8 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
         },
         "memory": {
             "rssMB": rss_mb,
+            "rawRssMB": raw_rss_mb,
+            "actualMemMB": rss_mb,
             "engine": "Rust (Zero GC)",
             "totalCapMB": state.config.total_mem_cap,
             "baseMemMB": state.config.base_mem

@@ -1794,7 +1794,7 @@ mod tests {
             plain53_enabled: false,
             plain53_host: "127.0.0.1".into(),
             plain53_udp_host: "127.0.0.1".into(),
-            total_mem_cap: 160.0,
+            total_mem_cap: 200.0,
             base_mem: 40.0,
             doq_enabled: true,
             doq_port: 853,

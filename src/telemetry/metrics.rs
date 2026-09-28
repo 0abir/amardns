@@ -808,7 +808,7 @@ pub fn trim_process_memory() {
 }
 
 static BASE_MEM_TENTHS: AtomicU64 = AtomicU64::new(400); // 40.0 MB default
-static TOTAL_CAP_TENTHS: AtomicU64 = AtomicU64::new(1600); // 160.0 MB default
+static TOTAL_CAP_TENTHS: AtomicU64 = AtomicU64::new(2000); // 200.0 MB default
 
 /// Configures dynamic memory baseline and ceiling from application configuration
 pub fn init_memory_config(base_mem: f64, total_cap: f64) {
