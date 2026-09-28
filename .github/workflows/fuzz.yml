@@ -68,8 +68,19 @@ jobs:
       - name: Install Rust nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
 
+      - name: Cache cargo-fuzz binary
+        id: cache-cargo-fuzz
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: ${{ runner.os }}-cargo-fuzz-bin-v0.13.2
+
       - name: Install cargo-fuzz
-        uses: taiki-e/install-action@cargo-fuzz
+        if: steps.cache-cargo-fuzz.outputs.cache-hit != 'true'
+        run: cargo install cargo-fuzz --locked
+
+      - name: Ensure cargo-fuzz in PATH
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Cache Cargo registry and build artifacts
         uses: actions/cache@v4
