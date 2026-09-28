@@ -108,7 +108,15 @@ pub fn render_manifest_json() -> String {
     .to_string()
 }
 
-fn page_shell(title: &str, description: &str, path: &str, content_html: &str, host: &str, region: &str, machine_id: &str) -> String {
+fn page_shell(
+    title: &str,
+    description: &str,
+    path: &str,
+    content_html: &str,
+    host: &str,
+    region: &str,
+    machine_id: &str,
+) -> String {
     let clean_host = if host.is_empty() || host == "localhost" {
         "amardns.fly.dev"
     } else {
@@ -482,10 +490,26 @@ footer.site-footer a:hover {{
         short_machine = short_machine,
         content_html = content_html,
         nav_home = if path == "/" { "class=\"active\"" } else { "" },
-        nav_help = if path == "/help" || path == "/docs" { "class=\"active\"" } else { "" },
-        nav_sec = if path == "/security" { "class=\"active\"" } else { "" },
-        nav_priv = if path == "/privacy" { "class=\"active\"" } else { "" },
-        nav_terms = if path == "/terms" { "class=\"active\"" } else { "" },
+        nav_help = if path == "/help" || path == "/docs" {
+            "class=\"active\""
+        } else {
+            ""
+        },
+        nav_sec = if path == "/security" {
+            "class=\"active\""
+        } else {
+            ""
+        },
+        nav_priv = if path == "/privacy" {
+            "class=\"active\""
+        } else {
+            ""
+        },
+        nav_terms = if path == "/terms" {
+            "class=\"active\""
+        } else {
+            ""
+        },
     )
 }
 

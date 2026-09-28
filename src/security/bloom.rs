@@ -345,7 +345,6 @@ impl BloomFilter {
         false
     }
 
-
     /// Clears all bits in the bitset and resets counter
     #[allow(dead_code)]
     pub fn clear(&mut self) {
@@ -478,7 +477,11 @@ mod tests {
         // Verify mathematical false-positive rate at 2,000,000 entries is ~4.02e-12 (< 1e-11)
         filter.count.store(2_000_000, Ordering::Relaxed);
         let fp = filter.false_positive_rate();
-        assert!(fp < 1e-11, "FP rate at 2M entries must be < 1e-11, got: {:e}", fp);
+        assert!(
+            fp < 1e-11,
+            "FP rate at 2M entries must be < 1e-11, got: {:e}",
+            fp
+        );
         assert!(fp > 0.0);
     }
 
@@ -543,7 +546,9 @@ mod tests {
         // Offset 28: "sub" + compression pointer to 12 -> [3, b's','u','b', 0xc0, 12]
         let mut wire = vec![0u8; 12]; // DNS header
         let bad_domain_offset = wire.len();
-        wire.extend_from_slice(&[10, b'b', b'a', b'd', b'-', b'd', b'o', b'm', b'a', b'i', b'n']);
+        wire.extend_from_slice(&[
+            10, b'b', b'a', b'd', b'-', b'd', b'o', b'm', b'a', b'i', b'n',
+        ]);
         wire.extend_from_slice(&[3, b'c', b'o', b'm', 0]);
 
         let compressed_sub_offset = wire.len();
@@ -569,7 +574,9 @@ mod tests {
             wire.push(label.len() as u8);
             wire.extend_from_slice(label.as_bytes());
         }
-        wire.extend_from_slice(&[6, b't', b'a', b'r', b'g', b'e', b't', 3, b'c', b'o', b'm', 0]);
+        wire.extend_from_slice(&[
+            6, b't', b'a', b'r', b'g', b'e', b't', 3, b'c', b'o', b'm', 0,
+        ]);
 
         // Wire subdomain check should detect "target.com" despite >16 levels of labels
         assert!(filter.contains_wire_with_subdomains(&wire, 12));
@@ -595,6 +602,4 @@ mod tests {
         assert!(!filter.contains_wire(&truncated_ptr_wire, 12));
         assert!(!filter.contains_wire_with_subdomains(&truncated_ptr_wire, 12));
     }
-
 }
-

@@ -797,7 +797,10 @@ static TOTAL_CAP_TENTHS: AtomicU64 = AtomicU64::new(1600); // 160.0 MB default
 /// Configures dynamic memory baseline and ceiling from application configuration
 pub fn init_memory_config(base_mem: f64, total_cap: f64) {
     BASE_MEM_TENTHS.store((base_mem * 10.0).round().max(0.0) as u64, Ordering::Relaxed);
-    TOTAL_CAP_TENTHS.store((total_cap * 10.0).round().max(100.0) as u64, Ordering::Relaxed);
+    TOTAL_CAP_TENTHS.store(
+        (total_cap * 10.0).round().max(100.0) as u64,
+        Ordering::Relaxed,
+    );
 }
 
 pub fn get_base_mem_mb() -> f64 {

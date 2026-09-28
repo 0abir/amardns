@@ -27,7 +27,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             "--verify" | "--test-binary" => {
-                println!("AMARDNS_OK: binary self-test passed (v{})", env!("CARGO_PKG_VERSION"));
+                println!(
+                    "AMARDNS_OK: binary self-test passed (v{})",
+                    env!("CARGO_PKG_VERSION")
+                );
                 return Ok(());
             }
             _ => {}
@@ -109,7 +112,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         for e in entries.flatten() {
                             let p = e.path();
                             if let Some(n) = p.file_name().and_then(|s| s.to_str()) {
-                                if (n.starts_with("amardns-") || n == "amardns.bak") && p.is_file() {
+                                if (n.starts_with("amardns-") || n == "amardns.bak") && p.is_file()
+                                {
                                     candidates.push(p);
                                 }
                             }
@@ -118,14 +122,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if persistent_bin.is_file() {
                         candidates.push(persistent_bin.to_path_buf());
                     }
-                    candidates.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+                    candidates
+                        .sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
                     candidates.reverse();
 
                     if let Some(src) = candidates.first() {
-                        eprintln!("[bootloader watchdog] /amardns was missing! Restoring from {:?}", src);
+                        eprintln!(
+                            "[bootloader watchdog] /amardns was missing! Restoring from {:?}",
+                            src
+                        );
                         if std::fs::copy(src, target_bin).is_ok() {
                             use std::os::unix::fs::PermissionsExt;
-                            let _ = std::fs::set_permissions(target_bin, std::fs::Permissions::from_mode(0o755));
+                            let _ = std::fs::set_permissions(
+                                target_bin,
+                                std::fs::Permissions::from_mode(0o755),
+                            );
                         }
                     }
                 }
@@ -638,7 +649,9 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = std::fs::create_dir_all("/data");
         let _ = std::fs::copy(seed_cert, target_cert);
         let _ = std::fs::copy(seed_key, target_key);
-        info!("[boot] Seeded genuine TLS certificate bundle from image into persistent storage (/data).");
+        info!(
+            "[boot] Seeded genuine TLS certificate bundle from image into persistent storage (/data)."
+        );
     }
 
     let cert_resolver = match config.get_effective_tls_paths() {
@@ -716,7 +729,9 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
                 for _ in 0..120 {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     if server::acme::try_sync_from_peer(&bg_acme_cfg, Some(&bg_master_key)).await {
-                        info!("[boot-peer-sync] Genuine TLS certificate synced from peer and hot-reloaded into memory.");
+                        info!(
+                            "[boot-peer-sync] Genuine TLS certificate synced from peer and hot-reloaded into memory."
+                        );
                         break;
                     }
                 }
@@ -728,9 +743,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let doh_tls_config = if config.is_tls_enabled() {
         match server::tls::create_dynamic_doh_server_config(cert_resolver.clone()) {
             Ok(cfg) => {
-                info!(
-                    "[doh] Native dynamic TLS termination enabled for DoH (ALPN: h2, http/1.1)"
-                );
+                info!("[doh] Native dynamic TLS termination enabled for DoH (ALPN: h2, http/1.1)");
                 Some(cfg)
             }
             Err(e) => {

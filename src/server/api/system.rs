@@ -114,23 +114,47 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/system/update/{key}", post(self_update_key_handler))
         .route("/api/system/update/check", get(self_update_check_handler))
         .route("/api/system/update/check/", get(self_update_check_handler))
-        .route("/api/system/update/check/{key}", get(self_update_check_key_handler))
-        .route("/api/system/update/releases", get(self_update_releases_handler))
-        .route("/api/system/update/releases/", get(self_update_releases_handler))
-        .route("/api/system/update/releases/{key}", get(self_update_releases_key_handler))
+        .route(
+            "/api/system/update/check/{key}",
+            get(self_update_check_key_handler),
+        )
+        .route(
+            "/api/system/update/releases",
+            get(self_update_releases_handler),
+        )
+        .route(
+            "/api/system/update/releases/",
+            get(self_update_releases_handler),
+        )
+        .route(
+            "/api/system/update/releases/{key}",
+            get(self_update_releases_key_handler),
+        )
         .route("/api/system/rollback", post(self_rollback_handler))
         .route("/api/system/rollback/", post(self_rollback_handler))
-        .route("/api/system/rollback/{key}", post(self_rollback_key_handler))
+        .route(
+            "/api/system/rollback/{key}",
+            post(self_rollback_key_handler),
+        )
         // Software Binary Management
         .route("/api/system/software", get(software_list_handler))
         .route("/api/system/software/", get(software_list_handler))
         .route("/api/system/software/{key}", get(software_list_key_handler))
         .route("/api/system/software/remove", post(software_remove_handler))
-        .route("/api/system/software/remove/", post(software_remove_handler))
-        .route("/api/system/software/remove/{key}", post(software_remove_key_handler))
+        .route(
+            "/api/system/software/remove/",
+            post(software_remove_handler),
+        )
+        .route(
+            "/api/system/software/remove/{key}",
+            post(software_remove_key_handler),
+        )
         .route("/api/system/software/prune", post(software_prune_handler))
         .route("/api/system/software/prune/", post(software_prune_handler))
-        .route("/api/system/software/prune/{key}", post(software_prune_key_handler))
+        .route(
+            "/api/system/software/prune/{key}",
+            post(software_prune_key_handler),
+        )
 }
 
 // ── Query Logs ──────────────────────────────────────────────────────────────
@@ -563,10 +587,7 @@ pub async fn handle_nuclear_wipe(
             let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
             let master_key = state.config.dns_master_key.clone();
             tokio::spawn(async move {
-                let peer_host = format!(
-                    "http://{}.internal:{}/api/nuclear-wipe",
-                    app_name, port
-                );
+                let peer_host = format!("http://{}.internal:{}/api/nuclear-wipe", app_name, port);
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(5))
                     .build()
@@ -1186,10 +1207,7 @@ pub async fn acquire_acme_lock_key(
 }
 
 fn handle_acquire_lock(state: &Arc<AppState>, body: serde_json::Value) -> Response {
-    let machine_id = body["machine_id"]
-        .as_str()
-        .unwrap_or("unknown")
-        .to_string();
+    let machine_id = body["machine_id"].as_str().unwrap_or("unknown").to_string();
     let ttl_secs = body["ttl_secs"].as_u64().unwrap_or(600);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1300,7 +1318,10 @@ pub async fn self_update_key_handler(
     handle_self_update(&state, Some(&key), &headers, payload.map(|j| j.0)).await
 }
 
-pub async fn self_update_check_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+pub async fn self_update_check_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
     handle_self_update_check(&state, None, &headers).await
 }
 
@@ -1312,7 +1333,10 @@ pub async fn self_update_check_key_handler(
     handle_self_update_check(&state, Some(&key), &headers).await
 }
 
-pub async fn self_update_releases_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+pub async fn self_update_releases_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
     handle_self_update_releases(&state, None, &headers).await
 }
 
@@ -1324,7 +1348,10 @@ pub async fn self_update_releases_key_handler(
     handle_self_update_releases(&state, Some(&key), &headers).await
 }
 
-pub async fn self_rollback_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+pub async fn self_rollback_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
     handle_self_rollback(&state, None, &headers).await
 }
 
@@ -1450,7 +1477,8 @@ async fn handle_self_update(
             .into_response();
     }
 
-    let target_ver = payload.as_ref()
+    let target_ver = payload
+        .as_ref()
         .and_then(|p| p.version.as_deref().or(p.tag.as_deref()));
 
     match perform_download_and_install(target_ver).await {
@@ -1585,7 +1613,8 @@ async fn handle_software_remove(
             .into_response();
     }
 
-    let target = payload.as_ref()
+    let target = payload
+        .as_ref()
         .and_then(|p| p.target.as_ref().or(p.file.as_ref()))
         .cloned()
         .unwrap_or_default();
@@ -1747,7 +1776,9 @@ pub fn list_software_binaries() -> Vec<SoftwareBinaryInfo> {
 
                 let (modified_iso, age_str) = match metadata.modified() {
                     Ok(time) => {
-                        let duration = time.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                        let duration = time
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default();
                         let secs = duration.as_secs();
                         let iso = match chrono::DateTime::from_timestamp(secs as i64, 0) {
                             Some(dt) => dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
@@ -1779,12 +1810,19 @@ pub fn list_software_binaries() -> Vec<SoftwareBinaryInfo> {
                     let ver = detect_binary_version(&path).unwrap_or_else(|| "backup".to_string());
                     ("BACKUP / FALLBACK".to_string(), ver)
                 } else if file_name.starts_with("amardns-") {
-                    let ver = detect_binary_version(&path).unwrap_or_else(|| "archived".to_string());
+                    let ver =
+                        detect_binary_version(&path).unwrap_or_else(|| "archived".to_string());
                     ("ARCHIVED".to_string(), ver)
                 } else if path_str == "/data/amardns" {
-                    ("LEGACY PERSISTENT".to_string(), detect_binary_version(&path).unwrap_or_else(|| "legacy".to_string()))
+                    (
+                        "LEGACY PERSISTENT".to_string(),
+                        detect_binary_version(&path).unwrap_or_else(|| "legacy".to_string()),
+                    )
                 } else {
-                    ("STAGED / TEMP".to_string(), detect_binary_version(&path).unwrap_or_else(|| "temp".to_string()))
+                    (
+                        "STAGED / TEMP".to_string(),
+                        detect_binary_version(&path).unwrap_or_else(|| "temp".to_string()),
+                    )
                 };
 
                 list.push(SoftwareBinaryInfo {
@@ -1864,7 +1902,10 @@ pub async fn perform_rollback() -> Result<String, String> {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&archive_path, std::fs::Permissions::from_mode(0o755));
         }
-        tracing::info!("[system] Rollback: archived current binary /amardns -> {}", archive_path);
+        tracing::info!(
+            "[system] Rollback: archived current binary /amardns -> {}",
+            archive_path
+        );
     }
 
     // 3. Copy fallback source into /amardns
@@ -1933,11 +1974,7 @@ pub fn find_recovery_candidate(dir: &std::path::Path) -> Option<std::path::PathB
         Some(cand.clone())
     } else {
         let backup = dir.join("amardns.bak");
-        if backup.is_file() {
-            Some(backup)
-        } else {
-            None
-        }
+        if backup.is_file() { Some(backup) } else { None }
     }
 }
 
@@ -1950,7 +1987,10 @@ pub async fn remove_software_binary(target_name: &str) -> Result<String, String>
     }
 
     if clean.contains("..") {
-        return Err("Security restriction: path traversal sequences ('..') are strictly disallowed.".to_string());
+        return Err(
+            "Security restriction: path traversal sequences ('..') are strictly disallowed."
+                .to_string(),
+        );
     }
 
     let target_path = if clean.starts_with('/') {
@@ -1959,9 +1999,15 @@ pub async fn remove_software_binary(target_name: &str) -> Result<String, String>
         std::path::PathBuf::from(format!("/{}", clean))
     };
 
-    let file_name = target_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let file_name = target_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
     if !file_name.starts_with("amardns") {
-        return Err(format!("Security restriction: can only remove AmarDNS software binaries (must begin with 'amardns'), rejected '{}'", file_name));
+        return Err(format!(
+            "Security restriction: can only remove AmarDNS software binaries (must begin with 'amardns'), rejected '{}'",
+            file_name
+        ));
     }
 
     if !target_path.exists() {
@@ -1975,27 +2021,37 @@ pub async fn remove_software_binary(target_name: &str) -> Result<String, String>
 
     // Check if user is removing the active running binary /amardns
     if target_str == "/amardns" {
-        tracing::warn!("[watchdog] Active software /amardns was targeted for removal! Engaging safety watchdog recovery...");
+        tracing::warn!(
+            "[watchdog] Active software /amardns was targeted for removal! Engaging safety watchdog recovery..."
+        );
         let _ = std::fs::remove_file(&target_path);
 
         let backup = std::path::Path::new("/amardns.bak");
-        let (recovery_src, recovery_desc) = if let Some(cand) = find_recovery_candidate(std::path::Path::new("/")) {
-            let is_bak = cand == backup;
-            let desc = if is_bak {
-                "fallback backup '/amardns.bak'".to_string()
+        let (recovery_src, recovery_desc) =
+            if let Some(cand) = find_recovery_candidate(std::path::Path::new("/")) {
+                let is_bak = cand == backup;
+                let desc = if is_bak {
+                    "fallback backup '/amardns.bak'".to_string()
+                } else {
+                    format!("local newer archive '{}'", cand.display())
+                };
+                (cand, desc)
+            } else if let Ok(exe) = std::env::current_exe() {
+                (
+                    exe.clone(),
+                    format!("running process image '{}'", exe.display()),
+                )
             } else {
-                format!("local newer archive '{}'", cand.display())
+                return Err("CRITICAL: Failed to locate recovery binary for /amardns!".to_string());
             };
-            (cand, desc)
-        } else if let Ok(exe) = std::env::current_exe() {
-            (exe.clone(), format!("running process image '{}'", exe.display()))
-        } else {
-            return Err("CRITICAL: Failed to locate recovery binary for /amardns!".to_string());
-        };
 
         // Restore immediately to /amardns
-        std::fs::copy(&recovery_src, "/amardns")
-            .map_err(|e| format!("Watchdog failed to restore {:?} to /amardns: {}", recovery_src, e))?;
+        std::fs::copy(&recovery_src, "/amardns").map_err(|e| {
+            format!(
+                "Watchdog failed to restore {:?} to /amardns: {}",
+                recovery_src, e
+            )
+        })?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -2005,7 +2061,9 @@ pub async fn remove_software_binary(target_name: &str) -> Result<String, String>
         // Schedule immediate restart
         tokio::spawn(async {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            tracing::warn!("[watchdog] Triggering emergency in-place restart into restored /amardns...");
+            tracing::warn!(
+                "[watchdog] Triggering emergency in-place restart into restored /amardns..."
+            );
             #[cfg(unix)]
             {
                 use std::os::unix::process::CommandExt;
@@ -2116,14 +2174,19 @@ pub async fn fetch_remote_releases() -> Result<Vec<RemoteReleaseInfo>, String> {
         .map_err(|e| format!("HTTP client error: {}", e))?;
 
     let url = "https://api.github.com/repos/0abir/amardns/releases?per_page=100";
-    let resp = client.get(url).send().await
+    let resp = client
+        .get(url)
+        .send()
+        .await
         .map_err(|e| format!("GitHub API request failed: {}", e))?;
 
     if !resp.status().is_success() {
         return Err(format!("GitHub API returned HTTP {}", resp.status()));
     }
 
-    let releases_json: Vec<serde_json::Value> = resp.json().await
+    let releases_json: Vec<serde_json::Value> = resp
+        .json()
+        .await
         .map_err(|e| format!("Failed to parse releases JSON: {}", e))?;
 
     let is_arm64 = std::env::consts::ARCH == "aarch64";
@@ -2141,18 +2204,22 @@ pub async fn fetch_remote_releases() -> Result<Vec<RemoteReleaseInfo>, String> {
         let prerelease = rel["prerelease"].as_bool().unwrap_or(false);
         let html_url = rel["html_url"].as_str().unwrap_or("").to_string();
 
-        let has_binary = rel["assets"].as_array().map(|assets| {
-            assets.iter().any(|a| {
-                let n = a["name"].as_str().unwrap_or("");
-                if is_arm64 {
-                    n == "amardns-arm64" || n == "amardns-linux-arm64" || n == "amardns"
-                } else {
-                    n == "amardns" || n == "amardns-linux-amd64"
-                }
+        let has_binary = rel["assets"]
+            .as_array()
+            .map(|assets| {
+                assets.iter().any(|a| {
+                    let n = a["name"].as_str().unwrap_or("");
+                    if is_arm64 {
+                        n == "amardns-arm64" || n == "amardns-linux-arm64" || n == "amardns"
+                    } else {
+                        n == "amardns" || n == "amardns-linux-amd64"
+                    }
+                })
             })
-        }).unwrap_or(false);
+            .unwrap_or(false);
 
-        let is_current = tag == current_pkg_ver || tag.trim_start_matches('v') == env!("CARGO_PKG_VERSION");
+        let is_current =
+            tag == current_pkg_ver || tag.trim_start_matches('v') == env!("CARGO_PKG_VERSION");
 
         results.push(RemoteReleaseInfo {
             tag,
@@ -2203,24 +2270,30 @@ pub fn verify_release_signature(
         } else if let Ok(b) = crate::server::acme::b64url_decode(trimmed) {
             b
         } else {
-            return Err("Malformed Ed25519 signature format (must be 64 raw bytes, hex, or base64)".to_string());
+            return Err(
+                "Malformed Ed25519 signature format (must be 64 raw bytes, hex, or base64)"
+                    .to_string(),
+            );
         }
     } else {
         return Err("Malformed Ed25519 signature bytes".to_string());
     };
 
     if sig_bytes.len() != 64 {
-        return Err(format!("Invalid Ed25519 signature length (expected 64 bytes, got {})", sig_bytes.len()));
+        return Err(format!(
+            "Invalid Ed25519 signature length (expected 64 bytes, got {})",
+            sig_bytes.len()
+        ));
     }
 
-    let peer_public_key = ring::signature::UnparsedPublicKey::new(
-        &ring::signature::ED25519,
-        &pubkey_bytes,
-    );
+    let peer_public_key =
+        ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, &pubkey_bytes);
 
     // Verify signature over the raw binary bytes, or over the 64-char lowercase SHA256 hex string
     if peer_public_key.verify(bin_bytes, &sig_bytes).is_ok()
-        || peer_public_key.verify(actual_sha.as_bytes(), &sig_bytes).is_ok()
+        || peer_public_key
+            .verify(actual_sha.as_bytes(), &sig_bytes)
+            .is_ok()
     {
         Ok(())
     } else {
@@ -2249,7 +2322,10 @@ pub async fn perform_download_and_install(target_version: Option<&str>) -> Resul
     let (release_url, is_specific) = match target_version {
         Some(v) if !v.trim().is_empty() && !v.eq_ignore_ascii_case("latest") => {
             let trimmed = v.trim();
-            if !trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_') {
+            if !trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+            {
                 return Err("Security restriction: invalid characters in version tag. Only alphanumeric, '.', '-', and '_' are permitted.".to_string());
             }
             let clean_tag = if trimmed.starts_with('v') {
@@ -2257,45 +2333,78 @@ pub async fn perform_download_and_install(target_version: Option<&str>) -> Resul
             } else {
                 format!("v{}", trimmed)
             };
-            (format!("https://api.github.com/repos/0abir/amardns/releases/tags/{}", clean_tag), true)
+            (
+                format!(
+                    "https://api.github.com/repos/0abir/amardns/releases/tags/{}",
+                    clean_tag
+                ),
+                true,
+            )
         }
-        _ => ("https://api.github.com/repos/0abir/amardns/releases/latest".to_string(), false),
+        _ => (
+            "https://api.github.com/repos/0abir/amardns/releases/latest".to_string(),
+            false,
+        ),
     };
 
-    let resp = client.get(&release_url)
+    let resp = client
+        .get(&release_url)
         .send()
         .await
         .map_err(|e| format!("GitHub API request failed: {}", e))?;
 
     if !resp.status().is_success() {
         if resp.status() == reqwest::StatusCode::NOT_FOUND && is_specific {
-            return Err(format!("Release version '{}' was not found on GitHub. Please check the version catalog.", target_version.unwrap_or("")));
+            return Err(format!(
+                "Release version '{}' was not found on GitHub. Please check the version catalog.",
+                target_version.unwrap_or("")
+            ));
         }
         return Err(format!("GitHub API returned HTTP {}", resp.status()));
     }
 
-    let release_json: serde_json::Value = resp.json().await
+    let release_json: serde_json::Value = resp
+        .json()
+        .await
         .map_err(|e| format!("Failed to parse release JSON: {}", e))?;
 
-    let tag_name = release_json["tag_name"].as_str().unwrap_or("latest").to_string();
-    let assets = release_json["assets"].as_array()
+    let tag_name = release_json["tag_name"]
+        .as_str()
+        .unwrap_or("latest")
+        .to_string();
+    let assets = release_json["assets"]
+        .as_array()
         .ok_or_else(|| "No assets attached to release".to_string())?;
 
     let is_arm64 = std::env::consts::ARCH == "aarch64";
-    let binary_asset = assets.iter().find(|a| {
-        let name = a["name"].as_str().unwrap_or("");
-        if is_arm64 {
-            name == "amardns-arm64" || name == "amardns-linux-arm64" || name == "amardns"
-        } else {
-            name == "amardns" || name == "amardns-linux-amd64"
-        }
-    }).ok_or_else(|| format!("No compatible static binary asset found in release {}", tag_name))?;
+    let binary_asset = assets
+        .iter()
+        .find(|a| {
+            let name = a["name"].as_str().unwrap_or("");
+            if is_arm64 {
+                name == "amardns-arm64" || name == "amardns-linux-arm64" || name == "amardns"
+            } else {
+                name == "amardns" || name == "amardns-linux-amd64"
+            }
+        })
+        .ok_or_else(|| {
+            format!(
+                "No compatible static binary asset found in release {}",
+                tag_name
+            )
+        })?;
 
-    let download_url = binary_asset["browser_download_url"].as_str()
+    let download_url = binary_asset["browser_download_url"]
+        .as_str()
         .ok_or_else(|| "Missing download URL on binary asset".to_string())?;
 
-    tracing::info!("[update] Downloading binary ({}) from: {}", tag_name, download_url);
-    let bin_bytes = client.get(download_url)
+    tracing::info!(
+        "[update] Downloading binary ({}) from: {}",
+        tag_name,
+        download_url
+    );
+    let bin_bytes = client
+        .get(download_url)
         .send()
         .await
         .map_err(|e| format!("Binary download request failed: {}", e))?
@@ -2304,39 +2413,79 @@ pub async fn perform_download_and_install(target_version: Option<&str>) -> Resul
         .map_err(|e| format!("Failed to read binary bytes: {}", e))?;
 
     if bin_bytes.len() < 500_000 {
-        return Err(format!("Downloaded file is too small ({} bytes) to be a valid binary", bin_bytes.len()));
+        return Err(format!(
+            "Downloaded file is too small ({} bytes) to be a valid binary",
+            bin_bytes.len()
+        ));
     }
 
     // MANDATORY Cryptographic Checksum Verification (Pre-execution gate)
-    let expected_sha_name = if is_arm64 { "amardns-arm64.sha256" } else { "amardns.sha256" };
-    let sha_asset = assets.iter().find(|a| {
-        let n = a["name"].as_str().unwrap_or("");
-        n == expected_sha_name || n == "amardns.sha256"
-    }).ok_or_else(|| "Security violation: Release has no published SHA256 checksum asset. Update refused.".to_string())?;
+    let expected_sha_name = if is_arm64 {
+        "amardns-arm64.sha256"
+    } else {
+        "amardns.sha256"
+    };
+    let sha_asset = assets
+        .iter()
+        .find(|a| {
+            let n = a["name"].as_str().unwrap_or("");
+            n == expected_sha_name || n == "amardns.sha256"
+        })
+        .ok_or_else(|| {
+            "Security violation: Release has no published SHA256 checksum asset. Update refused."
+                .to_string()
+        })?;
 
-    let sha_url = sha_asset["browser_download_url"].as_str()
+    let sha_url = sha_asset["browser_download_url"]
+        .as_str()
         .ok_or_else(|| "Missing download URL for SHA256 asset".to_string())?;
-    let sha_res = client.get(sha_url).send().await
+    let sha_res = client
+        .get(sha_url)
+        .send()
+        .await
         .map_err(|e| format!("Failed to download SHA256 checksum: {}", e))?;
-    let sha_text = sha_res.text().await
+    let sha_text = sha_res
+        .text()
+        .await
         .map_err(|e| format!("Failed to read SHA256 checksum text: {}", e))?;
-    let expected_sha = sha_text.split_whitespace().next().unwrap_or("").to_lowercase();
+    let expected_sha = sha_text
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
     if expected_sha.len() != 64 {
         return Err("Security violation: Malformed SHA256 checksum asset.".to_string());
     }
 
     let actual_digest = ring::digest::digest(&ring::digest::SHA256, &bin_bytes);
-    let actual_sha: String = actual_digest.as_ref().iter().map(|b| format!("{:02x}", b)).collect();
+    let actual_sha: String = actual_digest
+        .as_ref()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
     if actual_sha != expected_sha {
-        return Err(format!("Security alert: SHA256 checksum verification failed! Expected {}, got {}", expected_sha, actual_sha));
+        return Err(format!(
+            "Security alert: SHA256 checksum verification failed! Expected {}, got {}",
+            expected_sha, actual_sha
+        ));
     }
-    tracing::info!("[update] Cryptographic SHA256 checksum verified: {}", actual_sha);
+    tracing::info!(
+        "[update] Cryptographic SHA256 checksum verified: {}",
+        actual_sha
+    );
 
     // MANDATORY Ed25519 Cryptographic Signature Verification (Pre-execution gate)
-    let expected_sig_name = if is_arm64 { "amardns-arm64.sig" } else { "amardns.sig" };
+    let expected_sig_name = if is_arm64 {
+        "amardns-arm64.sig"
+    } else {
+        "amardns.sig"
+    };
     let sig_asset = assets.iter().find(|a| {
         let n = a["name"].as_str().unwrap_or("");
-        n == expected_sig_name || n == "amardns.sig" || n.ends_with(".sig") || n.ends_with(".minisig")
+        n == expected_sig_name
+            || n == "amardns.sig"
+            || n.ends_with(".sig")
+            || n.ends_with(".minisig")
     });
 
     let bypass_sig = std::env::var("DISABLE_OTA_SIGNATURE_CHECK")
@@ -2348,17 +2497,25 @@ pub async fn perform_download_and_install(target_version: Option<&str>) -> Resul
             "Security violation: Release has no published Ed25519 signature asset (.sig). Update refused."
                 .to_string()
         })?;
-        let sig_url = sig_asset["browser_download_url"].as_str()
+        let sig_url = sig_asset["browser_download_url"]
+            .as_str()
             .ok_or_else(|| "Missing download URL for signature asset".to_string())?;
-        let sig_res = client.get(sig_url).send().await
+        let sig_res = client
+            .get(sig_url)
+            .send()
+            .await
             .map_err(|e| format!("Failed to download Ed25519 signature: {}", e))?;
-        let sig_raw = sig_res.bytes().await
+        let sig_raw = sig_res
+            .bytes()
+            .await
             .map_err(|e| format!("Failed to read Ed25519 signature: {}", e))?;
 
         verify_release_signature(&bin_bytes, &actual_sha, &sig_raw, None)?;
         tracing::info!("[update] Cryptographic Ed25519 signature verified successfully.");
     } else {
-        tracing::warn!("[update] WARNING: Ed25519 release signature check bypassed by environment flag.");
+        tracing::warn!(
+            "[update] WARNING: Ed25519 release signature check bypassed by environment flag."
+        );
     }
 
     let (target_bin, tmp_bin, backup_bin) = {
@@ -2377,7 +2534,11 @@ pub async fn perform_download_and_install(target_version: Option<&str>) -> Resul
         if root_writable {
             ("/amardns", "/amardns.download", "/amardns.bak")
         } else if std::path::Path::new("/data").is_dir() {
-            ("/data/amardns", "/data/amardns.download", "/data/amardns.bak")
+            (
+                "/data/amardns",
+                "/data/amardns.download",
+                "/data/amardns.bak",
+            )
         } else {
             ("/amardns", "/amardns.download", "/amardns.bak")
         }
@@ -2393,22 +2554,30 @@ pub async fn perform_download_and_install(target_version: Option<&str>) -> Resul
     }
 
     // Execute sandboxed pre-flight verification test on downloaded binary before swapping
-    let verify_check = std::process::Command::new(tmp_bin)
-        .arg("--verify")
-        .output();
+    let verify_check = std::process::Command::new(tmp_bin).arg("--verify").output();
 
     match verify_check {
-        Ok(out) if out.status.success() && String::from_utf8_lossy(&out.stdout).contains("AMARDNS_OK") => {
+        Ok(out)
+            if out.status.success()
+                && String::from_utf8_lossy(&out.stdout).contains("AMARDNS_OK") =>
+        {
             tracing::info!("[update] Pre-flight binary verification passed successfully.");
         }
         Ok(out) => {
             let _ = std::fs::remove_file(tmp_bin);
             let err_msg = String::from_utf8_lossy(&out.stderr);
-            return Err(format!("Pre-flight verification failed (exit code {:?}): {}. Update aborted, running production binary untouched.", out.status.code(), err_msg.trim()));
+            return Err(format!(
+                "Pre-flight verification failed (exit code {:?}): {}. Update aborted, running production binary untouched.",
+                out.status.code(),
+                err_msg.trim()
+            ));
         }
         Err(e) => {
             let _ = std::fs::remove_file(tmp_bin);
-            return Err(format!("Pre-flight binary execution failed: {}. Binary is corrupted or incompatible. Update aborted, running production binary untouched.", e));
+            return Err(format!(
+                "Pre-flight binary execution failed: {}. Binary is corrupted or incompatible. Update aborted, running production binary untouched.",
+                e
+            ));
         }
     }
 
@@ -2440,18 +2609,31 @@ pub async fn perform_download_and_install(target_version: Option<&str>) -> Resul
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(persistent_target, std::fs::Permissions::from_mode(0o755));
+                let _ = std::fs::set_permissions(
+                    persistent_target,
+                    std::fs::Permissions::from_mode(0o755),
+                );
             }
-            tracing::info!("[update] Mirrored updated binary to persistent volume {}", persistent_target);
+            tracing::info!(
+                "[update] Mirrored updated binary to persistent volume {}",
+                persistent_target
+            );
         }
     }
 
-    tracing::info!("[update] AmarDNS binary installed to {} (version {}). Triggering restart...", target_bin, tag_name);
+    tracing::info!(
+        "[update] AmarDNS binary installed to {} (version {}). Triggering restart...",
+        target_bin,
+        tag_name
+    );
 
     let target_bin_str = target_bin.to_string();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-        tracing::info!("[system] Hot-restarting AmarDNS into new {} binary via in-place execve...", target_bin_str);
+        tracing::info!(
+            "[system] Hot-restarting AmarDNS into new {} binary via in-place execve...",
+            target_bin_str
+        );
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -2473,7 +2655,9 @@ pub async fn perform_download_and_install(target_version: Option<&str>) -> Resul
 
     Ok(format!(
         "Successfully upgraded to {} ({:.2} MB). Previous binary saved to {}. In-place restart triggered.",
-        tag_name, bin_bytes.len() as f64 / 1_048_576.0, backup_bin
+        tag_name,
+        bin_bytes.len() as f64 / 1_048_576.0,
+        backup_bin
     ))
 }
 
@@ -2507,7 +2691,11 @@ mod tests {
         // Restricted to amardns files only
         let err_non_amardns = remove_software_binary("/etc/passwd").await;
         assert!(err_non_amardns.is_err());
-        assert!(err_non_amardns.unwrap_err().contains("Security restriction"));
+        assert!(
+            err_non_amardns
+                .unwrap_err()
+                .contains("Security restriction")
+        );
 
         let err_not_found = remove_software_binary("amardns-nonexistent-123.bak").await;
         assert!(err_not_found.is_err());
@@ -2518,7 +2706,11 @@ mod tests {
     async fn test_perform_download_tag_sanitization() {
         let err_invalid_chars = perform_download_and_install(Some("v1.0.0;rm -rf /")).await;
         assert!(err_invalid_chars.is_err());
-        assert!(err_invalid_chars.unwrap_err().contains("Security restriction: invalid characters"));
+        assert!(
+            err_invalid_chars
+                .unwrap_err()
+                .contains("Security restriction: invalid characters")
+        );
     }
 
     #[test]
@@ -2540,7 +2732,14 @@ mod tests {
 
     #[test]
     fn test_safety_watchdog_auto_recovery_candidate_resolution() {
-        let temp_dir = std::env::temp_dir().join(format!("amardns_wd_test_{}_{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "amardns_wd_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let _ = std::fs::create_dir_all(&temp_dir);
 
         // 1. In empty directory: no candidate
@@ -2577,14 +2776,27 @@ mod tests {
         let sig_bytes = crate::dns::dnssec::hex_decode(sig_hex).unwrap();
 
         // Valid signature over binary content
-        assert!(verify_release_signature(msg, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", &sig_bytes, Some(&pubkey_bytes)).is_ok());
+        assert!(
+            verify_release_signature(
+                msg,
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                &sig_bytes,
+                Some(&pubkey_bytes)
+            )
+            .is_ok()
+        );
 
         // Tampered signature should fail
         let mut bad_sig = sig_bytes.clone();
         bad_sig[0] ^= 0xFF;
-        assert!(verify_release_signature(msg, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", &bad_sig, Some(&pubkey_bytes)).is_err());
+        assert!(
+            verify_release_signature(
+                msg,
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                &bad_sig,
+                Some(&pubkey_bytes)
+            )
+            .is_err()
+        );
     }
 }
-
-
-

@@ -16,9 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::dns::dnssec::{DnssecStatus, validate_dnssec};
-use crate::dns::parser::{
-    build_blocked_response, build_servfail_response, parse_dns_query_opts,
-};
+use crate::dns::parser::{build_blocked_response, build_servfail_response, parse_dns_query_opts};
 use crate::security::auth::check_auth;
 use crate::server::api::DnsQueryParam;
 use crate::state::AppState;
@@ -106,7 +104,10 @@ pub async fn manifest_json_handler() -> Response {
     (
         StatusCode::OK,
         [
-            (header::CONTENT_TYPE, "application/manifest+json; charset=utf-8"),
+            (
+                header::CONTENT_TYPE,
+                "application/manifest+json; charset=utf-8",
+            ),
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         content,
@@ -295,12 +296,8 @@ async fn host_shield_middleware(
                 .or_else(|_| std::env::var("FLY_ALLOC_ID"))
                 .unwrap_or_else(|_| "local".to_string());
             let fly_region = std::env::var("FLY_REGION").unwrap_or_else(|_| "sin".to_string());
-            let html = crate::ui::error::render_403(
-                path,
-                "shielded-host",
-                &fly_region,
-                &fly_machine_id,
-            );
+            let html =
+                crate::ui::error::render_403(path, "shielded-host", &fly_region, &fly_machine_id);
             return (
                 StatusCode::NOT_FOUND,
                 [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
@@ -607,7 +604,10 @@ pub async fn process_dns_query(
     let mut builder = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/dns-message")
-        .header(header::CACHE_CONTROL, format!("public, max-age={}", min_ttl))
+        .header(
+            header::CACHE_CONTROL,
+            format!("public, max-age={}", min_ttl),
+        )
         .header("x-cache", cache_status)
         .header("x-dnssec", dnssec_status);
 
@@ -732,31 +732,31 @@ pub async fn process_dns_wire_packet_full(
                         .metrics
                         .prefetch_triggers
                         .fetch_add(1, Ordering::Relaxed);
-                state_p
-                    .brain
-                    .prefetch_triggers
-                    .fetch_add(1, Ordering::Relaxed);
-                let mut p_wire = vec![
-                    0x53, 0x57, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                ];
-                for label in cand.split('.') {
-                    if !label.is_empty() {
-                        p_wire.push(label.len() as u8);
-                        p_wire.extend_from_slice(label.as_bytes());
+                    state_p
+                        .brain
+                        .prefetch_triggers
+                        .fetch_add(1, Ordering::Relaxed);
+                    let mut p_wire = vec![
+                        0x53, 0x57, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    ];
+                    for label in cand.split('.') {
+                        if !label.is_empty() {
+                            p_wire.push(label.len() as u8);
+                            p_wire.extend_from_slice(label.as_bytes());
+                        }
                     }
-                }
-                p_wire.push(0x00);
-                p_wire.extend_from_slice(&1u16.to_be_bytes()); // QTYPE A
-                p_wire.extend_from_slice(&1u16.to_be_bytes()); // QCLASS IN
-                if let Some((resp, _)) = state_p.upstreams.resolve(&p_wire).await {
-                    if !crate::dns::parser::is_rebind_exempt_domain(&cand)
-                        && crate::dns::parser::extract_rebind_ip(&resp).is_some()
-                    {
-                        return;
+                    p_wire.push(0x00);
+                    p_wire.extend_from_slice(&1u16.to_be_bytes()); // QTYPE A
+                    p_wire.extend_from_slice(&1u16.to_be_bytes()); // QCLASS IN
+                    if let Some((resp, _)) = state_p.upstreams.resolve(&p_wire).await {
+                        if !crate::dns::parser::is_rebind_exempt_domain(&cand)
+                            && crate::dns::parser::extract_rebind_ip(&resp).is_some()
+                        {
+                            return;
+                        }
+                        state_p.cache.insert(&cand, 1, resp, 300).await;
                     }
-                    state_p.cache.insert(&cand, 1, resp, 300).await;
-                }
-            });
+                });
             }
         }
     }
@@ -944,7 +944,10 @@ pub async fn process_dns_wire_packet_full(
                     state.metrics.rebind_blocks.fetch_add(1, Ordering::Relaxed);
                     state.log_anomaly(
                         "dns_rebind_cache_intercept",
-                        &format!("Intercepted private IP from AeroCache: {} -> {}", q.name, rebind_ip),
+                        &format!(
+                            "Intercepted private IP from AeroCache: {} -> {}",
+                            q.name, rebind_ip
+                        ),
                     );
                     let mut blocked = build_blocked_response(query_wire, true);
                     crate::dns::parser::append_ede_to_response(&mut blocked, 15, "REBIND");
@@ -1004,7 +1007,10 @@ pub async fn process_dns_wire_packet_full(
                     state.metrics.rebind_blocks.fetch_add(1, Ordering::Relaxed);
                     state.log_anomaly(
                         "dns_rebind_cache_intercept",
-                        &format!("Intercepted private IP from AeroCache (Stale): {} -> {}", q.name, rebind_ip),
+                        &format!(
+                            "Intercepted private IP from AeroCache (Stale): {} -> {}",
+                            q.name, rebind_ip
+                        ),
                     );
                     let mut blocked = build_blocked_response(query_wire, true);
                     crate::dns::parser::append_ede_to_response(&mut blocked, 15, "REBIND");
@@ -1050,11 +1056,19 @@ pub async fn process_dns_wire_packet_full(
                     if state_bg.blocking_enabled.load(Ordering::Relaxed)
                         && !crate::dns::parser::is_rebind_exempt_domain(&q_name)
                     {
-                        if let Some(rebind_ip) = crate::dns::parser::extract_rebind_ip(&upstream_resp) {
-                            state_bg.metrics.rebind_blocks.fetch_add(1, Ordering::Relaxed);
+                        if let Some(rebind_ip) =
+                            crate::dns::parser::extract_rebind_ip(&upstream_resp)
+                        {
+                            state_bg
+                                .metrics
+                                .rebind_blocks
+                                .fetch_add(1, Ordering::Relaxed);
                             state_bg.log_anomaly(
                                 "dns_rebind_swr_poison",
-                                &format!("Blocked SWR revalidation private IP poisoning: {} -> {}", q_name, rebind_ip),
+                                &format!(
+                                    "Blocked SWR revalidation private IP poisoning: {} -> {}",
+                                    q_name, rebind_ip
+                                ),
                             );
                             state_bg.cache.insert_negative(&q_name, q_type, 120).await;
                             return;
@@ -1119,7 +1133,13 @@ pub async fn process_dns_wire_packet_full(
                 if resp_q.name != q.name || resp_q.qtype != q.qtype || resp_q.qclass != q.qclass {
                     tracing::warn!(
                         "[security] Upstream response question mismatch from {}! Expected {}:{}:{}, got {}:{}:{}. Rejecting spoofed/mismatched response.",
-                        upstream_name, q.name, q.qtype, q.qclass, resp_q.name, resp_q.qtype, resp_q.qclass
+                        upstream_name,
+                        q.name,
+                        q.qtype,
+                        q.qclass,
+                        resp_q.name,
+                        resp_q.qtype,
+                        resp_q.qclass
                     );
                     state.log_anomaly(
                         "upstream_spoof_attempt",
@@ -1129,9 +1149,18 @@ pub async fn process_dns_wire_packet_full(
                         ),
                     );
                     let mut fail = build_servfail_response(query_wire);
-                    crate::dns::parser::append_ede_to_response(&mut fail, 6, "Upstream question mismatch");
+                    crate::dns::parser::append_ede_to_response(
+                        &mut fail,
+                        6,
+                        "Upstream question mismatch",
+                    );
                     state.metrics.record_latency(query_start.elapsed());
-                    return (fail, "SPOOF_REJECTED", "INSECURE".to_string(), Some("upstream_spoof"));
+                    return (
+                        fail,
+                        "SPOOF_REJECTED",
+                        "INSECURE".to_string(),
+                        Some("upstream_spoof"),
+                    );
                 }
             }
         }
@@ -1373,7 +1402,10 @@ pub async fn process_dns_wire_packet_full(
             };
 
         if rcode == 0 {
-            state.cache.invalidate_negative_qtype(&q.name, q.qtype).await;
+            state
+                .cache
+                .invalidate_negative_qtype(&q.name, q.qtype)
+                .await;
         }
 
         state
@@ -1441,8 +1473,6 @@ pub async fn process_dns_wire_packet_full(
         (fail, "FAIL", "INSECURE".to_string(), None)
     }
 }
-
-
 
 // ── DoH JSON API (RFC 8427) Handler ──────────────────────────────────────────
 
@@ -1596,7 +1626,10 @@ pub async fn doh_json_handler(
                 state.metrics.rebind_blocks.fetch_add(1, Ordering::Relaxed);
                 state.log_anomaly(
                     "dns_rebind_cache_intercept",
-                    &format!("Intercepted private IP from AeroCache (DoH JSON): {} -> {}", clean_domain, rebind_ip),
+                    &format!(
+                        "Intercepted private IP from AeroCache (DoH JSON): {} -> {}",
+                        clean_domain, rebind_ip
+                    ),
                 );
                 let resp = serde_json::json!({
                     "Status": 3,
@@ -1693,13 +1726,23 @@ pub async fn doh_json_handler(
                 state.metrics.rebind_blocks.fetch_add(1, Ordering::Relaxed);
                 state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
                 state.fingerprint.record_response(client_ip, 3);
-                state.fingerprint.flag_client(client_ip, "REBIND_ATTACK", &clean_domain);
-                state.log_action("rebind_block", &format!("{} -> {}", clean_domain, rebind_ip));
+                state
+                    .fingerprint
+                    .flag_client(client_ip, "REBIND_ATTACK", &clean_domain);
+                state.log_action(
+                    "rebind_block",
+                    &format!("{} -> {}", clean_domain, rebind_ip),
+                );
                 state.log_anomaly(
                     "dns_rebind_attack",
-                    &format!("Private IP leak blocked (DoH JSON): {} -> {}", clean_domain, rebind_ip),
+                    &format!(
+                        "Private IP leak blocked (DoH JSON): {} -> {}",
+                        clean_domain, rebind_ip
+                    ),
                 );
-                state.wal.append_threat_event(&clean_domain, "REBIND", &client_ip.to_string());
+                state
+                    .wal
+                    .append_threat_event(&clean_domain, "REBIND", &client_ip.to_string());
                 state.cache.insert_negative(&clean_domain, qtype, 120).await;
                 let resp = serde_json::json!({
                     "Status": 3,
@@ -1868,7 +1911,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_prometheus_text_format() {
         let metrics = crate::telemetry::metrics::Metrics::new();
@@ -1913,33 +1955,42 @@ mod tests {
         ];
         // Question: rebind.evil.com (A, IN)
         rebind_resp.extend_from_slice(&[
-            0x06, b'r', b'e', b'b', b'i', b'n', b'd',
-            0x04, b'e', b'v', b'i', b'l',
-            0x03, b'c', b'o', b'm',
-            0x00, 0x00, 0x01, 0x00, 0x01,
+            0x06, b'r', b'e', b'b', b'i', b'n', b'd', 0x04, b'e', b'v', b'i', b'l', 0x03, b'c',
+            b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
         ]);
         // Answer: rebind.evil.com -> 127.0.0.1
         rebind_resp.extend_from_slice(&[
-            0xc0, 0x0c,             // Name pointer
+            0xc0, 0x0c, // Name pointer
             0x00, 0x01, 0x00, 0x01, // Type A, Class IN
             0x00, 0x00, 0x00, 0x3c, // TTL: 60s
-            0x00, 0x04,             // RDLENGTH: 4
-            127, 0, 0, 1,           // 127.0.0.1 (Loopback)
+            0x00, 0x04, // RDLENGTH: 4
+            127, 0, 0, 1, // 127.0.0.1 (Loopback)
         ]);
 
         // 2. Verify AeroCache refuses to insert rebind responses directly
-        state.cache.insert_with_grace("rebind.evil.com", 1, rebind_resp.clone(), 60, 60).await;
+        state
+            .cache
+            .insert_with_grace("rebind.evil.com", 1, rebind_resp.clone(), 60, 60)
+            .await;
         assert!(
-            state.cache.get("rebind.evil.com", 1, 0x1234).await.is_none(),
+            state
+                .cache
+                .get("rebind.evil.com", 1, 0x1234)
+                .await
+                .is_none(),
             "AeroCache must reject caching rebind IPs!"
         );
 
         // 3. Verify query for rebinding domain does not return private IP
         let query_wire = crate::dns::parser::build_query_wire("rebind.evil.com", 1);
         let client_ip = IpAddr::from([198, 51, 100, 1]);
-        let resp = process_dns_wire_packet(state.clone(), &query_wire, client_ip, None, "DoH").await;
+        let resp =
+            process_dns_wire_packet(state.clone(), &query_wire, client_ip, None, "DoH").await;
         let rebind_detected = crate::dns::parser::extract_rebind_ip(&resp);
-        assert!(rebind_detected.is_none(), "Response must not leak private IP!");
+        assert!(
+            rebind_detected.is_none(),
+            "Response must not leak private IP!"
+        );
     }
 
     #[tokio::test]
@@ -1951,26 +2002,27 @@ mod tests {
             0x00, 0x00, 0x00, 0x00,
         ];
         mismatched_resp.extend_from_slice(&[
-            0x08, b'a', b't', b't', b'a', b'c', b'k', b'e', b'r',
-            0x03, b'c', b'o', b'm',
-            0x00, 0x00, 0x01, 0x00, 0x01,
+            0x08, b'a', b't', b't', b'a', b'c', b'k', b'e', b'r', 0x03, b'c', b'o', b'm', 0x00,
+            0x00, 0x01, 0x00, 0x01,
         ]);
         mismatched_resp.extend_from_slice(&[
-            0xc0, 0x0c,             // Name pointer
+            0xc0, 0x0c, // Name pointer
             0x00, 0x01, 0x00, 0x01, // Type A, Class IN
             0x00, 0x00, 0x00, 0x3c, // TTL: 60s
-            0x00, 0x04,             // RDLENGTH: 4
+            0x00, 0x04, // RDLENGTH: 4
             93, 184, 216, 34,
         ]);
 
         // Outstanding query is for "victim.com"
         let parsed_query = crate::dns::parser::parse_dns_query(
-            &crate::dns::parser::build_query_wire("victim.com", 1)
-        ).expect("parsed query");
+            &crate::dns::parser::build_query_wire("victim.com", 1),
+        )
+        .expect("parsed query");
         let q = parsed_query.question.expect("question");
 
         // Verify that the parser detects question mismatch
-        let parsed_resp = crate::dns::parser::parse_dns_query(&mismatched_resp).expect("parsed response");
+        let parsed_resp =
+            crate::dns::parser::parse_dns_query(&mismatched_resp).expect("parsed response");
         let resp_q = parsed_resp.question.expect("resp question");
 
         assert_ne!(resp_q.name, q.name);
@@ -1978,4 +2030,3 @@ mod tests {
         assert_eq!(resp_q.name, "attacker.com");
     }
 }
-

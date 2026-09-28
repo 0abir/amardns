@@ -52,7 +52,6 @@ pub struct HeatmapRecord {
     pub last_seen: u64,
 }
 
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigDecision {
     pub t: u64,
@@ -204,8 +203,12 @@ impl AppState {
 
         let safe_browsing = SafeBrowsingClient::new(config.safe_browsing_keys.clone());
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        let cache_capacity = ((config.total_mem_cap / 200.0) * 150_000.0).round().clamp(10_000.0, 500_000.0) as u64;
-        let neg_capacity = ((config.total_mem_cap / 200.0) * 20_000.0).round().clamp(2_000.0, 100_000.0) as u64;
+        let cache_capacity = ((config.total_mem_cap / 200.0) * 150_000.0)
+            .round()
+            .clamp(10_000.0, 500_000.0) as u64;
+        let neg_capacity = ((config.total_mem_cap / 200.0) * 20_000.0)
+            .round()
+            .clamp(2_000.0, 100_000.0) as u64;
 
         Self {
             config,
@@ -788,9 +791,7 @@ impl AppState {
         for i in 1..parts.len().saturating_sub(1) {
             let parent = parts[i..].join(".");
             let wc = format!("*.{}", parent);
-            if guard_wl.contains(&parent)
-                || guard_wl.contains(&wc)
-            {
+            if guard_wl.contains(&parent) || guard_wl.contains(&wc) {
                 return true;
             }
         }
@@ -1812,7 +1813,11 @@ mod tests {
 
         // 1. Config & Environment Validation
         let mut config = Config::from_env();
-        let temp_wal = format!("{}/amardns_test_uptimate_{}.wal", std::env::temp_dir().display(), std::process::id());
+        let temp_wal = format!(
+            "{}/amardns_test_uptimate_{}.wal",
+            std::env::temp_dir().display(),
+            std::process::id()
+        );
         config.db_path = temp_wal.clone();
         config.dns_master_key = "super-secret-master-key-prod".to_string();
         config.dns_token_secret = "hmac-secret-32-chars-long-production".to_string();
@@ -1821,7 +1826,11 @@ mod tests {
 
         // 2. AppState Core Engine & Autonomous Seeding
         let state = Arc::new(AppState::new(config.clone()));
-        assert_eq!(state.config_decisions.read().len(), 1, "Boot tuning decision must be present");
+        assert_eq!(
+            state.config_decisions.read().len(),
+            1,
+            "Boot tuning decision must be present"
+        );
 
         // 3. Security & Cryptographic Auth Subsystem
         let token = crate::security::auth::generate_hmac_token(
@@ -1829,7 +1838,11 @@ mod tests {
             "/api/rules",
             3600,
         );
-        let verified = crate::security::auth::verify_hmac_token(&token, &config.dns_token_secret, "/api/rules");
+        let verified = crate::security::auth::verify_hmac_token(
+            &token,
+            &config.dns_token_secret,
+            "/api/rules",
+        );
         assert!(verified);
         let headers = axum::http::HeaderMap::new();
         let role = crate::security::auth::check_auth(&state, Some(&token), &headers, "/api/rules");
@@ -1857,14 +1870,27 @@ mod tests {
         assert!(state.is_exempt("trusted-cdn.com"));
 
         // 6. AeroCache (W-TinyLFU Wire Cache Engine)
-        let sample_wire = vec![0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
-        state.cache.insert("cached-domain.com", 1, sample_wire.clone(), 300).await;
+        let sample_wire = vec![
+            0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+        ];
+        state
+            .cache
+            .insert("cached-domain.com", 1, sample_wire.clone(), 300)
+            .await;
         let cached = state.cache.get("cached-domain.com", 1, 0x1234).await;
         assert!(cached.is_some());
         assert_eq!(cached.unwrap()[2..], sample_wire[2..]);
 
-        state.cache.insert_negative("nonexistent-domain.internal", 1, 60).await;
-        assert!(state.cache.get_negative("nonexistent-domain.internal", 1).await);
+        state
+            .cache
+            .insert_negative("nonexistent-domain.internal", 1, 60)
+            .await;
+        assert!(
+            state
+                .cache
+                .get_negative("nonexistent-domain.internal", 1)
+                .await
+        );
 
         // 7. Strict Wire Validation (RFC 1035 / RFC 5452 Anti-Spoofing)
         let valid_query = b"\xaa\xbb\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01";
@@ -1882,15 +1908,27 @@ mod tests {
         // RFC 1035 label charset injection protection (strict vs 8-bit mode)
         let crlf_query = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x09test\r\ninj\x03com\x00\x00\x01\x00\x01";
         assert!(crate::dns::parser::parse_dns_query_opts(crlf_query, false).is_none());
-        let parsed_8bit = crate::dns::parser::parse_dns_query_opts(crlf_query, true).expect("RFC 1035 compliant");
-        assert_eq!(parsed_8bit.question.as_ref().unwrap().name, "test\\013\\010inj.com");
-        assert!(!crate::security::sanitizer::is_rfc1123_hostname(&parsed_8bit.question.unwrap().name));
+        let parsed_8bit =
+            crate::dns::parser::parse_dns_query_opts(crlf_query, true).expect("RFC 1035 compliant");
+        assert_eq!(
+            parsed_8bit.question.as_ref().unwrap().name,
+            "test\\013\\010inj.com"
+        );
+        assert!(!crate::security::sanitizer::is_rfc1123_hostname(
+            &parsed_8bit.question.unwrap().name
+        ));
 
         // 8. Heuristic Threat Analysis Subsystem
-        assert!(crate::security::heuristics::is_dga_threat("xqzkjbvxmnqwertylkjhgfdsazxcv.biz"));
+        assert!(crate::security::heuristics::is_dga_threat(
+            "xqzkjbvxmnqwertylkjhgfdsazxcv.biz"
+        ));
         assert!(crate::security::heuristics::calculate_entropy("google.com") < 3.5);
-        assert!(crate::security::heuristics::is_lookalike_threat("paypa1.com"));
-        assert!(crate::security::heuristics::is_c2_or_miner_threat("pool.supportxmr.com"));
+        assert!(crate::security::heuristics::is_lookalike_threat(
+            "paypa1.com"
+        ));
+        assert!(crate::security::heuristics::is_c2_or_miner_threat(
+            "pool.supportxmr.com"
+        ));
 
         // Rate Limiter
         let allowed = state.rate_limiter.check("1.2.3.4".parse().unwrap());
@@ -1898,8 +1936,16 @@ mod tests {
 
         // 9. Upstream Qualified 9 Pool & Best Candidate Promotion
         let active_upstreams = state.upstreams.ranked_nodes();
-        assert_eq!(active_upstreams.len(), 9, "Active pool must maintain exactly 9 resolvers");
-        assert_eq!(state.upstreams.candidate_count(), 40, "Candidate catalog must contain 40 providers from dns-upstream.json");
+        assert_eq!(
+            active_upstreams.len(),
+            9,
+            "Active pool must maintain exactly 9 resolvers"
+        );
+        assert_eq!(
+            state.upstreams.candidate_count(),
+            40,
+            "Candidate catalog must contain 40 providers from dns-upstream.json"
+        );
 
         // Degrade an active node and verify candidate promotion
         {
@@ -1907,13 +1953,15 @@ mod tests {
             active_upstreams[1].latency_ms.store(550, Ordering::Relaxed);
             assert!(active_upstreams[1].is_degraded());
         }
-        let (demoted, promoted) = state.upstreams.apply_candidate_promotions(vec![
-            (true, 12, crate::dns::upstream::UpstreamConfig {
+        let (demoted, promoted) = state.upstreams.apply_candidate_promotions(vec![(
+            true,
+            12,
+            crate::dns::upstream::UpstreamConfig {
                 provider: "EnterpriseDoH".to_string(),
                 url: "https://enterprise.doh/dns-query".to_string(),
                 aura: "high".to_string(),
-            })
-        ]);
+            },
+        )]);
         assert_eq!(demoted, 1);
         assert_eq!(promoted, 1);
         assert_eq!(state.upstreams.ranked_nodes().len(), 9);
@@ -1921,15 +1969,28 @@ mod tests {
         // 10. AI Neural Brain & Learning Cycles
         state.brain.train("production-test.ai", false, 0);
         state.brain.record_sequence("production-test.ai");
-        assert!(state.brain.domain_iq.read().contains_key("production-test.ai"));
+        assert!(
+            state
+                .brain
+                .domain_iq
+                .read()
+                .contains_key("production-test.ai")
+        );
         assert!(state.brain.training_cycles.load(Ordering::Relaxed) >= 1);
 
         // 11. Passive DNS Timeline & Intelligent Anomaly Suppression
-        state.custom_whitelist.write().insert("cloudflare.com".to_string());
+        state
+            .custom_whitelist
+            .write()
+            .insert("cloudflare.com".to_string());
         let ips = vec!["104.16.1.1".parse().unwrap(), "104.16.1.2".parse().unwrap()];
         let _ = state.passive_dns.record("cloudflare.com", &ips);
         assert!(state.is_exempt("cloudflare.com"));
-        assert_eq!(state.recent_anomalies.read().len(), 0, "Whitelisted domain drift must not trigger anomaly");
+        assert_eq!(
+            state.recent_anomalies.read().len(),
+            0,
+            "Whitelisted domain drift must not trigger anomaly"
+        );
 
         // 12. Autonomous Traffic Adaptation Config Decisions
         state.log_config_decision(
@@ -1946,7 +2007,10 @@ mod tests {
         assert!(state.config_decisions.read().len() >= 2);
 
         // 13. Status API & Dashboard Serialization
-        let resp = crate::server::api::status::build_status_response(&state, crate::security::auth::AuthRole::Admin);
+        let resp = crate::server::api::status::build_status_response(
+            &state,
+            crate::security::auth::AuthRole::Admin,
+        );
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
 
         // 14. Metrics & Performance Telemetry

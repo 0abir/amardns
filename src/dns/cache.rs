@@ -348,9 +348,7 @@ impl DnsCache {
     pub async fn insert_negative(&self, qname: &str, qtype: u16, ttl: u32) {
         let key = Self::make_key(qname, qtype);
         let safe_ttl = ttl.clamp(5, 300);
-        self.neg_cache
-            .insert(key, (Instant::now(), safe_ttl))
-            .await;
+        self.neg_cache.insert(key, (Instant::now(), safe_ttl)).await;
     }
 
     pub fn get_neg_stats(&self) -> (usize, u64) {
@@ -510,7 +508,9 @@ mod tests {
     #[tokio::test]
     async fn test_cache_clear_and_eviction_byte_tracking() {
         let cache = DnsCache::new(2);
-        let dummy = vec![0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
+        let dummy = vec![
+            0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+        ];
 
         cache.insert("a.com", 1, dummy.clone(), 300).await;
         cache.insert("b.com", 1, dummy.clone(), 300).await;

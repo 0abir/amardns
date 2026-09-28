@@ -1590,14 +1590,14 @@ mod tests {
 
         // Strict mode (allow_8bit: false) rejects non-hostname characters (newline, colon)
         let pkt_newline = [
-            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x04, b'b', b'a', b'd', b'\n', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, b'b',
+            b'a', b'd', b'\n', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
         ];
         assert!(parse_dns_query_opts(&pkt_newline, false).is_none());
 
         let pkt_colon = [
-            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x05, b'b', b'a', b'd', b':', b'1', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, b'b',
+            b'a', b'd', b':', b'1', 0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01,
         ];
         assert!(parse_dns_query_opts(&pkt_colon, false).is_none());
 
@@ -1605,7 +1605,8 @@ mod tests {
         let parsed_colon = parse_dns_query(&pkt_colon).expect("RFC 1035 allows colons in labels");
         assert_eq!(parsed_colon.question.unwrap().name, "bad:1.com");
 
-        let parsed_nl = parse_dns_query(&pkt_newline).expect("RFC 1035 presentation escapes control chars");
+        let parsed_nl =
+            parse_dns_query(&pkt_newline).expect("RFC 1035 presentation escapes control chars");
         assert_eq!(parsed_nl.question.unwrap().name, "bad\\010.com");
     }
 
@@ -1615,7 +1616,10 @@ mod tests {
         let sd_name = "Printer (Room 101)._ipp._tcp.local";
         let wire = build_query_wire(sd_name, 1);
         let parsed = parse_dns_query(&wire).expect("DNS-SD query with spaces should parse");
-        assert_eq!(parsed.question.unwrap().name, "printer (room 101)._ipp._tcp.local");
+        assert_eq!(
+            parsed.question.unwrap().name,
+            "printer (room 101)._ipp._tcp.local"
+        );
 
         // 2. Specialized TXT / SPF / DKIM characters (=, +, /)
         let txt_name = "v=spf1._tag+1.example.com";
@@ -1642,7 +1646,8 @@ mod tests {
         bin_pkt.push(1);
         bin_pkt.push(0xFF);
         bin_pkt.extend_from_slice(&[0x03, b'c', b'o', b'm', 0x00, 0x00, 0x01, 0x00, 0x01]);
-        let parsed = parse_dns_query(&bin_pkt).expect("Binary 8-bit octet should parse with decimal escape");
+        let parsed =
+            parse_dns_query(&bin_pkt).expect("Binary 8-bit octet should parse with decimal escape");
         assert_eq!(parsed.question.unwrap().name, "\\255.com");
     }
 
@@ -2318,4 +2323,3 @@ mod extra_tests {
         assert_eq!(next_pos, api_pos + 1 + 3 + 2);
     }
 }
-

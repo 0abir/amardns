@@ -113,8 +113,8 @@ pub async fn prometheus_metrics_handler(
     let pfetch_h = m.prefetch_hits.load(Ordering::Relaxed);
     let ttlg = m.ttl_guard_blocks.load(Ordering::Relaxed);
     let cname_f = m.cname_flattened.load(Ordering::Relaxed);
-    let race_w = m.race_wins.load(Ordering::Relaxed)
-        + state.upstreams.hedged_wins.load(Ordering::Relaxed);
+    let race_w =
+        m.race_wins.load(Ordering::Relaxed) + state.upstreams.hedged_wins.load(Ordering::Relaxed);
     let sched_b = m.schedule_blocks.load(Ordering::Relaxed);
     let rps = m.get_rps();
     let rps_peak = m.get_rps_peak();
@@ -405,7 +405,10 @@ pub async fn dashboard_handler(State(state): State<Arc<AppState>>, headers: Head
                 )
             })
         };
-        let cookie = format!("amardns_token={}; Path=/; Max-Age=604800; SameSite=Lax", active_key);
+        let cookie = format!(
+            "amardns_token={}; Path=/; Max-Age=604800; SameSite=Lax",
+            active_key
+        );
         (
             StatusCode::OK,
             [
@@ -455,7 +458,10 @@ pub async fn status_handler(
         if auth.is_view_or_admin() {
             let fly_machine_id = std::env::var("FLY_MACHINE_ID").unwrap_or_default();
             let fly_region = std::env::var("FLY_REGION").unwrap_or_else(|_| "sin".to_string());
-            let cookie = format!("amardns_token={}; Path=/; Max-Age=604800; SameSite=Lax", key);
+            let cookie = format!(
+                "amardns_token={}; Path=/; Max-Age=604800; SameSite=Lax",
+                key
+            );
             return (
                 StatusCode::OK,
                 [
@@ -552,10 +558,7 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
 
     let (cache_len, cache_bytes, cache_mem_mb, cache_max_cap) = state.cache.get_stats();
     let (wal_bytes, wal_mb) = state.wal.get_stats();
-    let total_records = state
-        .wal
-        .total_records()
-        .max((blk_cnt + wl_cnt) as u64);
+    let total_records = state.wal.total_records().max((blk_cnt + wl_cnt) as u64);
 
     let rss_mb = crate::telemetry::metrics::get_process_rss_mb();
 

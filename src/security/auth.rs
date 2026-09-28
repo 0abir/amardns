@@ -91,7 +91,9 @@ fn url_decode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(b) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16) {
+            if let Ok(b) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
                 out.push(b);
                 i += 3;
                 continue;
@@ -405,14 +407,14 @@ pub const FRIENDLY_DICTIONARY_WORDS: &[&str] = &[
     "crystal", "dawn", "delta", "dove", "drift", "eagle", "echo", "ember", "falcon", "feather",
     "fern", "flame", "forest", "frost", "galaxy", "gem", "glade", "glow", "grove", "harbor",
     "haven", "hawk", "hazel", "heart", "honey", "horizon", "island", "ivy", "jade", "jasper",
-    "joy", "jungle", "lake", "lark", "leaf", "light", "lily", "lion", "lotus", "love",
-    "luna", "maple", "meadow", "moon", "moss", "mountain", "nebula", "nest", "nova", "oak",
-    "oasis", "ocean", "olive", "onyx", "opal", "orbit", "otter", "owl", "panda", "peak",
-    "pearl", "pebble", "petal", "pine", "planet", "pond", "pulse", "quartz", "quill", "rain",
-    "raven", "reef", "ridge", "river", "robin", "rose", "ruby", "sage", "sapphire", "shadow",
-    "shore", "silver", "sky", "solar", "spark", "spring", "star", "stone", "storm", "stream",
-    "summit", "sun", "sunset", "swift", "tiger", "timber", "topaz", "trail", "valley", "wave",
-    "willow", "wind", "winter", "wolf", "zenith",
+    "joy", "jungle", "lake", "lark", "leaf", "light", "lily", "lion", "lotus", "love", "luna",
+    "maple", "meadow", "moon", "moss", "mountain", "nebula", "nest", "nova", "oak", "oasis",
+    "ocean", "olive", "onyx", "opal", "orbit", "otter", "owl", "panda", "peak", "pearl", "pebble",
+    "petal", "pine", "planet", "pond", "pulse", "quartz", "quill", "rain", "raven", "reef",
+    "ridge", "river", "robin", "rose", "ruby", "sage", "sapphire", "shadow", "shore", "silver",
+    "sky", "solar", "spark", "spring", "star", "stone", "storm", "stream", "summit", "sun",
+    "sunset", "swift", "tiger", "timber", "topaz", "trail", "valley", "wave", "willow", "wind",
+    "winter", "wolf", "zenith",
 ];
 
 /// Parses and validates a friendly device slug from an SNI domain or slug string.
@@ -639,21 +641,39 @@ mod tests {
         let state = AppState::new(config);
 
         let admin_token = generate_admin_token(&state.config.dns_token_secret, 3600);
-        assert!(verify_admin_token(&admin_token, &state.config.dns_token_secret));
+        assert!(verify_admin_token(
+            &admin_token,
+            &state.config.dns_token_secret
+        ));
         assert!(!verify_admin_token(&admin_token, "wrong_secret"));
         // Generated tokens are strictly read-only and must NEVER grant AuthRole::Admin!
         assert_eq!(
-            check_auth(&state, Some(&admin_token), &HeaderMap::new(), "/api/console/exec"),
+            check_auth(
+                &state,
+                Some(&admin_token),
+                &HeaderMap::new(),
+                "/api/console/exec"
+            ),
             AuthRole::View
         );
         state.revoke_token(&admin_token);
         assert_eq!(
-            check_auth(&state, Some(&admin_token), &HeaderMap::new(), "/api/console/exec"),
+            check_auth(
+                &state,
+                Some(&admin_token),
+                &HeaderMap::new(),
+                "/api/console/exec"
+            ),
             AuthRole::None
         );
         // Only the literal DNS_MASTER_KEY holder has supreme power (AuthRole::Admin)
         assert_eq!(
-            check_auth(&state, Some("secret_master_key"), &HeaderMap::new(), "/api/console/exec"),
+            check_auth(
+                &state,
+                Some("secret_master_key"),
+                &HeaderMap::new(),
+                "/api/console/exec"
+            ),
             AuthRole::Admin
         );
     }
@@ -668,7 +688,9 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::COOKIE,
-            "session=abc; amardns_token=secret_master_key; other=xyz".parse().unwrap(),
+            "session=abc; amardns_token=secret_master_key; other=xyz"
+                .parse()
+                .unwrap(),
         );
 
         assert_eq!(
@@ -692,13 +714,34 @@ mod tests {
     #[test]
     fn test_parse_friendly_device_slug() {
         // Valid slugs (with or without domain suffixes, case-insensitive)
-        assert_eq!(parse_friendly_device_slug("love8.dns.example.com"), Some("love8".to_string()));
-        assert_eq!(parse_friendly_device_slug("LOVE8.DNS.EXAMPLE.COM"), Some("love8".to_string()));
-        assert_eq!(parse_friendly_device_slug("love8"), Some("love8".to_string()));
-        assert_eq!(parse_friendly_device_slug("star3.example.org"), Some("star3".to_string()));
-        assert_eq!(parse_friendly_device_slug("swift42.internal.net"), Some("swift42".to_string()));
-        assert_eq!(parse_friendly_device_slug("haven7"), Some("haven7".to_string()));
-        assert_eq!(parse_friendly_device_slug("tiger999"), Some("tiger999".to_string()));
+        assert_eq!(
+            parse_friendly_device_slug("love8.dns.example.com"),
+            Some("love8".to_string())
+        );
+        assert_eq!(
+            parse_friendly_device_slug("LOVE8.DNS.EXAMPLE.COM"),
+            Some("love8".to_string())
+        );
+        assert_eq!(
+            parse_friendly_device_slug("love8"),
+            Some("love8".to_string())
+        );
+        assert_eq!(
+            parse_friendly_device_slug("star3.example.org"),
+            Some("star3".to_string())
+        );
+        assert_eq!(
+            parse_friendly_device_slug("swift42.internal.net"),
+            Some("swift42".to_string())
+        );
+        assert_eq!(
+            parse_friendly_device_slug("haven7"),
+            Some("haven7".to_string())
+        );
+        assert_eq!(
+            parse_friendly_device_slug("tiger999"),
+            Some("tiger999".to_string())
+        );
 
         // Invalid slugs
         assert_eq!(parse_friendly_device_slug("love"), None); // No number

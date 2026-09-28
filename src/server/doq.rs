@@ -69,11 +69,7 @@ pub async fn start_doq_server(
     } else {
         socket2::Domain::IPV4
     };
-    let socket = socket2::Socket::new(
-        domain,
-        socket2::Type::DGRAM,
-        Some(socket2::Protocol::UDP),
-    )?;
+    let socket = socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
 
     if bind_addr.is_ipv6() {
         let _ = socket.set_only_v6(false);
@@ -144,7 +140,9 @@ pub async fn start_doq_server(
 /// Handles a single established QUIC connection for DoQ.
 async fn handle_doq_connection(state: Arc<AppState>, conn: quinn::Connection) {
     let client_ip = conn.remote_address().ip();
-    let is_private = state.is_private_mode.load(std::sync::atomic::Ordering::Relaxed);
+    let is_private = state
+        .is_private_mode
+        .load(std::sync::atomic::Ordering::Relaxed);
 
     // Extract SNI from Quinn QUIC handshake
     let sni = conn
@@ -153,9 +151,15 @@ async fn handle_doq_connection(state: Arc<AppState>, conn: quinn::Connection) {
         .and_then(|hd| hd.server_name);
 
     let dev_tag = if is_private {
-        match sni.as_deref().and_then(crate::security::auth::parse_friendly_device_slug) {
+        match sni
+            .as_deref()
+            .and_then(crate::security::auth::parse_friendly_device_slug)
+        {
             Some(slug) => {
-                debug!("[doq] Authenticated private device slug '{}' via SNI {:?}", slug, sni);
+                debug!(
+                    "[doq] Authenticated private device slug '{}' via SNI {:?}",
+                    slug, sni
+                );
                 Some(slug)
             }
             None => {
@@ -163,12 +167,16 @@ async fn handle_doq_connection(state: Arc<AppState>, conn: quinn::Connection) {
                     "[doq] Unauthorized DoQ connection from {}: Private mode requires a friendly device slug SNI (e.g. love8.dns.example.com), got {:?}",
                     client_ip, sni
                 );
-                conn.close(0x01u32.into(), b"Private DoQ requires friendly device slug SNI (e.g. love8.dns.example.com)");
+                conn.close(
+                    0x01u32.into(),
+                    b"Private DoQ requires friendly device slug SNI (e.g. love8.dns.example.com)",
+                );
                 return;
             }
         }
     } else {
-        sni.as_deref().and_then(crate::security::auth::parse_friendly_device_slug)
+        sni.as_deref()
+            .and_then(crate::security::auth::parse_friendly_device_slug)
     };
 
     // Connection-level rate limit check with device identity

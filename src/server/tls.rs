@@ -89,8 +89,8 @@ impl DynamicCertResolver {
         cert_path: &str,
         key_path: &str,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert_path)?
-            .collect::<Result<Vec<_>, _>>()?;
+        let certs: Vec<CertificateDer<'static>> =
+            CertificateDer::pem_file_iter(cert_path)?.collect::<Result<Vec<_>, _>>()?;
 
         if certs.is_empty() {
             return Err(format!("No certificates found in '{}'", cert_path).into());
@@ -143,8 +143,8 @@ impl DynamicCertResolver {
         cert_path: &str,
         key_path: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert_path)?
-            .collect::<Result<Vec<_>, _>>()?;
+        let certs: Vec<CertificateDer<'static>> =
+            CertificateDer::pem_file_iter(cert_path)?.collect::<Result<Vec<_>, _>>()?;
 
         if certs.is_empty() {
             return Err(format!("No certificates found in '{}'", cert_path).into());

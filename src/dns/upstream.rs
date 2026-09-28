@@ -875,18 +875,13 @@ impl UpstreamPool {
                     // Connect socket directly to root server to reject spoofed UDP packets from other origins
                     if sock.connect(addr).await.is_ok() && sock.send(&outgoing).await.is_ok() {
                         let mut buf = [0u8; 4096];
-                        if let Ok(Ok(len)) = tokio::time::timeout(
-                            Duration::from_millis(1500),
-                            sock.recv(&mut buf),
-                        )
-                        .await
+                        if let Ok(Ok(len)) =
+                            tokio::time::timeout(Duration::from_millis(1500), sock.recv(&mut buf))
+                                .await
                         {
                             // Strict RFC 5452 verification: 16-bit TxID must match outgoing random ID
                             if len >= 12 && buf[0..2] == rng_txid {
-                                return Some((
-                                    buf[..len].to_vec(),
-                                    "Root".to_string(),
-                                ));
+                                return Some((buf[..len].to_vec(), "Root".to_string()));
                             }
                         }
                     }
@@ -1227,7 +1222,13 @@ impl UpstreamPool {
 
                 tracing::info!(
                     "[upstream] Auto-demoted degraded upstream '{}' ({}, errors: {}, eff_lat: {}ms); promoted new best candidate '{}' ({}, latency: {}ms)",
-                    deg_name, deg_url, deg_errs, deg_eff_lat, promoted_node.provider, cand_cfg.url, cand_lat
+                    deg_name,
+                    deg_url,
+                    deg_errs,
+                    deg_eff_lat,
+                    promoted_node.provider,
+                    cand_cfg.url,
+                    cand_lat
                 );
 
                 if idx < new_active.len() {
@@ -1254,7 +1255,9 @@ impl UpstreamPool {
 
                 tracing::info!(
                     "[upstream] Promoted additional candidate '{}' ({}, latency: {}ms) to maintain qualified 9",
-                    promoted_node.provider, cand_cfg.url, cand_lat
+                    promoted_node.provider,
+                    cand_cfg.url,
+                    cand_lat
                 );
 
                 new_active.push(promoted_node);
@@ -1624,7 +1627,11 @@ mod tests {
     fn test_default_upstreams_config() {
         let upstreams = UpstreamPool::default_upstreams_config();
         assert_eq!(upstreams.len(), 9);
-        assert!(upstreams.iter().all(|u| u.aura.eq_ignore_ascii_case("high")));
+        assert!(
+            upstreams
+                .iter()
+                .all(|u| u.aura.eq_ignore_ascii_case("high"))
+        );
         let providers: Vec<&str> = upstreams.iter().map(|u| u.provider.as_str()).collect();
         assert!(providers.contains(&"Mullvad"));
         assert!(providers.contains(&"Quad9"));
@@ -1771,17 +1778,15 @@ mod tests {
         };
 
         // Candidate probe simulating a fast, responsive candidate
-        let candidate_probes = vec![
-            (
-                true,
-                15,
-                UpstreamConfig {
-                    provider: "FreshFastDNS".to_string(),
-                    url: "https://fresh.fast/dns-query".to_string(),
-                    aura: "high".to_string(),
-                },
-            ),
-        ];
+        let candidate_probes = vec![(
+            true,
+            15,
+            UpstreamConfig {
+                provider: "FreshFastDNS".to_string(),
+                url: "https://fresh.fast/dns-query".to_string(),
+                aura: "high".to_string(),
+            },
+        )];
 
         let (demoted, promoted) = pool.apply_candidate_promotions(candidate_probes);
         assert_eq!(demoted, 1);
@@ -1795,7 +1800,9 @@ mod tests {
         assert!(!current.iter().any(|n| n.url == degraded_url));
 
         // Promoted candidate must now be present in the active pool
-        let promoted_in_pool = current.iter().find(|n| n.url == "https://fresh.fast/dns-query");
+        let promoted_in_pool = current
+            .iter()
+            .find(|n| n.url == "https://fresh.fast/dns-query");
         assert!(promoted_in_pool.is_some());
         let promoted_node = promoted_in_pool.unwrap();
         assert_eq!(promoted_node.latency_ms.load(Ordering::Relaxed), 15);

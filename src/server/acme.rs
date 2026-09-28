@@ -195,7 +195,11 @@ impl AcmeClient {
             if attempt > 0 {
                 tokio::time::sleep(Duration::from_millis(1000 * attempt)).await;
             }
-            for endpoint in &[&self.dir.new_nonce, &self.dir.new_account, &self.dir.new_order] {
+            for endpoint in &[
+                &self.dir.new_nonce,
+                &self.dir.new_account,
+                &self.dir.new_order,
+            ] {
                 if let Ok(resp) = self.http.head(*endpoint).send().await {
                     if let Some(nonce) = resp
                         .headers()
@@ -237,7 +241,11 @@ impl AcmeClient {
             .parse()
             .map_err(|e| format!("Invalid ACME URL '{}': {}", url, e))?;
         if parsed_url.scheme() != "https" {
-            return Err(format!("Insecure ACME URL '{}': HTTPS is strictly required by RFC 8555", url).into());
+            return Err(format!(
+                "Insecure ACME URL '{}': HTTPS is strictly required by RFC 8555",
+                url
+            )
+            .into());
         }
         let host_port = match (parsed_url.host_str(), parsed_url.port()) {
             (Some(h), Some(p)) if p != 443 => format!("{}:{}", h, p),
@@ -847,21 +855,24 @@ pub fn validate_existing_cert_and_key(
     min_days_remaining: i64,
 ) -> Option<i64> {
     // 1. Check primary specified paths
-    if let Some(days) = validate_cert_key_pair(cert_path, key_path, expected_domains, min_days_remaining) {
+    if let Some(days) =
+        validate_cert_key_pair(cert_path, key_path, expected_domains, min_days_remaining)
+    {
         return Some(days);
     }
 
     // 2. Check candidate fallback locations on disk
-    let candidates = [
-        ("/data/cert.pem", "/data/key.pem"),
-        ("cert.pem", "key.pem"),
-    ];
+    let candidates = [("/data/cert.pem", "/data/key.pem"), ("cert.pem", "key.pem")];
     for (c_path, k_path) in &candidates {
         if *c_path == cert_path && *k_path == key_path {
             continue;
         }
-        if let Some(days) = validate_cert_key_pair(c_path, k_path, expected_domains, min_days_remaining) {
-            if let (Ok(cert_content), Ok(key_content)) = (fs::read_to_string(c_path), fs::read_to_string(k_path)) {
+        if let Some(days) =
+            validate_cert_key_pair(c_path, k_path, expected_domains, min_days_remaining)
+        {
+            if let (Ok(cert_content), Ok(key_content)) =
+                (fs::read_to_string(c_path), fs::read_to_string(k_path))
+            {
                 if let Some(parent) = Path::new(cert_path).parent() {
                     let _ = fs::create_dir_all(parent);
                 }
@@ -1188,7 +1199,10 @@ async fn provision_acme_certificate_ca(
         let mut order_status_str = None;
         if let Ok(order_resp) = client.post_jws(&order_url, &serde_json::Value::Null).await {
             if let Ok(order_check) = order_resp.json::<serde_json::Value>().await {
-                let status = order_check["status"].as_str().unwrap_or("unknown").to_string();
+                let status = order_check["status"]
+                    .as_str()
+                    .unwrap_or("unknown")
+                    .to_string();
                 info!(
                     "[acme] Certificate order status: {} (attempt {}/{})",
                     status, attempt, max_attempts
@@ -1267,7 +1281,9 @@ async fn provision_acme_certificate_ca(
             }
         }
 
-        if (all_valid && verified_authz.len() == authz_urls.len()) || order_status_str.as_deref() == Some("ready") {
+        if (all_valid && verified_authz.len() == authz_urls.len())
+            || order_status_str.as_deref() == Some("ready")
+        {
             order_ready = true;
             break;
         }
@@ -1517,7 +1533,10 @@ pub async fn try_import_to_fly_edge(
                         .and_then(|m| m.as_str())
                         .unwrap_or("unknown");
                     if msg.contains("already exists") {
-                        debug!("[acme/fly-edge] Domain '{}' already active on Fly edge", domain);
+                        debug!(
+                            "[acme/fly-edge] Domain '{}' already active on Fly edge",
+                            domain
+                        );
                     } else {
                         warn!(
                             "[acme/fly-edge] Fly edge registration note for '{}': {}",
@@ -1574,7 +1593,10 @@ pub async fn try_import_to_fly_edge(
                 "fullchain": cert_pem,
                 "private_key": key_pem,
             });
-            let custom_url = format!("https://api.machines.dev/v1/apps/{}/certificates/custom", app_name);
+            let custom_url = format!(
+                "https://api.machines.dev/v1/apps/{}/certificates/custom",
+                app_name
+            );
             match http
                 .post(&custom_url)
                 .header("Authorization", format!("Bearer {}", token))
@@ -1740,10 +1762,7 @@ pub async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -
     ] {
         if let Ok(addrs) = tokio::net::lookup_host(lookup).await {
             for addr in addrs {
-                peer_urls.push(format!(
-                    "http://[{}]:443/internal/tls/bundle",
-                    addr.ip()
-                ));
+                peer_urls.push(format!("http://[{}]:443/internal/tls/bundle", addr.ip()));
             }
         }
     }
@@ -1800,7 +1819,13 @@ pub async fn try_sync_from_peer(config: &AcmeConfig, master_key: Option<&str>) -
                                         "[acme-peer-sync] Successfully synced and applied TLS certificate bundle ({} days remaining) from peer ({})",
                                         days, url
                                     );
-                                    try_import_to_fly_edge(&http, &config.domains, cert_pem, key_pem).await;
+                                    try_import_to_fly_edge(
+                                        &http,
+                                        &config.domains,
+                                        cert_pem,
+                                        key_pem,
+                                    )
+                                    .await;
                                     return true;
                                 }
                             }
@@ -1859,10 +1884,7 @@ async fn try_acquire_cluster_lock(
     ] {
         if let Ok(addrs) = tokio::net::lookup_host(lookup).await {
             for addr in addrs {
-                lock_urls.push(format!(
-                    "http://[{}]:443/internal/acme/lock",
-                    addr.ip()
-                ));
+                lock_urls.push(format!("http://[{}]:443/internal/acme/lock", addr.ip()));
             }
         }
     }
@@ -1947,10 +1969,7 @@ async fn try_release_cluster_lock(
     ] {
         if let Ok(addrs) = tokio::net::lookup_host(lookup).await {
             for addr in addrs {
-                unlock_urls.push(format!(
-                    "http://[{}]:443/internal/acme/unlock",
-                    addr.ip()
-                ));
+                unlock_urls.push(format!("http://[{}]:443/internal/acme/unlock", addr.ip()));
             }
         }
     }
@@ -2063,7 +2082,8 @@ pub fn spawn_acme_supervisor(
 
                 if is_leader_region {
                     // Stagger startup slightly based on machine_id hash to eliminate simultaneous lock collision
-                    let stagger_ms = (machine_id.bytes().map(|b| b as u64).sum::<u64>() % 7 + 1) * 800;
+                    let stagger_ms =
+                        (machine_id.bytes().map(|b| b as u64).sum::<u64>() % 7 + 1) * 800;
                     tokio::time::sleep(Duration::from_millis(stagger_ms)).await;
 
                     // Re-check peer sync after stagger

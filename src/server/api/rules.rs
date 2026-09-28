@@ -59,7 +59,6 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/whitelist/clear", post(clear_whitelist))
         .route("/api/whitelist/clear/", post(clear_whitelist))
         .route("/api/whitelist/clear/{key}", post(clear_whitelist_key))
-
         // Auto-block
         .route(
             "/api/auto-block",
@@ -572,7 +571,6 @@ pub async fn handle_clear_whitelist(
     state.log_action("whitelist_cleared", "admin");
     Json(serde_json::json!({ "ok": true })).into_response()
 }
-
 
 // ── Auto-Block Handlers ─────────────────────────────────────────────────────
 

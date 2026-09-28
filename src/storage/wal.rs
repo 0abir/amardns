@@ -337,12 +337,14 @@ impl WalStorage {
                     // Strip and verify checksum if present
                     let (payload, crc_ok) = if let Some(idx) = trimmed_raw.rfind(" #crc=") {
                         let (body, crc_part) = trimmed_raw.split_at(idx);
-                        let body_clean = body.trim_matches(|c: char| c == '\0' || c.is_whitespace());
+                        let body_clean =
+                            body.trim_matches(|c: char| c == '\0' || c.is_whitespace());
                         if body_clean.is_empty() {
                             continue;
                         }
                         let stored_crc =
-                            u32::from_str_radix(crc_part.trim_start_matches(" #crc="), 16).unwrap_or(0);
+                            u32::from_str_radix(crc_part.trim_start_matches(" #crc="), 16)
+                                .unwrap_or(0);
                         let computed = line_checksum(body);
                         if stored_crc != computed {
                             tracing::warn!(

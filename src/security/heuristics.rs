@@ -720,4 +720,3 @@ mod tests {
         assert!(!is_c2_or_miner_threat("github.com"));
     }
 }
-

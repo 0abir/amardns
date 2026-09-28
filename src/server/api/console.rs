@@ -48,8 +48,14 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/{key}/api/console/exec", post(console_exec_key_handler))
         .route("/api/console/commands", get(console_commands_handler))
         .route("/api/console/commands/", get(console_commands_handler))
-        .route("/api/console/commands/{key}", get(console_commands_key_handler))
-        .route("/{key}/api/console/commands", get(console_commands_key_handler))
+        .route(
+            "/api/console/commands/{key}",
+            get(console_commands_key_handler),
+        )
+        .route(
+            "/{key}/api/console/commands",
+            get(console_commands_key_handler),
+        )
 }
 
 pub async fn console_commands_handler(
@@ -187,7 +193,8 @@ fn get_command_list() -> Vec<ConsoleCommandInfo> {
         ConsoleCommandInfo {
             name: "trace".into(),
             syntax: "trace <domain>".into(),
-            description: "Step-by-step trace of rule checks, AI heuristics, cache, and upstreams".into(),
+            description: "Step-by-step trace of rule checks, AI heuristics, cache, and upstreams"
+                .into(),
             category: "Diagnostics".into(),
         },
         ConsoleCommandInfo {
@@ -238,7 +245,6 @@ fn get_command_list() -> Vec<ConsoleCommandInfo> {
             description: "Remove domain from whitelist".into(),
             category: "Rules".into(),
         },
-
         ConsoleCommandInfo {
             name: "feed".into(),
             syntax: "feed <sync | status>".into(),
@@ -266,7 +272,8 @@ fn get_command_list() -> Vec<ConsoleCommandInfo> {
         ConsoleCommandInfo {
             name: "sockets".into(),
             syntax: "sockets | net".into(),
-            description: "Inspect listening ports, protocols (UDP, TCP, DoT, DoH), and socket buffers".into(),
+            description:
+                "Inspect listening ports, protocols (UDP, TCP, DoT, DoH), and socket buffers".into(),
             category: "Network".into(),
         },
         ConsoleCommandInfo {
@@ -332,19 +339,24 @@ fn get_command_list() -> Vec<ConsoleCommandInfo> {
         ConsoleCommandInfo {
             name: "update".into(),
             syntax: "update [check | list | apply [tag] | rollback]".into(),
-            description: "Check GitHub releases, list remote versions, install specific version, or rollback".into(),
+            description:
+                "Check GitHub releases, list remote versions, install specific version, or rollback"
+                    .into(),
             category: "System".into(),
         },
         ConsoleCommandInfo {
             name: "software".into(),
             syntax: "software <list | remove <file> | fallback | prune>".into(),
-            description: "List software binaries, relative age, trigger fallback, or prune archives".into(),
+            description:
+                "List software binaries, relative age, trigger fallback, or prune archives".into(),
             category: "System".into(),
         },
         ConsoleCommandInfo {
             name: "rm".into(),
             syntax: "rm <file>".into(),
-            description: "Remove on-disk software binary (watchdog auto-recovers if /amardns is targeted)".into(),
+            description:
+                "Remove on-disk software binary (watchdog auto-recovers if /amardns is targeted)"
+                    .into(),
             category: "System".into(),
         },
     ]
@@ -409,9 +421,18 @@ async fn cmd_update(args: &[&str]) -> (String, String) {
         "check" => {
             let client = match reqwest::Client::builder().user_agent("AmarDNS").build() {
                 Ok(c) => c,
-                Err(e) => return (format!("Failed to build HTTP client: {}", e), "error".into()),
+                Err(e) => {
+                    return (
+                        format!("Failed to build HTTP client: {}", e),
+                        "error".into(),
+                    );
+                }
             };
-            match client.get("https://api.github.com/repos/0abir/amardns/releases/latest").send().await {
+            match client
+                .get("https://api.github.com/repos/0abir/amardns/releases/latest")
+                .send()
+                .await
+            {
                 Ok(resp) => {
                     if let Ok(j) = resp.json::<serde_json::Value>().await {
                         let tag = j["tag_name"].as_str().unwrap_or("unknown");
@@ -420,7 +441,8 @@ async fn cmd_update(args: &[&str]) -> (String, String) {
                         let has_backup = std::path::Path::new("/amardns.bak").exists();
                         let mut out = format!(
                             "Current compiled version: v{}\nLatest release on GitHub: {}\nRunning software (/amardns): {}\nFallback backup (/amardns.bak): {}\n",
-                            cur, tag,
+                            cur,
+                            tag,
                             if has_active { "PRESENT" } else { "ABSENT" },
                             if has_backup { "READY" } else { "NONE" }
                         );
@@ -431,17 +453,26 @@ async fn cmd_update(args: &[&str]) -> (String, String) {
                         }
                         (out, "ok".into())
                     } else {
-                        ("Failed to parse GitHub release metadata.".into(), "error".into())
+                        (
+                            "Failed to parse GitHub release metadata.".into(),
+                            "error".into(),
+                        )
                     }
                 }
-                Err(e) => (format!("Failed to query GitHub Releases API: {}", e), "error".into()),
+                Err(e) => (
+                    format!("Failed to query GitHub Releases API: {}", e),
+                    "error".into(),
+                ),
             }
         }
         "list" | "releases" | "versions" => {
             match crate::server::api::system::fetch_remote_releases().await {
                 Ok(releases) => {
                     if releases.is_empty() {
-                        return ("No releases found on GitHub repository.\n".into(), "ok".into());
+                        return (
+                            "No releases found on GitHub repository.\n".into(),
+                            "ok".into(),
+                        );
                     }
                     let mut out = String::new();
                     out.push_str("── [ Available Releases on GitHub ] ──────────────────────────────────────────\n\n");
@@ -478,13 +509,14 @@ async fn cmd_update(args: &[&str]) -> (String, String) {
                 Err(e) => (format!("Update failed: {}\n", e), "error".into()),
             }
         }
-        "rollback" => {
-            match crate::server::api::system::perform_rollback().await {
-                Ok(msg) => (format!("{}\n", msg), "ok".into()),
-                Err(e) => (format!("Rollback failed: {}\n", e), "error".into()),
-            }
-        }
-        _ => ("Syntax: update [check | list | apply [tag] | rollback]\n".into(), "error".into()),
+        "rollback" => match crate::server::api::system::perform_rollback().await {
+            Ok(msg) => (format!("{}\n", msg), "ok".into()),
+            Err(e) => (format!("Rollback failed: {}\n", e), "error".into()),
+        },
+        _ => (
+            "Syntax: update [check | list | apply [tag] | rollback]\n".into(),
+            "error".into(),
+        ),
     }
 }
 
@@ -494,7 +526,10 @@ async fn cmd_software(args: &[&str]) -> (String, String) {
         "list" | "ls" => {
             let binaries = crate::server::api::system::list_software_binaries();
             if binaries.is_empty() {
-                return ("No software binaries or backups discovered in /.\n".to_string(), "ok".into());
+                return (
+                    "No software binaries or backups discovered in /.\n".to_string(),
+                    "ok".into(),
+                );
             }
 
             let mut out = String::new();
@@ -513,7 +548,11 @@ async fn cmd_software(args: &[&str]) -> (String, String) {
             }
 
             let has_backup = std::path::Path::new("/amardns.bak").exists();
-            let backup_status = if has_backup { "READY (/amardns.bak present)" } else { "NONE (Run update or copy to /amardns.bak)" };
+            let backup_status = if has_backup {
+                "READY (/amardns.bak present)"
+            } else {
+                "NONE (Run update or copy to /amardns.bak)"
+            };
 
             out.push('\n');
             out.push_str("  Active Running Target : /amardns\n");
@@ -521,10 +560,14 @@ async fn cmd_software(args: &[&str]) -> (String, String) {
             out.push_str(&format!("  Total Binaries Found  : {}\n\n", binaries.len()));
             out.push_str("  Available Operations:\n");
             out.push_str("    software list              Refresh this software catalog\n");
-            out.push_str("    software remove <file>     Delete binary or archive (alias: rm <file>)\n");
+            out.push_str(
+                "    software remove <file>     Delete binary or archive (alias: rm <file>)\n",
+            );
             out.push_str("    software fallback          Restore /amardns.bak as /amardns & archive active\n");
             out.push_str("    software prune             Purge all archived /amardns-* binaries\n");
-            out.push_str("    update apply               Download and install latest GitHub release\n");
+            out.push_str(
+                "    update apply               Download and install latest GitHub release\n",
+            );
 
             (out, "ok".into())
         }
@@ -535,36 +578,44 @@ async fn cmd_software(args: &[&str]) -> (String, String) {
             let target = args[1];
             match crate::server::api::system::remove_software_binary(target).await {
                 Ok(msg) => (format!("{}\n", msg), "ok".into()),
-                Err(e) => (format!("Error removing '{}': {}\n", target, e), "error".into()),
+                Err(e) => (
+                    format!("Error removing '{}': {}\n", target, e),
+                    "error".into(),
+                ),
             }
         }
-        "fallback" | "rollback" => {
-            match crate::server::api::system::perform_rollback().await {
-                Ok(msg) => (format!("{}\n", msg), "ok".into()),
-                Err(e) => (format!("Fallback failed: {}\n", e), "error".into()),
-            }
-        }
-        "prune" | "clean" => {
-            match crate::server::api::system::prune_software_binaries() {
-                Ok(msg) => (format!("{}\n", msg), "ok".into()),
-                Err(e) => (format!("Prune failed: {}\n", e), "error".into()),
-            }
-        }
+        "fallback" | "rollback" => match crate::server::api::system::perform_rollback().await {
+            Ok(msg) => (format!("{}\n", msg), "ok".into()),
+            Err(e) => (format!("Fallback failed: {}\n", e), "error".into()),
+        },
+        "prune" | "clean" => match crate::server::api::system::prune_software_binaries() {
+            Ok(msg) => (format!("{}\n", msg), "ok".into()),
+            Err(e) => (format!("Prune failed: {}\n", e), "error".into()),
+        },
         _ => (
-            format!("Unknown software subcommand: '{}'. Valid commands: list, remove <file>, fallback, prune\n", sub),
-            "error".into()
+            format!(
+                "Unknown software subcommand: '{}'. Valid commands: list, remove <file>, fallback, prune\n",
+                sub
+            ),
+            "error".into(),
         ),
     }
 }
 
 async fn cmd_rm(args: &[&str]) -> (String, String) {
     if args.is_empty() {
-        return ("Syntax: rm <file_name_or_path> (e.g. rm amardns.bak, rm /amardns)\n".into(), "error".into());
+        return (
+            "Syntax: rm <file_name_or_path> (e.g. rm amardns.bak, rm /amardns)\n".into(),
+            "error".into(),
+        );
     }
     let target = args[0];
     match crate::server::api::system::remove_software_binary(target).await {
         Ok(msg) => (format!("{}\n", msg), "ok".into()),
-        Err(e) => (format!("Error removing '{}': {}\n", target, e), "error".into()),
+        Err(e) => (
+            format!("Error removing '{}': {}\n", target, e),
+            "error".into(),
+        ),
     }
 }
 
@@ -575,7 +626,7 @@ fn cmd_banner(_state: &AppState) -> String {
     let region = std::env::var("FLY_REGION").unwrap_or_else(|_| "local".to_string());
 
     format!(
-r#"
+        r#"
   █████╗ ███╗   ███╗ █████╗ ██████╗       ██████╗ ███╗   ██╗███████╗
  ██╔══██╗████╗ ████║██╔══██╗██╔══██╗      ██╔══██╗████╗  ██║██╔════╝
  ███████║██╔████╔██║███████║██████╔╝█████╗██║  ██║██╔██╗ ██║███████╗
@@ -600,7 +651,7 @@ fn cmd_version() -> String {
     let os = std::env::consts::OS;
 
     format!(
-r#"AmarDNS Engine Details:
+        r#"AmarDNS Engine Details:
 - Version:       {}
 - Architecture:  {} ({})
 - Runtime:       Tokio Async Multi-Threaded Executor
@@ -643,7 +694,10 @@ fn cmd_uptime(state: &AppState) -> String {
 fn cmd_help(args: &[&str]) -> String {
     if let Some(target) = args.first() {
         let list = get_command_list();
-        if let Some(c) = list.iter().find(|item| item.name.eq_ignore_ascii_case(target)) {
+        if let Some(c) = list
+            .iter()
+            .find(|item| item.name.eq_ignore_ascii_case(target))
+        {
             return format!(
                 "COMMAND: {}\nCategory:    {}\nSyntax:      {}\nDescription: {}\n",
                 c.name.to_uppercase(),
@@ -652,25 +706,44 @@ fn cmd_help(args: &[&str]) -> String {
                 c.description
             );
         } else {
-            return format!("No help entry found for '{}'. Type 'help' to see all commands.", target);
+            return format!(
+                "No help entry found for '{}'. Type 'help' to see all commands.",
+                target
+            );
         }
     }
 
     let list = get_command_list();
-    let mut out = String::from(
-        "AmarDNS Interactive Management Console — Available Commands:\n\n"
-    );
+    let mut out = String::from("AmarDNS Interactive Management Console — Available Commands:\n\n");
 
-    let categories = ["Diagnostics", "Security", "Rules", "Cache", "Telemetry", "Network", "Config", "System", "General"];
+    let categories = [
+        "Diagnostics",
+        "Security",
+        "Rules",
+        "Cache",
+        "Telemetry",
+        "Network",
+        "Config",
+        "System",
+        "General",
+    ];
     for cat in categories {
-        out.push_str(&format!("── [ {} ] ────────────────────────────────────────\n", cat));
+        out.push_str(&format!(
+            "── [ {} ] ────────────────────────────────────────\n",
+            cat
+        ));
         for c in list.iter().filter(|i| i.category == cat) {
-            out.push_str(&format!("  {:<14} {:<38} {}\n", c.name, c.syntax, c.description));
+            out.push_str(&format!(
+                "  {:<14} {:<38} {}\n",
+                c.name, c.syntax, c.description
+            ));
         }
         out.push('\n');
     }
 
-    out.push_str("Tip: Type 'help <command>' for specific syntax, or press TAB for autocompletion.");
+    out.push_str(
+        "Tip: Type 'help <command>' for specific syntax, or press TAB for autocompletion.",
+    );
     out
 }
 
@@ -706,7 +779,7 @@ fn cmd_stats(state: &AppState) -> String {
     let cache_size = state.cache.entry_count();
 
     format!(
-r#"── [ SYSTEM TELEMETRY MATRIX ] ────────────────────────────────────
+        r#"── [ SYSTEM TELEMETRY MATRIX ] ────────────────────────────────────
  Throughput:      {:.2} QPS (Avg over runtime)
  Total Queries:   {} queries
  Cache Hits:      {} ({:.1}%) | Cache Entries: {}
@@ -724,10 +797,17 @@ r#"── [ SYSTEM TELEMETRY MATRIX ] ──────────────
  Bloom Filter:    {} items loaded"#,
         qps,
         total_queries,
-        cached, hit_rate, cache_size,
-        blocked, block_pct,
-        plain, doh, dot, dnssec_val,
-        blk_count, wl_count,
+        cached,
+        hit_rate,
+        cache_size,
+        blocked,
+        block_pct,
+        plain,
+        doh,
+        dot,
+        dnssec_val,
+        blk_count,
+        wl_count,
         state.threat_bloom.read().count()
     )
 }
@@ -753,7 +833,12 @@ async fn cmd_resolve(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
         "ANY" => 255,
         _ => match qtype_str.parse::<u16>() {
             Ok(val) => val,
-            Err(_) => return (format!("Unknown query type '{}'", qtype_str), "error".into()),
+            Err(_) => {
+                return (
+                    format!("Unknown query type '{}'", qtype_str),
+                    "error".into(),
+                );
+            }
         },
     };
 
@@ -786,7 +871,14 @@ async fn cmd_resolve(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
 
             let mut out = format!(
                 "── [ RESOLUTION RESULT ] ─────────────────────────────────────────\nDomain:     {}\nQuery Type: {} ({})\nRCODE:      {}\nUpstream:   {}\nDuration:   {:.2} ms ({} bytes wire)\n\n── [ ANSWER SECTION ({}) ] ──────────────────────────────────────\n",
-                domain, qtype_str, qtype, rcode_str, upstream_name, elapsed_ms, resp_wire.len(), answers.len()
+                domain,
+                qtype_str,
+                qtype,
+                rcode_str,
+                upstream_name,
+                elapsed_ms,
+                resp_wire.len(),
+                answers.len()
             );
 
             if answers.is_empty() {
@@ -804,7 +896,11 @@ async fn cmd_resolve(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
                     };
                     out.push_str(&format!(
                         "  [{}] {:<30} TTL={:<6} {:<6} {}\n",
-                        idx + 1, ans.name, ans.ttl, type_name, ans.data
+                        idx + 1,
+                        ans.name,
+                        ans.ttl,
+                        type_name,
+                        ans.data
                     ));
                 }
             }
@@ -843,23 +939,32 @@ async fn cmd_trace(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
     });
 
     if is_wl_exact || is_custom_wl || is_wl_wildcard {
-        steps.push("  -> MATCH: Hard Whitelist rule triggered. Bypassing all threat checks.".to_string());
+        steps.push(
+            "  -> MATCH: Hard Whitelist rule triggered. Bypassing all threat checks.".to_string(),
+        );
         steps.push("  -> Forwarding directly to upstream resolver.".to_string());
         return (
             format!(
                 "Trace Evaluation for '{}':\n{}\n\nVerdict: ALLOW (Whitelisted)",
-                domain, steps.join("\n")
+                domain,
+                steps.join("\n")
             ),
             "ok".into(),
         );
     } else {
-        steps.push("[2/8] Whitelist Evaluation: No whitelist bypass found. Continuing pipeline.".to_string());
+        steps.push(
+            "[2/8] Whitelist Evaluation: No whitelist bypass found. Continuing pipeline."
+                .to_string(),
+        );
     }
 
     // Step 3: Threat Bloom Filter
     let bloom_hit = state.threat_bloom.read().contains(&domain);
     if bloom_hit {
-        steps.push("[3/8] Threat Bloom Filter: HIT (Potential threat signature in Bloom array)".to_string());
+        steps.push(
+            "[3/8] Threat Bloom Filter: HIT (Potential threat signature in Bloom array)"
+                .to_string(),
+        );
     } else {
         steps.push("[3/8] Threat Bloom Filter: PASS (No bloom signature match)".to_string());
     }
@@ -869,13 +974,13 @@ async fn cmd_trace(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
     if let Some(entry) = custom_block {
         steps.push(format!(
             "[4/8] Custom Blocklist: BLOCKED! Matched custom rule. Reason: '{}', Source: '{}'",
-            entry.reason,
-            entry.source
+            entry.reason, entry.source
         ));
         return (
             format!(
                 "Trace Evaluation for '{}':\n{}\n\nVerdict: BLOCKED (Custom Rule)",
-                domain, steps.join("\n")
+                domain,
+                steps.join("\n")
             ),
             "ok".into(),
         );
@@ -892,7 +997,11 @@ async fn cmd_trace(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
         "[5/8] AI Threat Engine: Shannon Entropy={:.3}, DGA Anomaly={}, Lookalike={}",
         entropy,
         if is_dga { "YES (High Anomaly)" } else { "NO" },
-        if is_lookalike { "YES (Potential Impersonation)" } else { "None" }
+        if is_lookalike {
+            "YES (Potential Impersonation)"
+        } else {
+            "None"
+        }
     ));
 
     // Step 6: Cache Lookup
@@ -905,14 +1014,20 @@ async fn cmd_trace(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
 
     // Step 7: Upstream Ranking
     let ranked = state.upstreams.ranked_nodes();
-    let fastest = ranked.first().map(|n| n.provider.as_str()).unwrap_or("Cloudflare");
+    let fastest = ranked
+        .first()
+        .map(|n| n.provider.as_str())
+        .unwrap_or("Cloudflare");
     steps.push(format!(
         "[7/8] Upstream Resolver Dispatch: Primary target is '{}' (Ranked by EWMA latency)",
         fastest
     ));
 
     // Step 8: DNSSEC Verification
-    steps.push("[8/8] DNSSEC Engine: RFC 4035 Section 5.5 cryptographic anchor validation active".to_string());
+    steps.push(
+        "[8/8] DNSSEC Engine: RFC 4035 Section 5.5 cryptographic anchor validation active"
+            .to_string(),
+    );
 
     let out = format!(
         "── [ TRACE EXECUTION PIPELINE ] ─────────────────────────────────\nDomain: {}\n\n{}\n\nVerdict: ALLOW (Clean domain passed all heuristic and signature checks)",
@@ -955,7 +1070,14 @@ async fn cmd_bench(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
             let avg = sum / latencies.len() as f64;
             let min = latencies.iter().cloned().fold(f64::INFINITY, f64::min);
             let max = latencies.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-            results.push((node.provider.clone(), node.aura.clone(), min, avg, max, latencies.len()));
+            results.push((
+                node.provider.clone(),
+                node.aura.clone(),
+                min,
+                avg,
+                max,
+                latencies.len(),
+            ));
         } else {
             results.push((node.provider.clone(), node.aura.clone(), 0.0, 0.0, 0.0, 0));
         }
@@ -997,7 +1119,12 @@ fn cmd_upstreams(state: &AppState) -> String {
         let lat = node.latency_ms.load(Ordering::Relaxed);
         out.push_str(&format!(
             "  #{:<3} {:<24} {:<10} {:<12} {:<10} {}\n",
-            idx + 1, node.provider, node.aura, lat, failures, healthy
+            idx + 1,
+            node.provider,
+            node.aura,
+            lat,
+            failures,
+            healthy
         ));
     }
 
@@ -1026,7 +1153,10 @@ async fn cmd_dnssec(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
         );
     }
 
-    ("Usage: dnssec status | dnssec test <domain>".into(), "error".into())
+    (
+        "Usage: dnssec status | dnssec test <domain>".into(),
+        "error".into(),
+    )
 }
 
 async fn cmd_ai(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
@@ -1036,7 +1166,8 @@ async fn cmd_ai(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
         return (
             format!(
                 "── [ AI THREAT BRAIN TELEMETRY ] ───────────────────────────────\nMemory Footprint:  {} KB\nRecent Decisions:  {} logged\nMarkov Baselines:  Active (3-gram frequency matrix)\nEntropy Threshold: Fast Shannon calculation with dynamic variance",
-                mem / 1024, decisions.len()
+                mem / 1024,
+                decisions.len()
             ),
             "ok".into(),
         );
@@ -1044,10 +1175,15 @@ async fn cmd_ai(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
 
     match args[0].to_lowercase().as_str() {
         "test" => {
-            let domain = match args.get(1) {
-                Some(d) => d.trim_end_matches('.').to_lowercase(),
-                None => return ("Usage: ai test <domain>\nExample: ai test login-secure-verification.xyz".into(), "error".into()),
-            };
+            let domain =
+                match args.get(1) {
+                    Some(d) => d.trim_end_matches('.').to_lowercase(),
+                    None => return (
+                        "Usage: ai test <domain>\nExample: ai test login-secure-verification.xyz"
+                            .into(),
+                        "error".into(),
+                    ),
+                };
 
             let entropy = crate::security::heuristics::calculate_entropy(&domain);
             let is_dga = crate::security::heuristics::is_dga_threat(&domain);
@@ -1066,8 +1202,16 @@ async fn cmd_ai(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
                     "── [ AI HEURISTIC EVALUATION: {} ] ─────────────────────\nShannon Entropy:   {:.4} (Normal benign baseline: 2.2 - 3.4)\nDGA Markov Score:  {}\nBrand Lookalike:   {}\nFinal AI Decision: {}",
                     domain,
                     entropy,
-                    if is_dga { "ANOMALOUS (High Risk)" } else { "NORMAL" },
-                    if is_lookalike { "SUSPICIOUS (Target Impersonation Detected)" } else { "None detected" },
+                    if is_dga {
+                        "ANOMALOUS (High Risk)"
+                    } else {
+                        "NORMAL"
+                    },
+                    if is_lookalike {
+                        "SUSPICIOUS (Target Impersonation Detected)"
+                    } else {
+                        "None detected"
+                    },
                     verdict
                 ),
                 "ok".into(),
@@ -1075,19 +1219,34 @@ async fn cmd_ai(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
         }
         "prune" => {
             let count = state.brain.prune_noise();
-            (format!("AI noise memory nodes successfully pruned: {} nodes removed.", count), "ok".into())
+            (
+                format!(
+                    "AI noise memory nodes successfully pruned: {} nodes removed.",
+                    count
+                ),
+                "ok".into(),
+            )
         }
         "reset" => {
             state.brain.clear();
-            ("AI memory and training weights reset to factory default.".into(), "ok".into())
+            (
+                "AI memory and training weights reset to factory default.".into(),
+                "ok".into(),
+            )
         }
-        _ => ("Usage: ai status | ai test <domain> | ai prune | ai reset".into(), "error".into()),
+        _ => (
+            "Usage: ai status | ai test <domain> | ai prune | ai reset".into(),
+            "error".into(),
+        ),
     }
 }
 
 async fn cmd_block(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
     if args.is_empty() {
-        return ("Usage: block <domain> [--reason \"...\"] | block list [page]".into(), "error".into());
+        return (
+            "Usage: block <domain> [--reason \"...\"] | block list [page]".into(),
+            "error".into(),
+        );
     }
 
     if args[0].eq_ignore_ascii_case("list") {
@@ -1099,7 +1258,9 @@ async fn cmd_block(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
 
         let mut out = format!(
             "── [ BLOCKLIST ENTRIES ({}) - PAGE {} OF {} ] ────────────────\n",
-            count, page, total_pages.max(1)
+            count,
+            page,
+            total_pages.max(1)
         );
 
         let skip = (page - 1) * per_page;
@@ -1142,7 +1303,10 @@ async fn cmd_block(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
     state.threat_bloom.write().insert(&domain);
 
     (
-        format!("Successfully blocked domain '{}' (Reason: {})", domain, reason),
+        format!(
+            "Successfully blocked domain '{}' (Reason: {})",
+            domain, reason
+        ),
         "ok".into(),
     )
 }
@@ -1154,20 +1318,32 @@ async fn cmd_unblock(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
     let domain = args[0].trim_end_matches('.').to_lowercase();
     let removed = state.custom_blocklist.write().remove(&domain).is_some();
     if removed {
-        (format!("Domain '{}' removed from blocklist.", domain), "ok".into())
+        (
+            format!("Domain '{}' removed from blocklist.", domain),
+            "ok".into(),
+        )
     } else {
-        (format!("Domain '{}' was not in the custom blocklist.", domain), "error".into())
+        (
+            format!("Domain '{}' was not in the custom blocklist.", domain),
+            "error".into(),
+        )
     }
 }
 
 async fn cmd_whitelist(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
     if args.is_empty() {
-        return ("Usage: whitelist <domain> | whitelist list".into(), "error".into());
+        return (
+            "Usage: whitelist <domain> | whitelist list".into(),
+            "error".into(),
+        );
     }
 
     if args[0].eq_ignore_ascii_case("list") {
         let wl = state.custom_whitelist.read();
-        let mut out = format!("── [ WHITELISTED DOMAINS ({}) ] ─────────────────────────────\n", wl.len());
+        let mut out = format!(
+            "── [ WHITELISTED DOMAINS ({}) ] ─────────────────────────────\n",
+            wl.len()
+        );
         for (idx, dom) in wl.iter().enumerate() {
             out.push_str(&format!("  [{}] {}\n", idx + 1, dom));
         }
@@ -1177,7 +1353,10 @@ async fn cmd_whitelist(state: &Arc<AppState>, args: &[&str]) -> (String, String)
     let domain = args[0].trim_end_matches('.').to_lowercase();
     state.custom_whitelist.write().insert(domain.clone());
     state.whitelist_exact.write().insert(domain.clone());
-    (format!("Domain '{}' added to whitelist bypass.", domain), "ok".into())
+    (
+        format!("Domain '{}' added to whitelist bypass.", domain),
+        "ok".into(),
+    )
 }
 
 async fn cmd_unwhitelist(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
@@ -1188,12 +1367,17 @@ async fn cmd_unwhitelist(state: &Arc<AppState>, args: &[&str]) -> (String, Strin
     let removed = state.custom_whitelist.write().remove(&domain);
     state.whitelist_exact.write().remove(&domain);
     if removed {
-        (format!("Domain '{}' removed from whitelist.", domain), "ok".into())
+        (
+            format!("Domain '{}' removed from whitelist.", domain),
+            "ok".into(),
+        )
     } else {
-        (format!("Domain '{}' was not found in whitelist.", domain), "error".into())
+        (
+            format!("Domain '{}' was not found in whitelist.", domain),
+            "error".into(),
+        )
     }
 }
-
 
 async fn cmd_feed(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
     if args.is_empty() || args[0].eq_ignore_ascii_case("status") {
@@ -1223,7 +1407,11 @@ async fn cmd_cache(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
         let count = state.cache.entry_count();
         let hits = state.metrics.cache_hits.load(Ordering::Relaxed);
         let total = state.metrics.requests.load(Ordering::Relaxed);
-        let hit_rate = if total > 0 { (hits as f64 / total as f64) * 100.0 } else { 0.0 };
+        let hit_rate = if total > 0 {
+            (hits as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
 
         return (
             format!(
@@ -1250,15 +1438,22 @@ async fn cmd_cache(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
                 (
                     format!(
                         "Domain: {}\nCached: YES\nWire Size: {} bytes",
-                        domain, entry.len()
+                        domain,
+                        entry.len()
                     ),
                     "ok".into(),
                 )
             } else {
-                (format!("Domain '{}' is not present in the local cache.", domain), "ok".into())
+                (
+                    format!("Domain '{}' is not present in the local cache.", domain),
+                    "ok".into(),
+                )
             }
         }
-        _ => ("Usage: cache stats | cache inspect <domain> | cache flush".into(), "error".into()),
+        _ => (
+            "Usage: cache stats | cache inspect <domain> | cache flush".into(),
+            "error".into(),
+        ),
     }
 }
 
@@ -1292,23 +1487,36 @@ fn cmd_rate_limit(state: &AppState, args: &[&str]) -> (String, String) {
             return (
                 format!(
                     "── [ RATE LIMIT INSPECTION: {} ] ────────────────\nCanonical IP:     {}\nSubnet Exemption: {}\nIdentity Bucket:  60 tokens max, 20 tok/sec refill\nIP Ceiling Bucket:500 tokens max, 200 tok/sec refill\nStatus:           NORMAL",
-                    ip, ip.to_canonical(), if is_exempt { "EXEMPT (Private LAN / Loopback)" } else { "ENFORCED (Public peer)" }
+                    ip,
+                    ip.to_canonical(),
+                    if is_exempt {
+                        "EXEMPT (Private LAN / Loopback)"
+                    } else {
+                        "ENFORCED (Public peer)"
+                    }
                 ),
                 "ok".into(),
             );
         } else {
-            return (format!("Invalid IP address format: '{}'", ip_str), "error".into());
+            return (
+                format!("Invalid IP address format: '{}'", ip_str),
+                "error".into(),
+            );
         }
     }
 
-    ("Usage: rate-limit status | rate-limit inspect <ip>".into(), "error".into())
+    (
+        "Usage: rate-limit status | rate-limit inspect <ip>".into(),
+        "error".into(),
+    )
 }
 
 fn cmd_sockets(state: &AppState) -> String {
     let cfg = &state.config;
     let m = &state.metrics;
 
-    let mut out = String::from("── [ ACTIVE NETWORK SOCKET LISTENERS ] ─────────────────────────\n");
+    let mut out =
+        String::from("── [ ACTIVE NETWORK SOCKET LISTENERS ] ─────────────────────────\n");
 
     // Plain UDP / TCP 53
     if cfg.plain53_enabled {
@@ -1377,7 +1585,13 @@ fn cmd_mode(state: &AppState, args: &[&str]) -> (String, String) {
         } else {
             "public"
         };
-        return (format!("Current DNS Mode: {} (Use 'mode public' or 'mode private' to change)", mode), "ok".into());
+        return (
+            format!(
+                "Current DNS Mode: {} (Use 'mode public' or 'mode private' to change)",
+                mode
+            ),
+            "ok".into(),
+        );
     }
 
     match args[0].to_lowercase().as_str() {
@@ -1387,7 +1601,10 @@ fn cmd_mode(state: &AppState, args: &[&str]) -> (String, String) {
         }
         "private" => {
             state.is_private_mode.store(true, Ordering::Relaxed);
-            ("DNS Mode set to: PRIVATE (Authentication token required)".into(), "ok".into())
+            (
+                "DNS Mode set to: PRIVATE (Authentication token required)".into(),
+                "ok".into(),
+            )
         }
         _ => ("Usage: mode [public | private]".into(), "error".into()),
     }
@@ -1397,7 +1614,10 @@ fn cmd_block_mode(state: &AppState, args: &[&str]) -> (String, String) {
     if args.is_empty() {
         let active = state.blocking_enabled.load(Ordering::Relaxed);
         return (
-            format!("Threat Blocking is currently: {}", if active { "ENABLED" } else { "DISABLED" }),
+            format!(
+                "Threat Blocking is currently: {}",
+                if active { "ENABLED" } else { "DISABLED" }
+            ),
             "ok".into(),
         );
     }
@@ -1409,7 +1629,11 @@ fn cmd_block_mode(state: &AppState, args: &[&str]) -> (String, String) {
         }
         "off" | "disable" | "0" => {
             state.blocking_enabled.store(false, Ordering::Relaxed);
-            ("Threat Blocking is now DISABLED (Queries will pass through without filtering).".into(), "ok".into())
+            (
+                "Threat Blocking is now DISABLED (Queries will pass through without filtering)."
+                    .into(),
+                "ok".into(),
+            )
         }
         _ => ("Usage: block-mode [on | off]".into(), "error".into()),
     }
@@ -1425,7 +1649,11 @@ fn cmd_token(state: &AppState, args: &[&str]) -> (String, String) {
 
     if args[0].eq_ignore_ascii_case("create") {
         let name = args.get(1).copied().unwrap_or("device-1");
-        let token = crate::security::auth::generate_hmac_token(&state.config.dns_token_secret, name, 86400 * 365);
+        let token = crate::security::auth::generate_hmac_token(
+            &state.config.dns_token_secret,
+            name,
+            86400 * 365,
+        );
         return (
             format!(
                 "Generated Endpoint Token for '{}':\n\nToken: {}\nDoH Path: /dns-query/{}",
@@ -1435,7 +1663,10 @@ fn cmd_token(state: &AppState, args: &[&str]) -> (String, String) {
         );
     }
 
-    ("Usage: token list | token create <device-name>".into(), "error".into())
+    (
+        "Usage: token list | token create <device-name>".into(),
+        "error".into(),
+    )
 }
 
 fn cmd_cert(state: &AppState) -> String {
@@ -1456,7 +1687,11 @@ fn cmd_cert(state: &AppState) -> String {
 }
 
 fn cmd_logs(state: &AppState, args: &[&str]) -> String {
-    let count: usize = args.first().and_then(|c| c.parse().ok()).unwrap_or(10).clamp(1, 50);
+    let count: usize = args
+        .first()
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(10)
+        .clamp(1, 50);
     let filter = args.get(1).copied().map(|s| s.to_lowercase());
 
     let logs = state.recent_queries.read();
@@ -1501,7 +1736,11 @@ fn cmd_logs(state: &AppState, args: &[&str]) -> String {
             log.client,
             log.proto,
             log.qtype,
-            if log.domain.len() > 32 { format!("{}...", &log.domain[..29]) } else { log.domain.clone() },
+            if log.domain.len() > 32 {
+                format!("{}...", &log.domain[..29])
+            } else {
+                log.domain.clone()
+            },
             log.status,
             format!("{}ms", log.lat),
             log.reason
@@ -1617,7 +1856,8 @@ mod tests {
         assert!(out.contains("Shannon Entropy:"));
 
         // Test block & unblock
-        let (out, status) = execute_command(&state, "block malicious.org --reason MaliciousSite").await;
+        let (out, status) =
+            execute_command(&state, "block malicious.org --reason MaliciousSite").await;
         assert_eq!(status, "ok");
         assert!(out.contains("Successfully blocked"));
         assert!(state.custom_blocklist.read().contains_key("malicious.org"));
@@ -1664,11 +1904,15 @@ mod tests {
         let state = Arc::new(AppState::new(mock_config()));
 
         // Generate regular view-only HMAC token (not DNS_MASTER_KEY)
-        let view_token = crate::security::auth::generate_hmac_token(&state.config.dns_token_secret, "/", 3600);
+        let view_token =
+            crate::security::auth::generate_hmac_token(&state.config.dns_token_secret, "/", 3600);
 
         // 1. Test handle_console_commands with view token
         let mut headers = HeaderMap::new();
-        headers.insert(header::AUTHORIZATION, format!("Bearer {}", view_token).parse().unwrap());
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {}", view_token).parse().unwrap(),
+        );
         let res = handle_console_commands(&state, None, &headers).await;
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
 
@@ -1683,9 +1927,13 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
 
         // 4. Test that even a generated session token is forbidden from execution (only DNS_MASTER_KEY is Admin)
-        let generated_token = crate::security::auth::generate_admin_token(&state.config.dns_token_secret, 3600);
+        let generated_token =
+            crate::security::auth::generate_admin_token(&state.config.dns_token_secret, 3600);
         let mut gen_headers = HeaderMap::new();
-        gen_headers.insert(header::AUTHORIZATION, format!("Bearer {}", generated_token).parse().unwrap());
+        gen_headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {}", generated_token).parse().unwrap(),
+        );
         let res = handle_console_exec(&state, None, &gen_headers, "stats").await;
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
     }
@@ -1697,7 +1945,10 @@ mod tests {
         // Test software list & versions alias
         let (out, status) = execute_command(&state, "software list").await;
         assert_eq!(status, "ok");
-        assert!(out.contains("Active Running Target : /amardns") || out.contains("No software binaries"));
+        assert!(
+            out.contains("Active Running Target : /amardns")
+                || out.contains("No software binaries")
+        );
 
         let (out_alias, status_alias) = execute_command(&state, "versions").await;
         assert_eq!(status_alias, "ok");

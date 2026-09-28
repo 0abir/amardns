@@ -726,7 +726,11 @@ struct RawResourceRecord {
 /// Extracts all resource records of `covered_type` whose owner name (case-insensitively)
 /// matches `signer_name` from the answer, authority, and additional sections of a DNS wire packet.
 /// Returns them as raw RR structs for canonical ordering (RFC 4034 §6.3).
-fn extract_covered_rrset(wire: &[u8], covered_type: u16, owner_name: &str) -> Vec<RawResourceRecord> {
+fn extract_covered_rrset(
+    wire: &[u8],
+    covered_type: u16,
+    owner_name: &str,
+) -> Vec<RawResourceRecord> {
     let mut records = Vec::new();
 
     if wire.len() < 12 {
@@ -769,9 +773,9 @@ fn extract_covered_rrset(wire: &[u8], covered_type: u16, owner_name: &str) -> Ve
             break;
         }
 
-        let rtype  = u16::from_be_bytes([wire[pos],     wire[pos + 1]]);
+        let rtype = u16::from_be_bytes([wire[pos], wire[pos + 1]]);
         let rclass = u16::from_be_bytes([wire[pos + 2], wire[pos + 3]]);
-        let rdlen  = u16::from_be_bytes([wire[pos + 8], wire[pos + 9]]) as usize;
+        let rdlen = u16::from_be_bytes([wire[pos + 8], wire[pos + 9]]) as usize;
         pos += 10;
 
         if pos + rdlen > wire.len() {
@@ -783,7 +787,9 @@ fn extract_covered_rrset(wire: &[u8], covered_type: u16, owner_name: &str) -> Ve
 
         // Include only RRs of the covered type whose owner matches (case-insensitive)
         if rtype == covered_type
-            && rr_name.trim_end_matches('.').eq_ignore_ascii_case(owner_name.trim_end_matches('.'))
+            && rr_name
+                .trim_end_matches('.')
+                .eq_ignore_ascii_case(owner_name.trim_end_matches('.'))
         {
             records.push(RawResourceRecord {
                 owner_wire: canonical_owner.clone(),
@@ -808,10 +814,7 @@ fn extract_covered_rrset(wire: &[u8], covered_type: u16, owner_name: &str) -> Ve
 ///        canonical(owner_name) || TYPE(2) || CLASS(2) || original_TTL(4) || RDLENGTH(2) || RDATA
 ///
 /// This is the data that was actually signed by the zone's private key.
-fn build_rrsig_signed_data(
-    rrsig: &RrsigRecord,
-    rrset: &[RawResourceRecord],
-) -> Vec<u8> {
+fn build_rrsig_signed_data(rrsig: &RrsigRecord, rrset: &[RawResourceRecord]) -> Vec<u8> {
     // RRSIG RDATA header: type_covered(2) + algorithm(1) + labels(1) + original_ttl(4)
     //                    + sig_expiration(4) + sig_inception(4) + key_tag(2) = 18 bytes
     // (signer name is appended separately in canonical wire form)
@@ -833,12 +836,12 @@ fn build_rrsig_signed_data(
 
     // Each RR in the covered RRset, in canonical order
     for rr in rrset {
-        out.extend_from_slice(&rr.owner_wire);                          // owner name (canonical)
-        out.extend_from_slice(&rr.rtype.to_be_bytes());                 // TYPE
-        out.extend_from_slice(&rr.rclass.to_be_bytes());                // CLASS
-        out.extend_from_slice(&orig_ttl_bytes);                         // original TTL (from RRSIG)
-        out.extend_from_slice(&(rr.rdata.len() as u16).to_be_bytes());  // RDLENGTH
-        out.extend_from_slice(&rr.rdata);                               // RDATA
+        out.extend_from_slice(&rr.owner_wire); // owner name (canonical)
+        out.extend_from_slice(&rr.rtype.to_be_bytes()); // TYPE
+        out.extend_from_slice(&rr.rclass.to_be_bytes()); // CLASS
+        out.extend_from_slice(&orig_ttl_bytes); // original TTL (from RRSIG)
+        out.extend_from_slice(&(rr.rdata.len() as u16).to_be_bytes()); // RDLENGTH
+        out.extend_from_slice(&rr.rdata); // RDATA
     }
 
     out
@@ -1633,8 +1636,7 @@ pub fn validate_dnssec(wire: &[u8], now_epoch: Option<u64>) -> DnssecValidationD
                     // Fallback for self-referential DNSKEY RRsets and any edge case where the
                     // covered records could not be located in this single response packet.
                     // We still verify the header/signer structure to catch obviously bad sigs.
-                    let mut sd =
-                        Vec::with_capacity(rrsig.rdata_header_bytes.len() + 64);
+                    let mut sd = Vec::with_capacity(rrsig.rdata_header_bytes.len() + 64);
                     sd.extend_from_slice(&rrsig.rdata_header_bytes);
                     sd.extend_from_slice(&canonical_wire_name(&rrsig.signer_name));
                     sd
@@ -2051,11 +2053,15 @@ mod tests {
         assert_eq!(canonical_wire_name(""), vec![0]);
         assert_eq!(
             canonical_wire_name("example.com"),
-            vec![7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0]
+            vec![
+                7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0
+            ]
         );
         assert_eq!(
             canonical_wire_name("ExAmPlE.CoM."),
-            vec![7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0]
+            vec![
+                7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0
+            ]
         );
         assert_eq!(
             canonical_wire_name("a.b.c"),
@@ -2065,8 +2071,10 @@ mod tests {
 
     #[test]
     fn test_build_rrsig_signed_data_rfc4034() {
-        let dummy_header = vec![0x00, 0x01, 0x0d, 0x02, 0x00, 0x00, 0x0e, 0x10,
-                                0x66, 0x00, 0x00, 0x00, 0x65, 0x00, 0x00, 0x00, 0x12, 0x34];
+        let dummy_header = vec![
+            0x00, 0x01, 0x0d, 0x02, 0x00, 0x00, 0x0e, 0x10, 0x66, 0x00, 0x00, 0x00, 0x65, 0x00,
+            0x00, 0x00, 0x12, 0x34,
+        ];
         let rrsig = RrsigRecord {
             name: "example.com".to_string(),
             type_covered: 1, // A
@@ -2083,8 +2091,8 @@ mod tests {
 
         let rr = RawResourceRecord {
             owner_wire: canonical_wire_name("example.com"),
-            rtype: 1, // A
-            rclass: 1, // IN
+            rtype: 1,                      // A
+            rclass: 1,                     // IN
             rdata: vec![93, 184, 216, 34], // 93.184.216.34
         };
 
@@ -2104,16 +2112,28 @@ mod tests {
         // Build a mock DNS wire response with 1 question and 2 A records for example.com
         let mut wire = Vec::new();
         // Header: ID=0x1234, Flags=0x8180 (response, no error), QD=1, AN=2, NS=0, AR=0
-        wire.extend_from_slice(&[0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00]);
+        wire.extend_from_slice(&[
+            0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00,
+        ]);
         // Question: example.com, type A (1), class IN (1)
-        wire.extend_from_slice(&[0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00]);
+        wire.extend_from_slice(&[
+            0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00,
+        ]);
         wire.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
         // Answer 1: example.com, type A, class IN, TTL 300, rdlen 4, IP 1.2.3.4
-        wire.extend_from_slice(&[0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00]);
-        wire.extend_from_slice(&[0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x04, 1, 2, 3, 4]);
+        wire.extend_from_slice(&[
+            0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00,
+        ]);
+        wire.extend_from_slice(&[
+            0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x04, 1, 2, 3, 4,
+        ]);
         // Answer 2: example.com, type A, class IN, TTL 300, rdlen 4, IP 1.2.3.5
-        wire.extend_from_slice(&[0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00]);
-        wire.extend_from_slice(&[0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x04, 1, 2, 3, 5]);
+        wire.extend_from_slice(&[
+            0x07, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 0x03, b'c', b'o', b'm', 0x00,
+        ]);
+        wire.extend_from_slice(&[
+            0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x04, 1, 2, 3, 5,
+        ]);
 
         let rrset = extract_covered_rrset(&wire, 1, "example.com");
         assert_eq!(rrset.len(), 2);

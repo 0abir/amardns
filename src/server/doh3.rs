@@ -65,11 +65,7 @@ pub async fn start_doh3_server(
     } else {
         socket2::Domain::IPV4
     };
-    let socket = socket2::Socket::new(
-        domain,
-        socket2::Type::DGRAM,
-        Some(socket2::Protocol::UDP),
-    )?;
+    let socket = socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
 
     if bind_addr.is_ipv6() {
         let _ = socket.set_only_v6(false);
@@ -150,7 +146,10 @@ async fn handle_doh3_connection(state: Arc<AppState>, conn: quinn::Connection) {
     let mut server = match h3::server::Connection::new(h3_conn).await {
         Ok(s) => s,
         Err(e) => {
-            debug!("[doh3] H3 connection initialization error from {}: {}", client_ip, e);
+            debug!(
+                "[doh3] H3 connection initialization error from {}: {}",
+                client_ip, e
+            );
             return;
         }
     };
@@ -214,7 +213,8 @@ async fn handle_doh3_request<S>(
             // Read body wire bytes (up to 4096 bytes)
             let mut body = Vec::new();
             while let Ok(Some(mut chunk)) = stream.recv_data().await {
-                let to_read = std::cmp::min(chunk.remaining(), 4096_usize.saturating_sub(body.len()));
+                let to_read =
+                    std::cmp::min(chunk.remaining(), 4096_usize.saturating_sub(body.len()));
                 body.extend_from_slice(&chunk.copy_to_bytes(to_read));
                 if body.len() >= 4096 {
                     break;
@@ -248,7 +248,9 @@ async fn handle_doh3_request<S>(
                 .body(())
             {
                 let _ = stream.send_response(resp).await;
-                let _ = stream.send_data(Bytes::from("Missing or empty DNS query wire payload\n")).await;
+                let _ = stream
+                    .send_data(Bytes::from("Missing or empty DNS query wire payload\n"))
+                    .await;
                 let _ = stream.finish().await;
             }
             return;
@@ -288,7 +290,9 @@ async fn handle_doh3_request<S>(
             .body(())
         {
             let _ = stream.send_response(resp).await;
-            let _ = stream.send_data(Bytes::from("AmarDNS HTTP/3 Edge (RFC 9114)\n")).await;
+            let _ = stream
+                .send_data(Bytes::from("AmarDNS HTTP/3 Edge (RFC 9114)\n"))
+                .await;
             let _ = stream.finish().await;
         }
     }
