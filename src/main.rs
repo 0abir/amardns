@@ -245,26 +245,7 @@ fn write_cron_stamp(path: &str) {
 
 async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Load Configuration first
-    let mut config = Config::from_env();
-    let was_master_key_generated = if config.dns_master_key.trim().is_empty()
-        || config.dns_master_key.trim().starts_with("CHANGE_ME")
-    {
-        let rng = ring::rand::SystemRandom::new();
-        let mut key_bytes = [0u8; 32];
-        let fallback_key = if ring::rand::SecureRandom::fill(&rng, &mut key_bytes).is_ok() {
-            format!("amk_{}", key_bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>())
-        } else {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            format!("amk_sec_{:032x}", nanos)
-        };
-        config.dns_master_key = fallback_key;
-        true
-    } else {
-        false
-    };
+    let config = Config::from_env();
     crate::telemetry::metrics::init_memory_config(config.base_mem, config.total_mem_cap);
 
     // 2. Initialize structured logging
@@ -306,16 +287,12 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Startup security validation: check master key and token secrets
-    if was_master_key_generated {
-        tracing::warn!(
-            "[startup] NOTICE: DNS_MASTER_KEY was unset or default. Generated secure ephemeral master key: '{}'. Persist DNS_MASTER_KEY in environment for production.",
-            config.dns_master_key
-        );
-    } else {
-        tracing::info!(
-            "[startup] Configured DNS_MASTER_KEY active ({} characters).",
-            config.dns_master_key.len()
+    // Startup security validation: fail fast if secrets are default or missing
+    let master_key = config.dns_master_key.trim().to_string();
+    if master_key.is_empty() || master_key.starts_with("CHANGE_ME") {
+        panic!(
+            "[startup] FATAL: DNS_MASTER_KEY is not set or is still the default value. \
+                Set a strong random key before running in production."
         );
     }
     if config.dns_token_secret.trim().is_empty()
@@ -892,29 +869,10 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     let host_ip: std::net::IpAddr = config
         .host
         .parse()
-        .unwrap_or_else(|_| {
-            tracing::warn!(
-                "[doh] Invalid HOST '{}', falling back to 0.0.0.0",
-                config.host
-            );
-            std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
-        });
+        .unwrap_or(std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED));
     let addr = SocketAddr::new(host_ip, config.port);
 
-    let listener = match server::dot::create_dual_stack_tcp_listener(addr) {
-        Ok(l) => l,
-        Err(e) => {
-            if e.kind() == std::io::ErrorKind::PermissionDenied {
-                error!(
-                    "[startup] FATAL: Permission denied binding to {}. Ports below 1024 are privileged in Linux. Run the container as root, grant CAP_NET_BIND_SERVICE capability, or set PORT to an unprivileged port (e.g. PORT=8080).",
-                    addr
-                );
-            } else {
-                error!("[startup] FATAL: Failed to bind DoH listener to {}: {}", addr, e);
-            }
-            return Err(e.into());
-        }
-    };
+    let listener = server::dot::create_dual_stack_tcp_listener(addr)?;
     if let Some(tls_cfg) = doh_tls_config {
         info!(
             "[doh] AmarDNS DoH server listening on https://{} (Native TLS Termination)",
