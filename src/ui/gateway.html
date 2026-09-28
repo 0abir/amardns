@@ -454,8 +454,10 @@ h1 {
       try {
         sessionStorage.setItem('amardns_token', val);
         sessionStorage.setItem('amardns_key', val);
+        document.cookie = 'amardns_token=' + encodeURIComponent(val) + '; path=/; max-age=604800; SameSite=Lax';
+        document.cookie = 'amardns_key=' + encodeURIComponent(val) + '; path=/; max-age=604800; SameSite=Lax';
       } catch(_) {}
-      window.location.href = '/dashboard';
+      window.location.href = '/' + encodeURIComponent(val);
     });
   }
 })();

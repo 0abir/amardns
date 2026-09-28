@@ -18,6 +18,8 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(health_handler))
         .route("/favicon.ico", get(favicon_handler))
+        .route("/dashboard", get(dashboard_handler))
+        .route("/dashboard/", get(dashboard_handler))
         .route("/api/status", get(status_no_key_handler))
         .route("/api/status/", get(status_no_key_handler))
         .route("/api/intelligence", get(status_no_key_handler))
@@ -404,7 +406,16 @@ pub async fn dashboard_handler(State(state): State<Arc<AppState>>, headers: Head
                 3600,
             )
         };
-        Html(render_dashboard(&view_token, &fly_machine_id, &fly_region)).into_response()
+        let cookie = format!("amardns_token={}; Path=/; Max-Age=604800; SameSite=Lax", view_token);
+        (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                (header::SET_COOKIE, cookie.as_str()),
+            ],
+            render_dashboard(&view_token, &fly_machine_id, &fly_region),
+        )
+            .into_response()
     } else {
         Html(GATEWAY_HTML).into_response()
     }
@@ -445,7 +456,16 @@ pub async fn status_handler(
         if auth.is_view_or_admin() {
             let fly_machine_id = std::env::var("FLY_MACHINE_ID").unwrap_or_default();
             let fly_region = std::env::var("FLY_REGION").unwrap_or_else(|_| "sin".to_string());
-            return Html(render_dashboard(&key, &fly_machine_id, &fly_region)).into_response();
+            let cookie = format!("amardns_token={}; Path=/; Max-Age=604800; SameSite=Lax", key);
+            return (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                    (header::SET_COOKIE, cookie.as_str()),
+                ],
+                render_dashboard(&key, &fly_machine_id, &fly_region),
+            )
+                .into_response();
         } else {
             return Html(GATEWAY_HTML).into_response();
         }

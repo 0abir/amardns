@@ -84,6 +84,29 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
+/// Helper to decode percent-encoded strings (e.g. cookie values).
+fn url_decode(s: &str) -> String {
+    let mut out = Vec::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(b) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        } else if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
+}
+
 /// Generates a signed view token matching Node's generateToken function.
 pub fn generate_hmac_token(secret: &str, target_path: &str, ttl_secs: u64) -> String {
     let now = SystemTime::now()
@@ -322,6 +345,20 @@ pub fn check_auth(
                 let v = val.trim();
                 if !v.is_empty() {
                     return Some(v.to_string());
+                }
+            }
+        }
+        if let Some(cookie_hdr) = headers.get(header::COOKIE).and_then(|h| h.to_str().ok()) {
+            for part in cookie_hdr.split(';') {
+                let mut kv = part.splitn(2, '=');
+                if let (Some(k), Some(v)) = (kv.next(), kv.next()) {
+                    let k = k.trim();
+                    let v = v.trim();
+                    if (k == "amardns_token" || k == "amardns_key" || k == "token" || k == "key")
+                        && !v.is_empty()
+                    {
+                        return Some(url_decode(v));
+                    }
                 }
             }
         }
@@ -619,6 +656,37 @@ mod tests {
         assert_eq!(
             check_auth(&state, Some(&admin_token), &HeaderMap::new(), "/api/console/exec"),
             AuthRole::None
+        );
+    }
+
+    #[test]
+    fn test_cookie_auth() {
+        let mut config = Config::from_env();
+        config.dns_master_key = "secret_master_key".to_string();
+        config.dns_token_secret = "secret_token_key".to_string();
+        let state = AppState::new(config);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            "session=abc; amardns_token=secret_master_key; other=xyz".parse().unwrap(),
+        );
+
+        assert_eq!(
+            check_auth(&state, None, &headers, "/dashboard"),
+            AuthRole::Admin
+        );
+
+        let mut headers_token = HeaderMap::new();
+        let view_token = generate_hmac_token(&state.config.dns_token_secret, "/dashboard", 3600);
+        headers_token.insert(
+            header::COOKIE,
+            format!("amardns_key={}", view_token).parse().unwrap(),
+        );
+
+        assert_eq!(
+            check_auth(&state, None, &headers_token, "/dashboard"),
+            AuthRole::View
         );
     }
 
