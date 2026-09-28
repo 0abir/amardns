@@ -131,8 +131,8 @@ pub fn generate_hmac_token(secret: &str, target_path: &str, ttl_secs: u64) -> St
     format!("{}{}{}", ts_hex, ttl_hex, sig_hex)
 }
 
-/// Generates a signed, short-lived admin session token.
-/// Allows admin authentication without exposing the permanent DNS_MASTER_KEY in client DOM/transports.
+/// Generates a signed, short-lived admin session token for testing.
+#[allow(dead_code)]
 pub fn generate_admin_token(secret: &str, ttl_secs: u64) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -153,6 +153,7 @@ pub fn generate_admin_token(secret: &str, ttl_secs: u64) -> String {
 }
 
 /// Verifies an admin session token against the secret and expiration window.
+#[allow(dead_code)]
 pub fn verify_admin_token(token: &str, secret: &str) -> bool {
     if !is_token_well_formed(token) {
         return false;
@@ -275,7 +276,55 @@ pub fn verify_hmac_token(token: &str, secret: &str, path: &str) -> bool {
         return true;
     }
 
+    // 4. Any legacy or session tokens are strictly downgraded to VIEW_ONLY
+    let admin_msg = format!("{}ADMIN_SESSION", prefix);
+    if hmac::verify(&key, admin_msg.as_bytes(), &sig_bytes).is_ok() {
+        return true;
+    }
+
     false
+}
+
+/// Extracts candidate authentication token/key from path parameter, authorization header, custom headers, or cookies.
+pub fn extract_auth_candidate(key_param: Option<&str>, headers: &HeaderMap) -> Option<String> {
+    if let Some(p) = key_param {
+        let p_clean = p.trim();
+        if !p_clean.is_empty() && p_clean != "dashboard" && p_clean != "status" {
+            return Some(p_clean.to_string());
+        }
+    }
+    if let Some(auth_hdr) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+    {
+        let token = auth_hdr.strip_prefix("Bearer ").unwrap_or(auth_hdr).trim();
+        if !token.is_empty() {
+            return Some(token.to_string());
+        }
+    }
+    for header_name in &["x-auth-key", "x-master-key", "x-api-key"] {
+        if let Some(val) = headers.get(*header_name).and_then(|h| h.to_str().ok()) {
+            let v = val.trim();
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    if let Some(cookie_hdr) = headers.get(header::COOKIE).and_then(|h| h.to_str().ok()) {
+        for part in cookie_hdr.split(';') {
+            let mut kv = part.splitn(2, '=');
+            if let (Some(k), Some(v)) = (kv.next(), kv.next()) {
+                let k = k.trim();
+                let v = v.trim();
+                if (k == "amardns_token" || k == "amardns_key" || k == "token" || k == "key")
+                    && !v.is_empty()
+                {
+                    return Some(url_decode(v));
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Extracts authentication credentials and evaluates the role.
@@ -315,75 +364,19 @@ pub fn check_auth(
     }
 
     // 2. Extract candidate key/token
-    let candidate = if let Some(p) = key_param {
-        let p_clean = p.trim();
-        if !p_clean.is_empty() && p_clean != "dashboard" && p_clean != "status" {
-            tracing::warn!(
-                "[auth-deprecate] Authentication via URL path parameter ('{}') is deprecated for security. Use 'Authorization: Bearer <token>' or 'x-auth-key' headers.",
-                path
-            );
-            Some(p_clean.to_string())
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let candidate = candidate.or_else(|| {
-        if let Some(auth_hdr) = headers
-            .get(header::AUTHORIZATION)
-            .and_then(|h| h.to_str().ok())
-        {
-            let token = auth_hdr.strip_prefix("Bearer ").unwrap_or(auth_hdr).trim();
-            if !token.is_empty() {
-                return Some(token.to_string());
-            }
-        }
-        for header_name in &["x-auth-key", "x-master-key", "x-api-key"] {
-            if let Some(val) = headers.get(*header_name).and_then(|h| h.to_str().ok()) {
-                let v = val.trim();
-                if !v.is_empty() {
-                    return Some(v.to_string());
-                }
-            }
-        }
-        if let Some(cookie_hdr) = headers.get(header::COOKIE).and_then(|h| h.to_str().ok()) {
-            for part in cookie_hdr.split(';') {
-                let mut kv = part.splitn(2, '=');
-                if let (Some(k), Some(v)) = (kv.next(), kv.next()) {
-                    let k = k.trim();
-                    let v = v.trim();
-                    if (k == "amardns_token" || k == "amardns_key" || k == "token" || k == "key")
-                        && !v.is_empty()
-                    {
-                        return Some(url_decode(v));
-                    }
-                }
-            }
-        }
-        None
-    });
-
-    let token = match candidate {
+    let token = match extract_auth_candidate(key_param, headers) {
         Some(t) => t,
         None => return AuthRole::None,
     };
 
-    // 3. Admin Authentication: Compare with DNS_MASTER_KEY or verify signed ADMIN_SESSION token
+    // 3. Admin Authentication: ONLY the literal DNS_MASTER_KEY holder has supreme power and admin privileges.
+    // Generated tokens are strictly read-only across the entire site and can NEVER grant Admin access.
     let master_key = &state.config.dns_master_key;
     if !master_key.is_empty() && constant_time_eq_str(&token, master_key) {
         return AuthRole::Admin;
     }
-    if verify_admin_token(&token, &state.config.dns_token_secret) {
-        let ts_hex = &token[0..8];
-        let ts = u64::from_str_radix(ts_hex, 16).unwrap_or(0);
-        if !state.is_token_revoked(&token, ts) {
-            return AuthRole::Admin;
-        }
-    }
 
-    // 4. View-Only Authentication: HMAC-signed token only.
+    // 4. View-Only Authentication: HMAC-signed tokens are strictly read-only.
     //    No hardcoded bypass strings — every token must carry a valid signature.
     if verify_hmac_token(&token, &state.config.dns_token_secret, path) {
         let ts_hex = &token[0..8];
@@ -648,14 +641,20 @@ mod tests {
         let admin_token = generate_admin_token(&state.config.dns_token_secret, 3600);
         assert!(verify_admin_token(&admin_token, &state.config.dns_token_secret));
         assert!(!verify_admin_token(&admin_token, "wrong_secret"));
+        // Generated tokens are strictly read-only and must NEVER grant AuthRole::Admin!
         assert_eq!(
             check_auth(&state, Some(&admin_token), &HeaderMap::new(), "/api/console/exec"),
-            AuthRole::Admin
+            AuthRole::View
         );
         state.revoke_token(&admin_token);
         assert_eq!(
             check_auth(&state, Some(&admin_token), &HeaderMap::new(), "/api/console/exec"),
             AuthRole::None
+        );
+        // Only the literal DNS_MASTER_KEY holder has supreme power (AuthRole::Admin)
+        assert_eq!(
+            check_auth(&state, Some("secret_master_key"), &HeaderMap::new(), "/api/console/exec"),
+            AuthRole::Admin
         );
     }
 

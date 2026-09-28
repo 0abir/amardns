@@ -394,26 +394,25 @@ pub async fn dashboard_handler(State(state): State<Arc<AppState>>, headers: Head
     if auth.is_view_or_admin() {
         let fly_machine_id = std::env::var("FLY_MACHINE_ID").unwrap_or_default();
         let fly_region = std::env::var("FLY_REGION").unwrap_or_else(|_| "sin".to_string());
-        let view_token = if auth.is_admin() {
-            crate::security::auth::generate_admin_token(
-                &state.config.dns_token_secret,
-                7200, // 2-hour ephemeral admin session
-            )
+        let active_key = if auth.is_admin() {
+            state.config.dns_master_key.clone()
         } else {
-            crate::security::auth::generate_hmac_token(
-                &state.config.dns_token_secret,
-                "/dashboard",
-                3600,
-            )
+            crate::security::auth::extract_auth_candidate(None, &headers).unwrap_or_else(|| {
+                crate::security::auth::generate_hmac_token(
+                    &state.config.dns_token_secret,
+                    "/dashboard",
+                    3600,
+                )
+            })
         };
-        let cookie = format!("amardns_token={}; Path=/; Max-Age=604800; SameSite=Lax", view_token);
+        let cookie = format!("amardns_token={}; Path=/; Max-Age=604800; SameSite=Lax", active_key);
         (
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, "text/html; charset=utf-8"),
                 (header::SET_COOKIE, cookie.as_str()),
             ],
-            render_dashboard(&view_token, &fly_machine_id, &fly_region),
+            render_dashboard(&active_key, &fly_machine_id, &fly_region),
         )
             .into_response()
     } else {

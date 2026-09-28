@@ -1681,6 +1681,13 @@ mod tests {
         admin_headers.insert(header::AUTHORIZATION, "Bearer secret123".parse().unwrap());
         let res = handle_console_exec(&state, None, &admin_headers, "stats").await;
         assert_eq!(res.status(), StatusCode::OK);
+
+        // 4. Test that even a generated session token is forbidden from execution (only DNS_MASTER_KEY is Admin)
+        let generated_token = crate::security::auth::generate_admin_token(&state.config.dns_token_secret, 3600);
+        let mut gen_headers = HeaderMap::new();
+        gen_headers.insert(header::AUTHORIZATION, format!("Bearer {}", generated_token).parse().unwrap());
+        let res = handle_console_exec(&state, None, &gen_headers, "stats").await;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
