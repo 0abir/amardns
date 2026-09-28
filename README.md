@@ -1,4 +1,4 @@
-# AmarDNS v1.0.3
+# AmarDNS v1.0.27
 
 **Autonomous Zero-GC Edge DNS Security Gateway & Threat Intelligence Engine in Rust**
 
@@ -8,7 +8,7 @@
 [![Security Audit](https://github.com/0abir/amardns/actions/workflows/security-audit.yml/badge.svg)](https://github.com/0abir/amardns/actions/workflows/security-audit.yml)
 [![Fuzzing](https://github.com/0abir/amardns/actions/workflows/fuzz.yml/badge.svg)](https://github.com/0abir/amardns/actions/workflows/fuzz.yml)
 [![Docker](https://github.com/0abir/amardns/actions/workflows/build-and-publish.yml/badge.svg)](https://github.com/0abir/amardns/actions/workflows/build-and-publish.yml)
-[![Memory](https://img.shields.io/badge/Memory-Zero_GC_~12MB-green.svg)](#zero-allocation-memory-architecture)
+[![Memory](https://img.shields.io/badge/Memory-Zero_GC_40MB_Base_200MB_Cap-green.svg)](#zero-allocation-memory-architecture)
 [![Latency](https://img.shields.io/badge/Latency-P95_<5ms-brightgreen.svg)](#singleflight-coalescing--hedged-upstream-racing)
 [![Tests](https://img.shields.io/badge/Tests-180%20Passed%20(100%25)-success.svg)](#testing--verification)
 
@@ -16,7 +16,7 @@
 
 ## Overview
 
-**AmarDNS v1.0.3** is an enterprise-grade, asynchronous recursive DNS security resolver written in pure **Rust** (Edition 2024). It delivers high-throughput **DNS-over-HTTPS (DoH, RFC 8484)**, **DNS-over-HTTP/3 (DoH3, RFC 9114)**, **DNS-over-QUIC (DoQ, RFC 9250)**, **DNS-over-TLS (DoT, RFC 7858)**, and standard **UDP/TCP Port 53 (RFC 1035)** endpoints.
+**AmarDNS v1.0.27** is an enterprise-grade, asynchronous recursive DNS security resolver written in pure **Rust** (Edition 2024). It delivers high-throughput **DNS-over-HTTPS (DoH, RFC 8484)**, **DNS-over-HTTP/3 (DoH3, RFC 9114)**, **DNS-over-QUIC (DoQ, RFC 9250)**, **DNS-over-TLS (DoT, RFC 7858)**, and standard **UDP/TCP Port 53 (RFC 1035)** endpoints with native **End-to-End Encryption** and **DNSSEC Validation (RFC 4034/5155)**.
 
 Engineered with a **zero garbage-collection architecture**, AmarDNS indexes over **900,000 malicious domains in just 4 MB of RAM** and delivers sub-millisecond in-memory cache resolutions with automatic upstream hedging, cryptographic DNSSEC validation, singleflight deduplication, zstd-compressed response caching, and an 8-feature online heuristic threat classifier (Shannon entropy DGA detection, Markov bigram analysis, and logistic regression).
 
@@ -34,7 +34,7 @@ Powered by modern async infrastructure:
 
 AmarDNS is deployed across Anycast edge nodes with low-latency DNS resolution and real-time telemetry:
 
-| Protocol | Endpoint / Hostname | Port | Usage / Client Configuration |
+| Protocol / Surface | Endpoint / Hostname | Port | Usage / Client Configuration |
 | :--- | :--- | :--- | :--- |
 | **DNS-over-HTTPS (DoH)** | `https://<your-domain>/dns-query` | `443/tcp` | Browsers, iOS/macOS Encrypted DNS profiles, `cloudflared`, `dnscrypt-proxy` |
 | **DNS-over-HTTP/3 (DoH3)** | `https://<your-domain>/dns-query` | `443/udp` | HTTP/3 QUIC clients, modern browsers with Alt-Svc / H3 support |
@@ -43,6 +43,11 @@ AmarDNS is deployed across Anycast edge nodes with low-latency DNS resolution an
 | **DoH JSON REST API** | `https://<your-domain>/resolve` | `443/tcp` | Web inspector, command-line scripts (`curl "https://<your-domain>/resolve?name=google.com&type=A"`) |
 | **Plain DNS (IPv6/IPv4)** | `<your-ip-address>` | `53/udp`, `53/tcp` | Standard recursive DNS forwarding with EDNS(0) cookies |
 | **Edge Dashboard & Console** | `https://<your-domain>/` or `/{key}` | `443/tcp` | Live telemetry matrix, neural brain inspector, threat feeds |
+| **Public Setup Docs** | `https://<your-domain>/help` or `/docs` | `443/tcp` | Client configuration guide for Windows, macOS, Linux, iOS, Android |
+| **Security Architecture** | `https://<your-domain>/security` | `443/tcp` | DNSSEC, hole-punching, rate limiter, and memory governor details |
+| **Privacy Policy & Terms** | `https://<your-domain>/privacy`, `/terms`| `443/tcp` | Zero-logging policy, RFC 7871 ECS stripping, and service terms |
+| **Crawler & Sitemap Index** | `https://<your-domain>/robots.txt`, `/sitemap.xml` | `443/tcp` | RFC-compliant web crawlers, search indexers, and automated sitemap |
+| **PWA Web Manifest** | `https://<your-domain>/manifest.json` | `443/tcp` | Progressive Web App standalone metadata and icons |
 
 ---
 
@@ -120,8 +125,9 @@ Incoming Query (DoH / DoH3 / DoQ / DoT / Plain 53)
 - **Dual-Hash Whitelist Bloom Filter**: Indexes **2,800+ authoritative domains** in **32 KB of RAM**, fitting entirely inside CPU L1/L2 data cache.
 - **Kirsch-Mitzenmacher Double-Hashing**: Dual independent 64-bit mixers (FNV-1a prime mixer + Wyhash rotated multiplier) finished with SplitMix64 and odd coprime stepping (`h2 | 1`).
 - **Power-of-Two Masking**: Bitset dimensions are constrained to $2^B$, replacing CPU division (`%`) with single-cycle bitwise masking (`&`).
-- **Response Compression Cache (Zstd level-1)**: Compresses multi-record answers using `zstd 0.14` level-1, reducing RAM consumption by 40-60% while decompressing in ~1µs.
-- **Minimal Container Footprint**: Compiles to a static musl binary housed in a **Docker Scratch container (< 12 MB)** with peak runtime memory usage of **~12-14 MB**.
+- **Response Compression Cache (Zstd level-1)**: Compresses multi-record answers using `zstd 0.14` level-1, reducing RAM consumption by 40-60% while decompressing in ~1µs with capacity for **150,000 cached wire records**.
+- **Deterministic Memory Governor & Accounting**: Operates with a **40 MB base memory** allocation and an enforced **200 MB hard ceiling**. Proactive eviction triggers at 140 MB, and emergency cache shedding executes at 175 MB. Total memory reported in telemetry represents actual process footprint (`base memory + RSS`).
+- **Minimal Container Footprint**: Compiles to a static musl binary housed in a **Docker Scratch container (< 15 MB)**.
 
 ### 3. Strict Hole-Punching Rule Hierarchy
 1. **Exact Whitelist (Priority 1)**: Explicit domain approvals always take absolute precedence.

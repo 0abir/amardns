@@ -64,6 +64,11 @@ pub fn render_sitemap_xml(host: &str) -> String {
     <priority>0.8</priority>
   </url>
   <url>
+    <loc>{base_url}/docs</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
     <loc>{base_url}/security</loc>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
@@ -732,6 +737,7 @@ mod tests {
         let sitemap = render_sitemap_xml("amardns.fly.dev");
         assert!(sitemap.contains("<loc>https://amardns.fly.dev/</loc>"));
         assert!(sitemap.contains("<loc>https://amardns.fly.dev/help</loc>"));
+        assert!(sitemap.contains("<loc>https://amardns.fly.dev/docs</loc>"));
         assert!(sitemap.contains("<loc>https://amardns.fly.dev/security</loc>"));
     }
 
