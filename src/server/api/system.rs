@@ -1883,6 +1883,9 @@ pub async fn perform_rollback() -> Result<String, String> {
         archive_path
     );
 
+    // Prune persistent binary so it does not conflict with rollback
+    let _ = std::fs::remove_file("/data/amardns");
+
     // 4. Trigger in-place execve restart into /amardns
     tokio::spawn(async {
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
@@ -1893,6 +1896,7 @@ pub async fn perform_rollback() -> Result<String, String> {
             let err = std::process::Command::new("/amardns")
                 .args(std::env::args().skip(1))
                 .envs(std::env::vars())
+                .env("AMARDNS_EXEC_GUARD", "1")
                 .exec();
             tracing::error!("[system] In-place execve to /amardns failed: {}", err);
             std::process::exit(1);
@@ -2008,6 +2012,7 @@ pub async fn remove_software_binary(target_name: &str) -> Result<String, String>
                 let _ = std::process::Command::new("/amardns")
                     .args(std::env::args().skip(1))
                     .envs(std::env::vars())
+                    .env("AMARDNS_EXEC_GUARD", "1")
                     .exec();
                 std::process::exit(1);
             }
@@ -2356,9 +2361,27 @@ pub async fn perform_download_and_install(target_version: Option<&str>) -> Resul
         tracing::warn!("[update] WARNING: Ed25519 release signature check bypassed by environment flag.");
     }
 
-    let tmp_bin = "/amardns.download";
-    let target_bin = "/amardns";
-    let backup_bin = "/amardns.bak";
+    let (target_bin, tmp_bin, backup_bin) = {
+        let root_writable = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open("/.amardns_write_test")
+            .map(|f| {
+                drop(f);
+                let _ = std::fs::remove_file("/.amardns_write_test");
+                true
+            })
+            .unwrap_or(false);
+
+        if root_writable {
+            ("/amardns", "/amardns.download", "/amardns.bak")
+        } else if std::path::Path::new("/data").is_dir() {
+            ("/data/amardns", "/data/amardns.download", "/data/amardns.bak")
+        } else {
+            ("/amardns", "/amardns.download", "/amardns.bak")
+        }
+    };
 
     std::fs::write(tmp_bin, &bin_bytes)
         .map_err(|e| format!("Failed to write binary to {}: {}", tmp_bin, e))?;
@@ -2389,7 +2412,7 @@ pub async fn perform_download_and_install(target_version: Option<&str>) -> Resul
         }
     }
 
-    // Rotate: current /amardns -> /amardns.bak
+    // Rotate: current target -> backup
     if std::path::Path::new(target_bin).exists() {
         let _ = std::fs::copy(target_bin, backup_bin);
         #[cfg(unix)]
@@ -2400,28 +2423,46 @@ pub async fn perform_download_and_install(target_version: Option<&str>) -> Resul
         tracing::info!("[update] Backed up current binary to {}", backup_bin);
     }
 
-    std::fs::rename(tmp_bin, target_bin)
-        .map_err(|e| format!("Failed to atomically rename {} to {}: {}", tmp_bin, target_bin, e))?;
+    let _ = std::fs::rename(tmp_bin, target_bin).or_else(|_| {
+        std::fs::copy(tmp_bin, target_bin)?;
+        std::fs::remove_file(tmp_bin)
+    });
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(target_bin, std::fs::Permissions::from_mode(0o755));
     }
 
+    // If installed to /amardns and persistent /data volume exists, mirror to /data/amardns for persistence
+    if target_bin == "/amardns" && std::path::Path::new("/data").is_dir() {
+        let persistent_target = "/data/amardns";
+        if std::fs::copy(target_bin, persistent_target).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(persistent_target, std::fs::Permissions::from_mode(0o755));
+            }
+            tracing::info!("[update] Mirrored updated binary to persistent volume {}", persistent_target);
+        }
+    }
+
     tracing::info!("[update] AmarDNS binary installed to {} (version {}). Triggering restart...", target_bin, tag_name);
 
-    tokio::spawn(async {
+    let target_bin_str = target_bin.to_string();
+    tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-        tracing::info!("[system] Hot-restarting AmarDNS into new /amardns binary via in-place execve...");
+        tracing::info!("[system] Hot-restarting AmarDNS into new {} binary via in-place execve...", target_bin_str);
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            let err = std::process::Command::new("/amardns")
+            let err = std::process::Command::new(&target_bin_str)
                 .args(std::env::args().skip(1))
                 .envs(std::env::vars())
+                .env("AMARDNS_EXEC_GUARD", "1")
                 .exec();
             tracing::error!(
-                "[system] In-place execve to /amardns failed: {}. Exiting with code 1 to trigger supervisor restart...",
+                "[system] In-place execve to {} failed: {}. Exiting with code 1 to trigger supervisor restart...",
+                target_bin_str,
                 err
             );
             std::process::exit(1);
@@ -2431,8 +2472,8 @@ pub async fn perform_download_and_install(target_version: Option<&str>) -> Resul
     });
 
     Ok(format!(
-        "Successfully upgraded to {} ({:.2} MB). Previous binary saved to /amardns.bak. In-place restart triggered.",
-        tag_name, bin_bytes.len() as f64 / 1_048_576.0
+        "Successfully upgraded to {} ({:.2} MB). Previous binary saved to {}. In-place restart triggered.",
+        tag_name, bin_bytes.len() as f64 / 1_048_576.0, backup_bin
     ))
 }
 

@@ -10,8 +10,6 @@ on:
 
 permissions:
   contents: read
-  checks: write
-  issues: write
 
 jobs:
   security_audit:
@@ -19,9 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
 
       - name: Run Cargo Audit against RustSec Advisory Database
-        uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo audit

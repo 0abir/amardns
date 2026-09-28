@@ -11,6 +11,15 @@ on:
         required: false
         default: '600'
         type: string
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'src/dns/**'
+      - 'src/security/**'
+      - 'fuzz/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/fuzz.yml'
   pull_request:
     paths:
       - 'src/dns/**'
@@ -28,6 +37,19 @@ permissions:
   contents: read
 
 jobs:
+  audit:
+    name: RustSec Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Run Cargo Audit against RustSec Advisory Database
+        run: cargo audit
+
   fuzz:
     name: Fuzz ${{ matrix.target }}
     runs-on: ubuntu-latest
@@ -82,13 +104,13 @@ jobs:
       - name: Determine fuzzing duration
         id: duration
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            # Fast smoke fuzzing for PR quality gate (60 seconds per target)
-            echo "seconds=60" >> "$GITHUB_OUTPUT"
-          elif [ -n "${{ inputs.duration_seconds }}" ]; then
+          if [ -n "${{ inputs.duration_seconds }}" ]; then
             echo "seconds=${{ inputs.duration_seconds }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "pull_request" ] || [ "${{ github.event_name }}" = "push" ]; then
+            # Fast smoke fuzzing for PR & commit quality gates (60 seconds per target)
+            echo "seconds=60" >> "$GITHUB_OUTPUT"
           else
-            # 600 seconds = 10 minutes continuous fuzzing per target
+            # 600 seconds = 10 minutes continuous fuzzing per target for scheduled runs
             echo "seconds=600" >> "$GITHUB_OUTPUT"
           fi
 

@@ -36,57 +36,99 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(unix)]
     {
-        // ── Watchdog & Self-Execution Bootloader ─────────────────────────────
-        // Ensure /amardns is present and running. If /amardns is missing (e.g. accidental
-        // deletion), automatically restore it from the newest local archive or backup.
-        let target_bin = std::path::Path::new("/amardns");
-        if !target_bin.exists() {
-            let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-            if let Ok(entries) = std::fs::read_dir("/") {
-                for e in entries.flatten() {
-                    let p = e.path();
-                    if let Some(n) = p.file_name().and_then(|s| s.to_str()) {
-                        if n.starts_with("amardns-") && p.is_file() {
-                            candidates.push(p);
+        // ── Watchdog, Version Sync & Self-Execution Bootloader ──────────────
+        // Ensure in-place execve process transitions NEVER loop or bounce infinitely.
+        let exec_guard = std::env::var("AMARDNS_EXEC_GUARD").is_ok();
+
+        if !exec_guard {
+            let current_exe = std::env::current_exe().ok();
+            let is_running_data_bin = current_exe
+                .as_ref()
+                .map(|p| p == std::path::Path::new("/data/amardns"))
+                .unwrap_or(false);
+
+            if is_running_data_bin {
+                // If we were launched directly or updated into /data/amardns:
+                // Sync to base binary /amardns if writable to persist across restarts.
+                // NEVER execve /amardns — we are already running the live updated engine!
+                let base_bin = std::path::Path::new("/amardns");
+                if base_bin.exists() {
+                    let _ = std::fs::copy("/data/amardns", base_bin);
+                }
+            } else {
+                // We are running from /amardns (or local binary).
+                // Check if a persistent update exists on /data/amardns
+                let persistent_bin = std::path::Path::new("/data/amardns");
+                if persistent_bin.is_file() {
+                    // Extract version from persistent binary via fast --version probe
+                    let persistent_ver = std::process::Command::new(persistent_bin)
+                        .arg("--version")
+                        .output()
+                        .ok()
+                        .and_then(|out| {
+                            if out.status.success() {
+                                let s = String::from_utf8_lossy(&out.stdout);
+                                s.split_whitespace().last().map(|v| v.to_string())
+                            } else {
+                                None
+                            }
+                        });
+
+                    if let Some(ref ver_str) = persistent_ver {
+                        let parse_ver = |v: &str| -> (u64, u64, u64) {
+                            let clean = v.trim().trim_start_matches('v');
+                            let mut parts = clean.split('.');
+                            let maj = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+                            let min = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+                            let pat = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+                            (maj, min, pat)
+                        };
+                        let persistent_semver = parse_ver(ver_str);
+                        let current_semver = parse_ver(env!("CARGO_PKG_VERSION"));
+
+                        if persistent_semver > current_semver {
+                            // /data/amardns is strictly newer than current base image: hand off via execve
+                            use std::os::unix::process::CommandExt;
+                            let _ = std::process::Command::new(persistent_bin)
+                                .args(std::env::args().skip(1))
+                                .envs(std::env::vars())
+                                .env("AMARDNS_EXEC_GUARD", "1")
+                                .exec();
+                        } else {
+                            // Current image is newer or identical: prune stale persistent binary
+                            let _ = std::fs::remove_file(persistent_bin);
                         }
                     }
                 }
-            }
-            candidates.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
-            candidates.reverse();
 
-            let backup = std::path::Path::new("/amardns.bak");
-            let recovery = candidates.first().cloned().or_else(|| {
-                if backup.is_file() {
-                    Some(backup.to_path_buf())
-                } else {
-                    None
+                // Safety watchdog: ensure /amardns is present. If missing, restore it.
+                let target_bin = std::path::Path::new("/amardns");
+                if !target_bin.exists() {
+                    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+                    if let Ok(entries) = std::fs::read_dir("/") {
+                        for e in entries.flatten() {
+                            let p = e.path();
+                            if let Some(n) = p.file_name().and_then(|s| s.to_str()) {
+                                if (n.starts_with("amardns-") || n == "amardns.bak") && p.is_file() {
+                                    candidates.push(p);
+                                }
+                            }
+                        }
+                    }
+                    if persistent_bin.is_file() {
+                        candidates.push(persistent_bin.to_path_buf());
+                    }
+                    candidates.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+                    candidates.reverse();
+
+                    if let Some(src) = candidates.first() {
+                        eprintln!("[bootloader watchdog] /amardns was missing! Restoring from {:?}", src);
+                        if std::fs::copy(src, target_bin).is_ok() {
+                            use std::os::unix::fs::PermissionsExt;
+                            let _ = std::fs::set_permissions(target_bin, std::fs::Permissions::from_mode(0o755));
+                        }
+                    }
                 }
-            });
-
-            if let Some(src) = recovery {
-                eprintln!("[bootloader watchdog] /amardns was missing! Restoring from {:?}", src);
-                if std::fs::copy(&src, target_bin).is_ok() {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(target_bin, std::fs::Permissions::from_mode(0o755));
-                }
-            }
-        }
-
-        // If /amardns exists and we are not currently running it,
-        // execute it in-place using execve for a fresh, synchronized runtime.
-        if target_bin.is_file() {
-            let current_exe = std::env::current_exe().ok();
-            let is_running_target = current_exe
-                .as_ref()
-                .map(|p| p == target_bin)
-                .unwrap_or(false);
-            if !is_running_target {
-                use std::os::unix::process::CommandExt;
-                let _ = std::process::Command::new(target_bin)
-                    .args(std::env::args().skip(1))
-                    .envs(std::env::vars())
-                    .exec();
             }
         }
     }
