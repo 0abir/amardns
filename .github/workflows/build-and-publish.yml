@@ -9,6 +9,10 @@ permissions:
   contents: write
   packages: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ACTIONS_RUNNER_FORCE_ACTIONS_NODE_VERSION: node24
+
 jobs:
   prepare:
     name: Determine Version & Changelog
@@ -19,7 +23,7 @@ jobs:
       git_ref: ${{ steps.versioning.outputs.git_ref }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -97,7 +101,7 @@ jobs:
           cat release_notes.md
 
       - name: Upload Release Notes
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-notes
           path: release_notes.md
@@ -123,7 +127,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.git_ref }}
 
@@ -188,7 +192,7 @@ jobs:
           cd ..
 
       - name: Upload native artifacts (${{ matrix.arch }})
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: artifacts-${{ matrix.arch }}
           path: artifacts/*
@@ -199,7 +203,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.git_ref }}
           fetch-depth: 0
@@ -225,19 +229,19 @@ jobs:
             "ghcr.io/${{ github.repository }}:${VERSION}-arm64"
 
       - name: Download release notes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-notes
           path: .
 
       - name: Download amd64 artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: artifacts-amd64
           path: ./release-assets
 
       - name: Download arm64 artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: artifacts-arm64
           path: ./release-assets

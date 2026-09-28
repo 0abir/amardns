@@ -36,16 +36,22 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ACTIONS_RUNNER_FORCE_ACTIONS_NODE_VERSION: node24
+
 jobs:
   audit:
     name: RustSec Security Audit
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
 
       - name: Run Cargo Audit against RustSec Advisory Database
         run: cargo audit
@@ -63,14 +69,14 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust nightly toolchain
         uses: dtolnay/rust-toolchain@nightly
 
       - name: Cache cargo-fuzz binary
         id: cache-cargo-fuzz
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/cargo-fuzz
           key: ${{ runner.os }}-cargo-fuzz-bin-v0.13.2
@@ -83,7 +89,7 @@ jobs:
         run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Cache Cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -91,7 +97,7 @@ jobs:
           key: ${{ runner.os }}-cargo-fuzz-reg-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache persistent fuzzing corpus
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
@@ -132,7 +138,7 @@ jobs:
 
       - name: Upload crash reproducer artifacts (on failure)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: crash-reproducer-${{ matrix.target }}-${{ github.run_id }}
           path: fuzz/artifacts/
