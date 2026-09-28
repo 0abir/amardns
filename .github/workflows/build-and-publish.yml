@@ -207,6 +207,12 @@ jobs:
     needs: [prepare, build-native]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.git_ref }}
+          fetch-depth: 0
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -231,6 +237,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: release-notes
+          path: .
 
       - name: Download amd64 artifacts
         uses: actions/download-artifact@v4
@@ -251,30 +258,37 @@ jobs:
           VERSION="${{ needs.prepare.outputs.version }}"
           echo "Publishing GitHub Release: $VERSION"
 
-          cd release-assets
-          ls -la
+          ls -la ./release-assets
 
           RELEASE_ASSETS=(
-            ./amardns
-            ./amardns.sha256
-            ./amardns-linux-amd64.tar.gz
-            ./amardns-linux-amd64.tar.gz.sha256
-            ./amardns-arm64
-            ./amardns-arm64.sha256
-            ./amardns-linux-arm64.tar.gz
-            ./amardns-linux-arm64.tar.gz.sha256
+            ./release-assets/amardns
+            ./release-assets/amardns.sha256
+            ./release-assets/amardns-linux-amd64.tar.gz
+            ./release-assets/amardns-linux-amd64.tar.gz.sha256
+            ./release-assets/amardns-arm64
+            ./release-assets/amardns-arm64.sha256
+            ./release-assets/amardns-linux-arm64.tar.gz
+            ./release-assets/amardns-linux-arm64.tar.gz.sha256
           )
+
+          if [ -f release_notes.md ]; then
+            NOTES_ARGS=(--notes-file release_notes.md)
+          elif [ -f ./release-assets/release_notes.md ]; then
+            NOTES_ARGS=(--notes-file ./release-assets/release_notes.md)
+          else
+            NOTES_ARGS=(--notes "Production Release $VERSION")
+          fi
 
           if gh release view "$VERSION" >/dev/null 2>&1; then
             echo "Release $VERSION already exists. Uploading assets and updating notes..."
             gh release upload "$VERSION" "${RELEASE_ASSETS[@]}" --clobber
-            gh release edit "$VERSION" --title "AmarDNS $VERSION" --notes-file ../release_notes.md --latest
+            gh release edit "$VERSION" --title "AmarDNS $VERSION" "${NOTES_ARGS[@]}" --latest
           else
             echo "Creating release $VERSION..."
             gh release create "$VERSION" "${RELEASE_ASSETS[@]}" \
+              --target "${{ needs.prepare.outputs.git_ref }}" \
               --title "AmarDNS $VERSION" \
-              --notes-file ../release_notes.md \
-              --generate-notes \
+              "${NOTES_ARGS[@]}" \
               --latest
           fi
 
