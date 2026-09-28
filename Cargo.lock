@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "amardns"
-version = "1.0.15"
+version = "1.0.16"
 dependencies = [
  "async-stream",
  "axum",
