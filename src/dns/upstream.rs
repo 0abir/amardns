@@ -7,21 +7,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-/// Opt-in upstream feed URL: only fetched when the operator explicitly sets
-/// UPSTREAM_FEED_URL or UPSTREAM_DNS_CONFIG_URL in the environment.
-/// The built-in candidate pool (all_default_candidate_configs) is always used as the
-/// secure fallback regardless of whether an external feed is configured.
-///
-/// NOTE: This constant is retained for operator reference only. It is NOT used by default.
-/// Setting it as a default would create a supply-chain risk if the hosting account were
-/// compromised. Operators who wish to use a remote feed must set UPSTREAM_FEED_URL explicitly.
-#[deprecated(
-    since = "1.0.11",
-    note = "Do not set this as the default. Use UPSTREAM_FEED_URL env var for opt-in remote feeds."
-)]
-#[allow(dead_code)]
-pub const LEGACY_UPSTREAM_URL: &str =
+/// Default upstream DoH resolver feeds (primary jsDelivr CDN, Fastly mirror, and GitHub raw fallback).
+/// Evaluated on startup and periodic sync. The built-in candidate pool
+/// (all_default_candidate_configs) is always used as the fallback if all remote feeds are unreachable.
+pub const DEFAULT_UPSTREAM_FEED_CDN: &str =
     "https://cdn.jsdelivr.net/gh/abir614/-@latest/dns-upstream.json";
+pub const DEFAULT_UPSTREAM_FEED_FASTLY: &str =
+    "https://fastly.jsdelivr.net/gh/abir614/-@latest/dns-upstream.json";
+pub const DEFAULT_UPSTREAM_FEED_RAW: &str =
+    "https://raw.githubusercontent.com/abir614/-/main/dns-upstream.json";
+
+#[allow(dead_code)]
+pub const LEGACY_UPSTREAM_URL: &str = DEFAULT_UPSTREAM_FEED_CDN;
 
 /// Official IANA Root Server Hints (13 Root Name Server clusters).
 pub const IANA_ROOT_HINTS: &[&str] = &[
@@ -301,12 +298,11 @@ impl UpstreamNode {
         }
     }
 
-    pub fn rank_key(&self) -> (bool, u32, std::cmp::Reverse<u8>, u32) {
+    pub fn rank_key(&self) -> (bool, std::cmp::Reverse<u8>, u32) {
         let ok = self.errors.load(Ordering::Relaxed) < 5;
         let eff_lat = self.effective_latency();
-        let bucket = eff_lat / 5;
         let aura = self.aura_rank();
-        (!ok, bucket, std::cmp::Reverse(aura), eff_lat)
+        (!ok, std::cmp::Reverse(aura), eff_lat)
     }
 }
 
@@ -333,7 +329,7 @@ impl Default for UpstreamPool {
 }
 
 impl UpstreamPool {
-    /// Comprehensive built-in candidate pool of high-reputation public DoH resolvers
+    /// Comprehensive built-in candidate pool of high-reputation public DoH resolvers matching dns-upstream.json
     pub fn all_default_candidate_configs() -> Vec<UpstreamConfig> {
         vec![
             UpstreamConfig {
@@ -353,23 +349,13 @@ impl UpstreamPool {
             },
             UpstreamConfig {
                 provider: "Cloudflare".to_string(),
-                url: "https://security.cloudflare-dns.com/dns-query".to_string(),
-                aura: "high".to_string(),
-            },
-            UpstreamConfig {
-                provider: "Digitale".to_string(),
-                url: "https://dns.digitale-gesellschaft.ch/dns-query".to_string(),
-                aura: "medium".to_string(),
-            },
-            UpstreamConfig {
-                provider: "Cloudflare".to_string(),
                 url: "https://cloudflare-dns.com/dns-query".to_string(),
-                aura: "high".to_string(),
+                aura: "medium".to_string(),
             },
             UpstreamConfig {
                 provider: "NextDNS".to_string(),
                 url: "https://dns.nextdns.io/dns-query".to_string(),
-                aura: "high".to_string(),
+                aura: "medium".to_string(),
             },
             UpstreamConfig {
                 provider: "ControlD".to_string(),
@@ -377,7 +363,7 @@ impl UpstreamPool {
                 aura: "medium".to_string(),
             },
             UpstreamConfig {
-                provider: "DNSSB".to_string(),
+                provider: "DNS.SB".to_string(),
                 url: "https://doh.dns.sb/dns-query".to_string(),
                 aura: "medium".to_string(),
             },
@@ -397,7 +383,7 @@ impl UpstreamPool {
                 aura: "medium".to_string(),
             },
             UpstreamConfig {
-                provider: "Google".to_string(),
+                provider: "Google Public DNS".to_string(),
                 url: "https://dns.google/dns-query".to_string(),
                 aura: "low".to_string(),
             },
@@ -407,23 +393,33 @@ impl UpstreamPool {
                 aura: "low".to_string(),
             },
             UpstreamConfig {
-                provider: "AppliedPrivacy".to_string(),
+                provider: "Hurricane Electric".to_string(),
+                url: "https://ordns.he.net/dns-query".to_string(),
+                aura: "low".to_string(),
+            },
+            UpstreamConfig {
+                provider: "DNSPod".to_string(),
+                url: "https://dns.pub/dns-query".to_string(),
+                aura: "low".to_string(),
+            },
+            UpstreamConfig {
+                provider: "OneDNS".to_string(),
+                url: "https://doh-pure.onedns.net/dns-query".to_string(),
+                aura: "low".to_string(),
+            },
+            UpstreamConfig {
+                provider: "Applied Privacy".to_string(),
                 url: "https://doh.applied-privacy.net/query".to_string(),
                 aura: "high".to_string(),
             },
             UpstreamConfig {
-                provider: "dns0.eu".to_string(),
-                url: "https://dns0.eu/dns-query".to_string(),
+                provider: "Digitale Gesellschaft".to_string(),
+                url: "https://dns.digitale-gesellschaft.ch/dns-query".to_string(),
                 aura: "high".to_string(),
             },
             UpstreamConfig {
-                provider: "DNS4EU".to_string(),
-                url: "https://unfiltered.joindns4.eu/dns-query".to_string(),
-                aura: "high".to_string(),
-            },
-            UpstreamConfig {
-                provider: "SecureDNS".to_string(),
-                url: "https://doh.securedns.eu/dns-query".to_string(),
+                provider: "UncensoredDNS".to_string(),
+                url: "https://anycast.uncensoreddns.org/dns-query".to_string(),
                 aura: "medium".to_string(),
             },
             UpstreamConfig {
@@ -442,19 +438,24 @@ impl UpstreamPool {
                 aura: "medium".to_string(),
             },
             UpstreamConfig {
-                provider: "CIRA".to_string(),
+                provider: "CIRA Canadian Shield".to_string(),
                 url: "https://protected.canadianshield.cira.ca/dns-query".to_string(),
                 aura: "medium".to_string(),
             },
             UpstreamConfig {
-                provider: "Switch".to_string(),
+                provider: "Switch DNS".to_string(),
                 url: "https://dns.switch.ch/dns-query".to_string(),
                 aura: "medium".to_string(),
             },
             UpstreamConfig {
-                provider: "ODVR".to_string(),
+                provider: "CZ.NIC ODVR".to_string(),
                 url: "https://odvr.nic.cz/doh".to_string(),
                 aura: "medium".to_string(),
+            },
+            UpstreamConfig {
+                provider: "dns0.eu".to_string(),
+                url: "https://dns0.eu/dns-query".to_string(),
+                aura: "high".to_string(),
             },
             UpstreamConfig {
                 provider: "Njalla".to_string(),
@@ -462,17 +463,32 @@ impl UpstreamPool {
                 aura: "high".to_string(),
             },
             UpstreamConfig {
-                provider: "Quad101".to_string(),
+                provider: "DNS4EU (Unfiltered)".to_string(),
+                url: "https://unfiltered.joindns4.eu/dns-query".to_string(),
+                aura: "high".to_string(),
+            },
+            UpstreamConfig {
+                provider: "SecureDNS.eu".to_string(),
+                url: "https://doh.securedns.eu/dns-query".to_string(),
+                aura: "medium".to_string(),
+            },
+            UpstreamConfig {
+                provider: "Quad101 (TWNIC)".to_string(),
                 url: "https://dns.twnic.tw/dns-query".to_string(),
                 aura: "medium".to_string(),
             },
             UpstreamConfig {
-                provider: "AliDNS".to_string(),
+                provider: "AliDNS (Alibaba)".to_string(),
                 url: "https://dns.alidns.com/dns-query".to_string(),
                 aura: "low".to_string(),
             },
             UpstreamConfig {
-                provider: "AA".to_string(),
+                provider: "Yandex DNS".to_string(),
+                url: "https://common.dot.dns.yandex.net/dns-query".to_string(),
+                aura: "low".to_string(),
+            },
+            UpstreamConfig {
+                provider: "Andrews & Arnold".to_string(),
                 url: "https://dns.aa.net.uk/dns-query".to_string(),
                 aura: "high".to_string(),
             },
@@ -482,8 +498,13 @@ impl UpstreamPool {
                 aura: "high".to_string(),
             },
             UpstreamConfig {
-                provider: "Blokada".to_string(),
+                provider: "Blokada DNS".to_string(),
                 url: "https://dns.blokada.org/dns-query".to_string(),
+                aura: "high".to_string(),
+            },
+            UpstreamConfig {
+                provider: "CIRA Canadian Shield (Private)".to_string(),
+                url: "https://private.canadianshield.cira.ca/dns-query".to_string(),
                 aura: "high".to_string(),
             },
             UpstreamConfig {
@@ -492,16 +513,35 @@ impl UpstreamPool {
                 aura: "medium".to_string(),
             },
             UpstreamConfig {
-                provider: "UncensoredDNS".to_string(),
-                url: "https://anycast.uncensoreddns.org/dns-query".to_string(),
+                provider: "CERT Estonia".to_string(),
+                url: "https://dns.cert.ee/dns-query".to_string(),
+                aura: "medium".to_string(),
+            },
+            UpstreamConfig {
+                provider: "arnor.org".to_string(),
+                url: "https://nsec.arnor.org/dns-query".to_string(),
+                aura: "medium".to_string(),
+            },
+            UpstreamConfig {
+                provider: "BlahDNS (Germany)".to_string(),
+                url: "https://doh-de.blahdns.com/dns-query".to_string(),
+                aura: "medium".to_string(),
+            },
+            UpstreamConfig {
+                provider: "BlahDNS (Finland)".to_string(),
+                url: "https://doh-fi.blahdns.com/dns-query".to_string(),
                 aura: "medium".to_string(),
             },
         ]
     }
 
-    /// 9 high-reliability fallback upstream DoH servers matching upstream JSON schema
+    /// 9 high-reputation fallback upstream DoH resolvers with high aura, used when the CDN feed is not reachable
     pub fn default_upstreams_config() -> Vec<UpstreamConfig> {
-        Self::all_default_candidate_configs().into_iter().take(9).collect()
+        Self::all_default_candidate_configs()
+            .into_iter()
+            .filter(|cfg| cfg.aura.eq_ignore_ascii_case("high"))
+            .take(9)
+            .collect()
     }
 
     pub fn new() -> Self {
@@ -864,21 +904,33 @@ impl UpstreamPool {
     }
 
     pub async fn sync_and_rank(&self) -> Result<usize, String> {
-        // Only fetch from a remote URL if the operator has explicitly configured one.
-        // Falling back to a third-party CDN URL by default would create a supply-chain
-        // risk (e.g. if the hosting account were compromised). The built-in candidate
-        // pool is always used as the secure baseline.
-        let feed_url_opt = std::env::var("UPSTREAM_DNS_CONFIG_URL")
+        let now_sec = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let explicit_feed = std::env::var("UPSTREAM_DNS_CONFIG_URL")
             .or_else(|_| std::env::var("UPSTREAM_FEED_URL"))
             .ok()
             .filter(|s| !s.trim().is_empty());
 
-        let mut cfgs = Self::default_upstreams_config();
+        let feed_urls = if let Some(url) = explicit_feed {
+            vec![url]
+        } else {
+            vec![
+                format!("{}?_t={}", DEFAULT_UPSTREAM_FEED_CDN, now_sec),
+                format!("{}?_t={}", DEFAULT_UPSTREAM_FEED_FASTLY, now_sec),
+                format!("{}?_t={}", DEFAULT_UPSTREAM_FEED_RAW, now_sec),
+            ]
+        };
 
-        if let Some(feed_url) = feed_url_opt {
+        let mut cfgs = Self::all_default_candidate_configs();
+        let mut loaded_remote = false;
+
+        for feed_url in &feed_urls {
             match self
                 .client
-                .get(&feed_url)
+                .get(feed_url)
                 .timeout(Duration::from_millis(4000))
                 .send()
                 .await
@@ -900,27 +952,31 @@ impl UpstreamPool {
                                 feed_url
                             );
                             cfgs = valid_fetched;
+                            loaded_remote = true;
+                            break;
                         }
                     }
                 }
                 Ok(resp) => {
                     tracing::warn!(
-                        "[upstream] Upstream feed URL {} returned HTTP {}; using built-in fallback upstreams",
+                        "[upstream] Upstream feed URL {} returned HTTP {}",
                         feed_url,
                         resp.status()
                     );
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "[upstream] Failed to fetch upstreams from {}: {}; using built-in fallback upstreams",
+                        "[upstream] Failed to fetch upstreams from {}: {}",
                         feed_url,
                         e
                     );
                 }
             }
-        } else {
-            tracing::debug!(
-                "[upstream] No UPSTREAM_FEED_URL configured; using built-in hardened upstream pool ({} candidates)",
+        }
+
+        if !loaded_remote {
+            tracing::info!(
+                "[upstream] Remote upstream feeds not reachable; using built-in hardened pool ({} candidates)",
                 cfgs.len()
             );
         }
@@ -1004,12 +1060,12 @@ impl UpstreamPool {
 
         // Rank upstreams:
         // 1. ok (healthy / reachable) first
-        // 2. Lowest latency first (with priority aura breaking ties within 5ms bracket)
+        // 2. Higher aura first (high: 3 > medium: 2 > low: 1)
+        // 3. Lowest latency first
         probed.sort_by_key(|(ok, node)| {
             let lat = node.latency_ms.load(Ordering::Relaxed);
-            let bucket = lat / 5;
             let aura = node.aura_rank();
-            (!*ok, bucket, std::cmp::Reverse(aura), lat)
+            (!*ok, std::cmp::Reverse(aura), lat)
         });
 
         // Exactly 9 upstreams loaded at a time according to their priority & low latency
@@ -1147,7 +1203,7 @@ impl UpstreamPool {
                 "medium" => 2,
                 _ => 1,
             };
-            (*lat / 5, std::cmp::Reverse(aura_rank), *lat)
+            (std::cmp::Reverse(aura_rank), *lat)
         });
 
         let mut new_active = current_nodes;
@@ -1568,12 +1624,12 @@ mod tests {
     fn test_default_upstreams_config() {
         let upstreams = UpstreamPool::default_upstreams_config();
         assert_eq!(upstreams.len(), 9);
+        assert!(upstreams.iter().all(|u| u.aura.eq_ignore_ascii_case("high")));
         let providers: Vec<&str> = upstreams.iter().map(|u| u.provider.as_str()).collect();
-        assert!(providers.contains(&"Cloudflare"));
         assert!(providers.contains(&"Mullvad"));
         assert!(providers.contains(&"Quad9"));
         assert!(providers.contains(&"AdGuard"));
-        assert!(providers.contains(&"ControlD"));
+        assert!(providers.contains(&"dns0.eu"));
     }
 
     #[test]
@@ -1630,27 +1686,30 @@ mod tests {
             })
             .collect();
 
-        // Sort by health (ok), lowest latency first (with aura breaking ties within 5ms bracket)
+        // Sort by health (ok), higher aura first (high > medium > low), lowest latency within tier
         probed.sort_by_key(|(ok, node)| {
             let lat = node.latency_ms.load(Ordering::Relaxed);
-            let bucket = lat / 5;
             let aura = node.aura_rank();
-            (!*ok, bucket, std::cmp::Reverse(aura), lat)
+            (!*ok, std::cmp::Reverse(aura), lat)
         });
 
         // Take exactly 9
         let top9: Vec<_> = probed.into_iter().take(9).collect();
         assert_eq!(top9.len(), 9);
 
-        // #1 must be FastLow (2ms) (bucket 0)
-        assert_eq!(top9[0].1.provider, "FastLow");
-        assert_eq!(top9[0].1.latency_ms.load(Ordering::Relaxed), 2);
-        // #2 must be FastMedium (5ms) (bucket 1)
-        assert_eq!(top9[1].1.provider, "FastMedium");
-        assert_eq!(top9[1].1.latency_ms.load(Ordering::Relaxed), 5);
-        // #3 must be FastHigh (10ms) (bucket 2)
-        assert_eq!(top9[2].1.provider, "FastHigh");
-        assert_eq!(top9[2].1.latency_ms.load(Ordering::Relaxed), 10);
+        // High aura healthy nodes MUST come first:
+        // #1 must be FastHigh (10ms, high aura)
+        assert_eq!(top9[0].1.provider, "FastHigh");
+        assert_eq!(top9[0].1.latency_ms.load(Ordering::Relaxed), 10);
+        // #2 must be SlowHigh (50ms, high aura)
+        assert_eq!(top9[1].1.provider, "SlowHigh");
+        assert_eq!(top9[1].1.latency_ms.load(Ordering::Relaxed), 50);
+        // Next tier is Medium aura:
+        // #3 must be FastMedium (5ms, medium aura)
+        assert_eq!(top9[2].1.provider, "FastMedium");
+        assert_eq!(top9[2].1.latency_ms.load(Ordering::Relaxed), 5);
+        // FastLow (low aura) must rank after all high and medium healthy nodes
+        assert!(!top9.iter().take(8).any(|(_, n)| n.provider == "FastLow"));
         // OfflineHigh must NOT be in top9 because it's unreachable (ok=false)
         assert!(!top9.iter().any(|(_, n)| n.provider == "OfflineHigh"));
     }

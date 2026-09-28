@@ -1899,7 +1899,7 @@ mod tests {
         // 9. Upstream Qualified 9 Pool & Best Candidate Promotion
         let active_upstreams = state.upstreams.ranked_nodes();
         assert_eq!(active_upstreams.len(), 9, "Active pool must maintain exactly 9 resolvers");
-        assert_eq!(state.upstreams.candidate_count(), 32, "Candidate catalog must contain 32 providers");
+        assert_eq!(state.upstreams.candidate_count(), 40, "Candidate catalog must contain 40 providers from dns-upstream.json");
 
         // Degrade an active node and verify candidate promotion
         {
