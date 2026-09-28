@@ -132,17 +132,6 @@ jobs:
         with:
           components: clippy
 
-      - name: Cache Cargo registry and build artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-${{ runner.arch }}-cargo-native-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-cargo-native-
-
       - name: Native Quality Gate — Test suite (${{ matrix.arch }})
         run: cargo test --all-targets --all-features
         env:
@@ -175,6 +164,8 @@ jobs:
             ghcr.io/${{ github.repository }}:latest-${{ matrix.arch }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: false
+          sbom: false
 
       - name: Extract & verify static binary natively
         run: |

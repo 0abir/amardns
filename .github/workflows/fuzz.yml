@@ -82,18 +82,13 @@ jobs:
       - name: Ensure cargo-fuzz in PATH
         run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Cache Cargo registry and build artifacts
+      - name: Cache Cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-            fuzz/target
-          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('**/Cargo.lock') }}-${{ matrix.target }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-fuzz-${{ hashFiles('**/Cargo.lock') }}-
-            ${{ runner.os }}-cargo-fuzz-
+          key: ${{ runner.os }}-cargo-fuzz-reg-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache persistent fuzzing corpus
         uses: actions/cache@v4
