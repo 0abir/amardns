@@ -308,12 +308,7 @@ mod tests {
     fn test_load_tls_config_missing_files() {
         let res = load_tls_config("/nonexistent/cert.pem", "/nonexistent/key.pem", vec![]);
         assert!(res.is_err());
-    }
-
-    #[test]
-    fn test_create_doh_tls_config_missing_files() {
-        let res = create_doh_tls_config("/nonexistent/cert.pem", "/nonexistent/key.pem");
-        assert!(res.is_err());
+        assert!(create_doh_tls_config("/nonexistent/cert.pem", "/nonexistent/key.pem").is_err());
     }
 
     #[test]
