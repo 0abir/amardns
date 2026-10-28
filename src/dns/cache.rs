@@ -30,6 +30,19 @@ pub struct DnsCache {
     max_capacity: u64,
 }
 
+#[inline]
+fn atomic_saturating_sub(atomic: &AtomicU64, sub: u64) {
+    let mut current = atomic.load(Ordering::Relaxed);
+    while let Err(actual) = atomic.compare_exchange_weak(
+        current,
+        current.saturating_sub(sub),
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    ) {
+        current = actual;
+    }
+}
+
 impl DnsCache {
     pub fn new(max_capacity: u64) -> Self {
         let compressed_bytes = Arc::new(AtomicU64::new(0));
@@ -44,16 +57,8 @@ impl DnsCache {
             .eviction_listener(move |_key, entry: CachedResponse, _cause| {
                 let stored_len = entry.wire.len() as u64;
                 let uncomp_len = entry.uncompressed_len as u64;
-                comp_listener
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-                        Some(v.saturating_sub(stored_len))
-                    })
-                    .ok();
-                uncomp_listener
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-                        Some(v.saturating_sub(uncomp_len))
-                    })
-                    .ok();
+                atomic_saturating_sub(&comp_listener, stored_len);
+                atomic_saturating_sub(&uncomp_listener, uncomp_len);
             })
             .build();
 
