@@ -1666,6 +1666,9 @@ function render(d){
   var dbCount=dbInfo.totalRecords||((dbInfo.blocklistDomains||0)+(dbInfo.whitelistDomains||0))||0;
   var walB=(dbInfo.walBytes!=null)?dbInfo.walBytes:((dbInfo.walMB||0)*1048576);
   var dbWalStr=walB>=1048576?(walB/1048576).toFixed(2)+' MB WAL':(walB/1024).toFixed(1)+' KB WAL';
+  var rawPeak = (ai.rpsPeak != null) ? Number(ai.rpsPeak) : (Number(ai.rps) || 0);
+  window._maxNetworkPeak = Math.max(window._maxNetworkPeak || 0, rawPeak, Number(ai.rps) || 0);
+  var peakLoad = window._maxNetworkPeak;
   var stats=[
     {id:'req',label:'DNS Requests',val:fmt(d.dnsRequestsTotal),sub:'Total processed',color:'#38bdf8'},
     {id:'hit',label:'Cache Hit',val:(d.cache&&d.cache.hitRate)||'0%',sub:fmt(d.cache&&d.cache.hits||0)+' hits',color:'#a78bfa'},
@@ -1687,7 +1690,7 @@ function render(d){
     {id:'lat',label:'Avg Latency',val:(d.avgLatency!=null?d.avgLatency:0)+su(' ms'),sub:'Resolution time',color:'#00ffe7'},
     {id:'abir',label:'ABIR Blocks',val:fmt(ai.abirBlocks||0),sub:ai.abirBlocks?'Custom feed blocks':'0 blocked · Active',color:'#38bdf8'},
     {id:'blk_rate',label:'Block Rate',val:d.blockRate||'0.0%',sub:'Threats filtered',color:'#ff2d6b'},
-    {id:'load',label:'Network Load',val:(ai.rpsPeak!=null?ai.rpsPeak:(ai.rps||0)).toFixed(1)+su(' peak'),sub:(ai.lbMode||'FAST')+' mode',color:'#a78bfa'},
+    {id:'load',label:'Network Load',val:peakLoad.toFixed(1)+su(' peak'),sub:(ai.lbMode||'FAST')+' mode',color:'#a78bfa'},
     {id:'aero_cache',label:'AERO Cache',val:fmt((d.cache&&d.cache.size)||(d.storage&&d.storage.cache&&d.storage.cache.size)||0),sub:'In-memory wire',color:'#38bdf8'},
     {id:'shield',label:'Shield',val:fmt((ai.repBlocks||0)+(ai.dgaBlocked||0)+(ai.rebindBlocks||0)+(ai.alikeBlocks||0)+(ai.abirBlocks||0)+(ai.autoBlockActive||0)+(ai.gsbBlocked||0)+(ai.ttlGuardBlocks||0)+(ai.scheduleBlocks||0)),sub:'Total blocked',color:'#00ffe7'},
     {id:'mem',label:'RAM Allocation',val:((d.node&&d.node.memory&&d.node.memory.rssMB!=null)?d.node.memory.rssMB:((d.memory&&d.memory.rssMB!=null)?d.memory.rssMB:0))+su(' MB'),sub:'Zero-GC · '+((d.node&&d.node.memory&&d.node.memory.totalCapMB)||(d.memory&&d.memory.totalCapMB)||200)+'MB Cap',color:'#00ffe7'},

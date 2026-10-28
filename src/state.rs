@@ -1155,48 +1155,24 @@ impl AppState {
             .build()
             .map_err(|e| e.to_string())?;
 
-        // Primary CDN URLs with fallback endpoints to ensure zero downtime during CDN outages
-        let block_url_cdn = format!(
-            "https://cdn.jsdelivr.net/gh/abir614/-@latest/blocklist.txt?_t={}",
-            now_sec
-        );
-        let block_url_fastly = format!(
-            "https://fastly.jsdelivr.net/gh/abir614/-@latest/blocklist.txt?_t={}",
-            now_sec
-        );
+        // Threat feed endpoints on raw.githubusercontent.com
         let block_url_raw = format!(
-            "https://raw.githubusercontent.com/abir614/-/main/blocklist.txt?_t={}",
+            "https://raw.githubusercontent.com/abir614/-/0/blocklist.txt?_t={}",
             now_sec
         );
 
-        let white_url_cdn = format!(
-            "https://cdn.jsdelivr.net/gh/abir614/-@latest/whitelist.txt?_t={}",
-            now_sec
-        );
-        let white_url_fastly = format!(
-            "https://fastly.jsdelivr.net/gh/abir614/-@latest/whitelist.txt?_t={}",
-            now_sec
-        );
         let white_url_raw = format!(
-            "https://raw.githubusercontent.com/abir614/-/main/whitelist.txt?_t={}",
+            "https://raw.githubusercontent.com/abir614/-/0/whitelist.txt?_t={}",
             now_sec
         );
 
-        let tb_url_cdn = format!(
-            "https://cdn.jsdelivr.net/gh/abir614/-@latest/total_blocked.txt?_t={}",
-            now_sec
-        );
         let tb_url_raw = format!(
-            "https://raw.githubusercontent.com/abir614/-/main/total_blocked.txt?_t={}",
+            "https://raw.githubusercontent.com/abir614/-/0/total_blocked.txt?_t={}",
             now_sec
         );
 
-        let tw_url_cdn = format!(
-            "https://cdn.jsdelivr.net/gh/abir614/-@latest/total_whitelisted.txt?_t={}",
-            now_sec
-        );
         let tw_url_raw = format!(
-            "https://raw.githubusercontent.com/abir614/-/main/total_whitelisted.txt?_t={}",
+            "https://raw.githubusercontent.com/abir614/-/0/total_whitelisted.txt?_t={}",
             now_sec
         );
 
@@ -1217,16 +1193,10 @@ impl AppState {
         }
 
         let (b_opt, w_opt, tb_opt, tw_opt) = tokio::join!(
-            fetch_feed_text(
-                &client,
-                vec![block_url_cdn, block_url_fastly, block_url_raw]
-            ),
-            fetch_feed_text(
-                &client,
-                vec![white_url_cdn, white_url_fastly, white_url_raw]
-            ),
-            fetch_feed_text(&client, vec![tb_url_cdn, tb_url_raw]),
-            fetch_feed_text(&client, vec![tw_url_cdn, tw_url_raw])
+            fetch_feed_text(&client, vec![block_url_raw]),
+            fetch_feed_text(&client, vec![white_url_raw]),
+            fetch_feed_text(&client, vec![tb_url_raw]),
+            fetch_feed_text(&client, vec![tw_url_raw])
         );
 
         let mut expected_block = 0;

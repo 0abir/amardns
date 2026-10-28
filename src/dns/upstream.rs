@@ -11,14 +11,14 @@ use std::time::{Duration, Instant};
 /// Evaluated on startup and periodic sync. The built-in candidate pool
 /// (all_default_candidate_configs) is always used as the fallback if all remote feeds are unreachable.
 pub const DEFAULT_UPSTREAM_FEED_CDN: &str =
-    "https://cdn.jsdelivr.net/gh/abir614/-@latest/dns-upstream.json";
+    "https://raw.githubusercontent.com/abir614/-/0/dns-upstream.json";
 pub const DEFAULT_UPSTREAM_FEED_FASTLY: &str =
-    "https://fastly.jsdelivr.net/gh/abir614/-@latest/dns-upstream.json";
+    "https://raw.githubusercontent.com/abir614/-/0/dns-upstream.json";
 pub const DEFAULT_UPSTREAM_FEED_RAW: &str =
-    "https://raw.githubusercontent.com/abir614/-/main/dns-upstream.json";
+    "https://raw.githubusercontent.com/abir614/-/0/dns-upstream.json";
 
 #[allow(dead_code)]
-pub const LEGACY_UPSTREAM_URL: &str = DEFAULT_UPSTREAM_FEED_CDN;
+pub const LEGACY_UPSTREAM_URL: &str = DEFAULT_UPSTREAM_FEED_RAW;
 
 /// Official IANA Root Server Hints (13 Root Name Server clusters).
 pub const IANA_ROOT_HINTS: &[&str] = &[

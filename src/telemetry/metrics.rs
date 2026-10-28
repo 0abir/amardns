@@ -285,8 +285,14 @@ impl Metrics {
             }
 
             if let Ok(mut buckets) = self.rps_buckets.lock() {
-                buckets[(now_sec % 60) as usize] =
-                    buckets[(now_sec % 60) as usize].saturating_add(1);
+                let count = buckets[(now_sec % 60) as usize].saturating_add(1);
+                buckets[(now_sec % 60) as usize] = count;
+                if let Ok(mut peak_guard) = self.rps_peak.lock() {
+                    let count_f = count as f64;
+                    if count_f > *peak_guard {
+                        *peak_guard = count_f;
+                    }
+                }
             }
         }
     }
@@ -471,6 +477,18 @@ impl Metrics {
                 if live_rate > *peak_guard {
                     *peak_guard = live_rate;
                 }
+                if curr > *peak_guard {
+                    *peak_guard = curr;
+                }
+                if prev > *peak_guard {
+                    *peak_guard = prev;
+                }
+                for &b in buckets.iter() {
+                    let bf = b as f64;
+                    if bf > *peak_guard {
+                        *peak_guard = bf;
+                    }
+                }
             }
 
             (live_rate * 10.0).round() / 10.0
@@ -480,10 +498,12 @@ impl Metrics {
     }
 
     pub fn get_rps_peak(&self) -> f64 {
+        let live_rps = self.get_rps();
         if let Ok(guard) = self.rps_peak.lock() {
-            (*guard * 100.0).round() / 100.0
+            let peak = (*guard).max(live_rps);
+            (peak * 100.0).round() / 100.0
         } else {
-            0.0
+            live_rps
         }
     }
 
@@ -914,6 +934,7 @@ mod tests {
         assert_eq!(m.doq_queries.load(Ordering::Relaxed), 1);
         m.record_query("127.0.0.1", "doh3");
         assert_eq!(m.doh3_queries.load(Ordering::Relaxed), 1);
+        assert!(m.get_rps_peak() >= 3.0);
 
         let sec_details = crate::dns::dnssec::DnssecValidationDetails::secure(
             crate::dns::dnssec::DnssecAlgorithm::Ed25519,
