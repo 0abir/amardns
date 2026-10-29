@@ -150,7 +150,7 @@ pub async fn start_plain_udp(
                                                 let blocked = if let Some(cached_resp) = state_worker.instant_cache.get_blocked_response(&clean, q.qtype, parsed.tx_id) {
                                                     cached_resp
                                                 } else {
-                                                    let mut fresh = crate::dns::parser::build_blocked_response(&buf[..len], true);
+                                                    let mut fresh = crate::dns::parser::build_sinkhole_response(&buf[..len]);
                                                     crate::dns::parser::append_ede_to_response(&mut fresh, 15, "INSTANT_BLOCK");
                                                     state_worker.instant_cache.insert_blocked_response(&clean, q.qtype, fresh.clone());
                                                     fresh

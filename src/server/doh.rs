@@ -750,6 +750,7 @@ pub async fn process_dns_wire_packet_full(
                     p_wire.extend_from_slice(&1u16.to_be_bytes()); // QCLASS IN
                     if let Some((resp, _)) = state_p.upstreams.resolve(&p_wire).await {
                         if !state_p.is_bypassed(&cand)
+                            && !state_p.is_exempt(&cand)
                             && !crate::dns::parser::is_rebind_exempt_domain(&cand)
                             && crate::dns::parser::extract_rebind_ip(&resp).is_some()
                         {
@@ -877,7 +878,7 @@ pub async fn process_dns_wire_packet_full(
         let resp_bytes = if let Some(cached_resp) = state.instant_cache.get_blocked_response(&q.name, q.qtype, parsed.tx_id) {
             cached_resp
         } else {
-            let mut fresh = build_blocked_response(query_wire, true);
+            let mut fresh = build_sinkhole_response(query_wire);
             crate::dns::parser::append_ede_to_response(&mut fresh, 15, "INSTANT_BLOCK");
             state.instant_cache.insert_blocked_response(&q.name, q.qtype, fresh.clone());
             fresh
@@ -981,6 +982,7 @@ pub async fn process_dns_wire_packet_full(
             // RebindGuard: Intercept cached responses containing private IPs
             if state.blocking_enabled.load(Ordering::Relaxed)
                 && !is_bypassed
+                && !state.is_exempt(&q.name)
                 && !crate::dns::parser::is_rebind_exempt_domain(&q.name)
             {
                 if let Some(rebind_ip) = crate::dns::parser::extract_rebind_ip(&cached_wire) {
@@ -1045,6 +1047,7 @@ pub async fn process_dns_wire_packet_full(
             // RebindGuard: Intercept stale cached responses containing private IPs
             if state.blocking_enabled.load(Ordering::Relaxed)
                 && !is_bypassed
+                && !state.is_exempt(&q.name)
                 && !crate::dns::parser::is_rebind_exempt_domain(&q.name)
             {
                 if let Some(rebind_ip) = crate::dns::parser::extract_rebind_ip(&cached_wire) {
@@ -1102,6 +1105,7 @@ pub async fn process_dns_wire_packet_full(
                     let is_bypassed_bg = state_bg.is_bypassed(&q_name);
                     if state_bg.blocking_enabled.load(Ordering::Relaxed)
                         && !is_bypassed_bg
+                        && !state_bg.is_exempt(&q_name)
                         && !crate::dns::parser::is_rebind_exempt_domain(&q_name)
                     {
                         if let Some(rebind_ip) =
@@ -1136,7 +1140,7 @@ pub async fn process_dns_wire_packet_full(
                     };
                     state_bg
                         .cache
-                        .insert_with_grace_allowed(&q_name, q_type, upstream_resp, smart_ttl, smart_grace, is_bypassed_bg)
+                        .insert_with_grace_allowed(&q_name, q_type, upstream_resp, smart_ttl, smart_grace, is_bypassed_bg || state_bg.is_exempt(&q_name))
                         .await;
                 }
             });
@@ -1337,6 +1341,7 @@ pub async fn process_dns_wire_packet_full(
         // DNS Rebinding Protection
         if state.blocking_enabled.load(Ordering::Relaxed)
             && !is_bypassed
+            && !state.is_exempt(&q.name)
             && !crate::dns::parser::is_rebind_exempt_domain(&q.name)
         {
             if let Some(rebind_ip) = crate::dns::parser::extract_rebind_ip(&upstream_resp) {
@@ -1466,7 +1471,7 @@ pub async fn process_dns_wire_packet_full(
                 upstream_resp.clone(),
                 smart_ttl,
                 smart_grace,
-                is_bypassed,
+                is_bypassed || state.is_exempt(&q.name),
             )
             .await;
         state
@@ -1670,8 +1675,9 @@ pub async fn doh_json_handler(
     let is_json_bypassed = state.is_bypassed(&clean_domain);
     if !is_json_bypassed && state.is_instant_blocked(&clean_domain) {
         state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
+        let ans_data = if qtype == 28 { "::" } else { "0.0.0.0" };
         let resp = serde_json::json!({
-            "Status": 3,
+            "Status": 0,
             "TC": false,
             "RD": true,
             "RA": true,
@@ -1681,7 +1687,12 @@ pub async fn doh_json_handler(
                 "name": format!("{}.", clean_domain),
                 "type": qtype
             }],
-            "Answer": [],
+            "Answer": [{
+                "name": format!("{}.", clean_domain),
+                "type": qtype,
+                "TTL": 1,
+                "data": ans_data
+            }],
             "Comment": "AmarDNS Block: INSTANT_BLOCK"
         });
         return Json(resp).into_response();
@@ -1792,6 +1803,7 @@ pub async fn doh_json_handler(
         // DNS Rebinding Protection for DoH JSON API
         if state.blocking_enabled.load(Ordering::Relaxed)
             && !is_json_bypassed
+            && !state.is_exempt(&clean_domain)
             && !crate::dns::parser::is_rebind_exempt_domain(&clean_domain)
         {
             if let Some(rebind_ip) = crate::dns::parser::extract_rebind_ip(&resp_bytes) {
@@ -1853,7 +1865,7 @@ pub async fn doh_json_handler(
                 };
             state
                 .cache
-                .insert_with_grace_allowed(&clean_domain, qtype, resp_bytes.clone(), ttl, grace, is_json_bypassed)
+                .insert_with_grace_allowed(&clean_domain, qtype, resp_bytes.clone(), ttl, grace, is_json_bypassed || state.is_exempt(&clean_domain))
                 .await;
         }
 
@@ -2062,6 +2074,25 @@ mod tests {
         assert!(
             rebind_detected.is_none(),
             "Response must not leak private IP!"
+        );
+
+        // 4. Verify that adding domain to Bypasslist allows caching and resolving private IP (exempt from RebindGuard)
+        state.custom_bypasslist.write().insert("rebind.evil.com".to_string());
+        state
+            .cache
+            .insert_with_grace_allowed("rebind.evil.com", 1, rebind_resp.clone(), 60, 60, true)
+            .await;
+        assert!(
+            state.cache.get("rebind.evil.com", 1, 0x1234).await.is_some(),
+            "Bypassed domain must be allowed to cache private/internal IP in AeroCache!"
+        );
+        let resp_bypassed =
+            process_dns_wire_packet(state.clone(), &query_wire, client_ip, None, "DoH").await;
+        let rebind_bypassed_ip = crate::dns::parser::extract_rebind_ip(&resp_bypassed);
+        assert_eq!(
+            rebind_bypassed_ip,
+            Some(IpAddr::from([127, 0, 0, 1])),
+            "Bypassed domain must resolve private IP without being dropped by RebindGuard!"
         );
     }
 

@@ -825,41 +825,18 @@ impl AppState {
             return true;
         }
 
-        // 2. Zero-allocation wildcard self match (*.clean) via stack buffer
-        let mut wc_buf = [0u8; 256];
-        if clean.len() + 2 <= 256 {
-            wc_buf[0] = b'*';
-            wc_buf[1] = b'.';
-            wc_buf[2..2 + clean.len()].copy_from_slice(clean.as_bytes());
-            if let Ok(wc_str) = std::str::from_utf8(&wc_buf[..2 + clean.len()]) {
-                if guard.contains(wc_str) {
-                    return true;
-                }
-            }
-        }
-
-        // 3. Zero-allocation parent suffix lookup (e.g. portal.domain.com -> domain.com -> com)
+        // 2. Parent suffix lookup (e.g. sub.domain.com -> domain.com)
         let mut cursor = clean.as_str();
         while let Some(idx) = cursor.find('.') {
             cursor = &cursor[idx + 1..];
             if guard.contains(cursor) {
                 return true;
             }
-            if cursor.len() + 2 <= 256 {
-                wc_buf[0] = b'*';
-                wc_buf[1] = b'.';
-                wc_buf[2..2 + cursor.len()].copy_from_slice(cursor.as_bytes());
-                if let Ok(wc_str) = std::str::from_utf8(&wc_buf[..2 + cursor.len()]) {
-                    if guard.contains(wc_str) {
-                        return true;
-                    }
-                }
-            }
         }
 
-        // 4. Arbitrary glob matching (*pattern*)
+        // 3. Robust wildcard, apex, and glob matching (*.domain.tld, *pattern*, domain.tld)
         for key in guard.iter() {
-            if key.contains('*') && !key.starts_with("*.") && domain_matches_pattern(key, &clean) {
+            if domain_matches_pattern(key, &clean) {
                 return true;
             }
         }

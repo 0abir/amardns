@@ -259,6 +259,70 @@ pub fn build_blocked_response(query_buf: &[u8], is_nxdomain: bool) -> Vec<u8> {
     resp
 }
 
+/// Synthesizes an authoritative NULL IP sinkhole DNS response (0.0.0.0 for A, :: for AAAA, or NODATA).
+/// Sets RCODE = 0 (NOERROR), AA = 1 (Authoritative), and TTL = 1s.
+/// This prevents operating systems (Windows, macOS, Android, iOS) from falling back to
+/// secondary DNS resolvers (e.g. 8.8.8.8) or ISP IPv6 resolvers, and forces immediate local connection refusal.
+pub fn build_sinkhole_response(query_buf: &[u8]) -> Vec<u8> {
+    if query_buf.len() < 12 {
+        return vec![0; 12];
+    }
+    let parsed = match parse_dns_query(query_buf) {
+        Some(p) => p,
+        None => return build_blocked_response(query_buf, false),
+    };
+    let q = match parsed.question {
+        Some(ref q) => q,
+        None => return build_blocked_response(query_buf, false),
+    };
+
+    let q_end = 12 + parsed.question_bytes_len;
+    if q_end > query_buf.len() {
+        return build_blocked_response(query_buf, false);
+    }
+
+    let orig_flags = u16::from_be_bytes([query_buf[2], query_buf[3]]);
+    let new_flags = (orig_flags & 0x7900) | 0x8580; // QR=1, AA=1, RA=1, RCODE=0 (NOERROR)
+
+    let is_a = q.qtype == 1;
+    let is_aaaa = q.qtype == 28;
+
+    let mut resp = Vec::with_capacity(query_buf.len() + 32);
+    resp.extend_from_slice(&query_buf[0..2]); // TX_ID
+    resp.extend_from_slice(&new_flags.to_be_bytes());
+    resp.extend_from_slice(&1u16.to_be_bytes()); // QDCOUNT = 1
+
+    if is_a || is_aaaa {
+        resp.extend_from_slice(&1u16.to_be_bytes()); // ANCOUNT = 1
+    } else {
+        resp.extend_from_slice(&0u16.to_be_bytes()); // ANCOUNT = 0 (NODATA)
+    }
+    resp.extend_from_slice(&0u16.to_be_bytes()); // NSCOUNT = 0
+    resp.extend_from_slice(&0u16.to_be_bytes()); // ARCOUNT = 0
+
+    // Question section verbatim
+    resp.extend_from_slice(&query_buf[12..q_end]);
+
+    // Answer Record (pointer 0xC00C -> QNAME at offset 12)
+    if is_a {
+        resp.extend_from_slice(&[0xC0, 0x0C]);
+        resp.extend_from_slice(&1u16.to_be_bytes()); // TYPE A
+        resp.extend_from_slice(&1u16.to_be_bytes()); // CLASS IN
+        resp.extend_from_slice(&1u32.to_be_bytes()); // TTL = 1 second
+        resp.extend_from_slice(&4u16.to_be_bytes()); // RDLENGTH = 4
+        resp.extend_from_slice(&[0, 0, 0, 0]); // 0.0.0.0
+    } else if is_aaaa {
+        resp.extend_from_slice(&[0xC0, 0x0C]);
+        resp.extend_from_slice(&28u16.to_be_bytes()); // TYPE AAAA
+        resp.extend_from_slice(&1u16.to_be_bytes()); // CLASS IN
+        resp.extend_from_slice(&1u32.to_be_bytes()); // TTL = 1 second
+        resp.extend_from_slice(&16u16.to_be_bytes()); // RDLENGTH = 16
+        resp.extend_from_slice(&[0u8; 16]); // :: (Unspecified IPv6)
+    }
+
+    resp
+}
+
 /// Synthesizes a SERVFAIL (RCODE = 2) response preserving EDNS0 OPT RR.
 pub fn build_servfail_response(query_buf: &[u8]) -> Vec<u8> {
     if query_buf.len() < 12 {
@@ -570,8 +634,11 @@ pub fn is_rebind_exempt_domain(domain: &str) -> bool {
         || clean.ends_with(".localhost")
         || clean.ends_with(".local")
         || clean.ends_with(".lan")
+        || clean.ends_with(".home")
         || clean.ends_with(".home.arpa")
         || clean.ends_with(".internal")
+        || clean.ends_with(".intranet")
+        || clean.ends_with(".priv")
         || clean.ends_with(".corp")
 }
 
@@ -1368,6 +1435,37 @@ mod tests {
         assert_eq!(q.name, "example.com");
         assert_eq!(q.qtype, 1);
         assert_eq!(q.qclass, 1);
+    }
+
+    #[test]
+    fn test_build_sinkhole_response_a_and_aaaa() {
+        let query_a = [
+            0xAB, 0xCD, // TXID
+            0x01, 0x00, // RD=1
+            0x00, 0x01, // QDCOUNT=1
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x08, b'f', b'a', b'c', b'e', b'b', b'o', b'o', b'k', 0x03, b'c', b'o', b'm', 0x00,
+            0x00, 0x01, // A
+            0x00, 0x01, // IN
+        ];
+
+        let sinkhole_a = build_sinkhole_response(&query_a);
+        assert_eq!(&sinkhole_a[0..2], &[0xAB, 0xCD]); // TXID matches
+        let flags = u16::from_be_bytes([sinkhole_a[2], sinkhole_a[3]]);
+        assert_eq!(flags & 0x000F, 0); // RCODE = 0 (NOERROR)
+        assert_eq!(u16::from_be_bytes([sinkhole_a[6], sinkhole_a[7]]), 1); // ANCOUNT = 1
+        // Verify RDATA is 0.0.0.0
+        let len = sinkhole_a.len();
+        assert_eq!(&sinkhole_a[len - 4..len], &[0, 0, 0, 0]);
+
+        // AAAA Query
+        let mut query_aaaa = query_a.to_vec();
+        let qlen = query_aaaa.len();
+        query_aaaa[qlen - 4..qlen - 2].copy_from_slice(&28u16.to_be_bytes()); // QTYPE = AAAA
+        let sinkhole_aaaa = build_sinkhole_response(&query_aaaa);
+        assert_eq!(u16::from_be_bytes([sinkhole_aaaa[6], sinkhole_aaaa[7]]), 1); // ANCOUNT = 1
+        let aaaa_len = sinkhole_aaaa.len();
+        assert_eq!(&sinkhole_aaaa[aaaa_len - 16..aaaa_len], &[0u8; 16]); // ::
     }
 
     #[test]
