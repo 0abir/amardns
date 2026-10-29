@@ -720,7 +720,7 @@ mod tests {
             wal.append_whitelist("trusted.org");
             wal.append_whitelist("apple.com");
             wal.append_unwhitelist("apple.com"); // removed
-            wal.append_bypass("redforce.live");
+            wal.append_bypass("trusted-isp.net");
             wal.append_bypass("*.bypass.org");
             wal.append_unbypass("*.bypass.org"); // removed
             wal.append_instant_block_state(true);
@@ -746,7 +746,7 @@ mod tests {
             assert!(!blocks.contains("bad-checksum.evil")); // corrupt line was skipped
             assert!(whitelists.contains("trusted.org"));
             assert!(!whitelists.contains("apple.com")); // properly unwhitelisted
-            assert!(bypasses.contains("redforce.live"));
+            assert!(bypasses.contains("trusted-isp.net"));
             assert!(!bypasses.contains("*.bypass.org")); // properly unbypassed
             assert!(is_enabled);
             assert_eq!(is_sources.len(), 2);

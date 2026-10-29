@@ -838,7 +838,7 @@ impl AppState {
             }
         }
 
-        // 3. Zero-allocation parent suffix lookup (e.g. portal.redforce.live -> redforce.live -> live)
+        // 3. Zero-allocation parent suffix lookup (e.g. portal.domain.com -> domain.com -> com)
         let mut cursor = clean.as_str();
         while let Some(idx) = cursor.find('.') {
             cursor = &cursor[idx + 1..];
@@ -2369,10 +2369,10 @@ mod tests {
         assert!(!state.is_domain_blocked("sub.tracker.com"));
 
         // 6. Bypasslist with asterisk wildcard
-        state.custom_bypasslist.write().insert("*.redforce.live".to_string());
-        assert!(state.is_bypassed("redforce.live"));
-        assert!(state.is_bypassed("portal.redforce.live"));
-        assert!(state.is_exempt("portal.redforce.live"));
+        state.custom_bypasslist.write().insert("*.custom-bypass.net".to_string());
+        assert!(state.is_bypassed("custom-bypass.net"));
+        assert!(state.is_bypassed("portal.custom-bypass.net"));
+        assert!(state.is_exempt("portal.custom-bypass.net"));
 
         // 7. Instant release: toggling OFF unblocks immediately and flushes instant_cache in 0ms
         state.instant_block_enabled.store(false, Ordering::Relaxed);
