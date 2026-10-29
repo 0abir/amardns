@@ -874,7 +874,7 @@ pub async fn process_dns_wire_packet_full(
             None,
             false,
         );
-        let resp_bytes = if let Some(cached_resp) = state.instant_cache.get_blocked_response(&q.name, q.qtype, q.tx_id) {
+        let resp_bytes = if let Some(cached_resp) = state.instant_cache.get_blocked_response(&q.name, q.qtype, parsed.tx_id) {
             cached_resp
         } else {
             let mut fresh = build_blocked_response(query_wire, true);

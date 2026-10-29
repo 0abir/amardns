@@ -38,7 +38,7 @@ fn create_reuseport_udp(addr: SocketAddr) -> std::io::Result<std::net::UdpSocket
     let _ = socket.set_recv_buffer_size(UDP_SOCKET_BUFFER_SIZE);
     let _ = socket.set_send_buffer_size(UDP_SOCKET_BUFFER_SIZE);
     #[cfg(unix)]
-    let _ = socket.set_tos(0xB8); // DSCP 46 (Expedited Forwarding) for hardware & kernel packet scheduling
+    let _ = socket.set_tos_v4(0xB8); // DSCP 46 (Expedited Forwarding) for hardware & kernel packet scheduling
     socket.set_nonblocking(true)?;
     if addr.is_ipv6() {
         let _ = socket.set_only_v6(false);
@@ -60,7 +60,7 @@ fn create_reuseport_tcp(addr: SocketAddr) -> std::io::Result<std::net::TcpListen
     let _ = socket.set_recv_buffer_size(UDP_SOCKET_BUFFER_SIZE);
     let _ = socket.set_send_buffer_size(UDP_SOCKET_BUFFER_SIZE);
     #[cfg(unix)]
-    let _ = socket.set_tos(0xB8);
+    let _ = socket.set_tos_v4(0xB8);
     socket.set_nonblocking(true)?;
     socket.set_tcp_nodelay(true)?;
     if addr.is_ipv6() {
@@ -147,7 +147,7 @@ pub async fn start_plain_udp(
                                             // 1. Dedicated Instant Blocker check & isolated cache lookup
                                             if state_worker.is_instant_blocked(&clean) {
                                                 state_worker.metrics.threat_blocks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                                let blocked = if let Some(cached_resp) = state_worker.instant_cache.get_blocked_response(&clean, q.qtype, parsed.header.id) {
+                                                let blocked = if let Some(cached_resp) = state_worker.instant_cache.get_blocked_response(&clean, q.qtype, parsed.tx_id) {
                                                     cached_resp
                                                 } else {
                                                     let mut fresh = crate::dns::parser::build_blocked_response(&buf[..len], true);

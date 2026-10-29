@@ -76,7 +76,7 @@ pub async fn start_doh3_server(
     let _ = socket.set_recv_buffer_size(8 * 1024 * 1024);
     let _ = socket.set_send_buffer_size(8 * 1024 * 1024);
     #[cfg(unix)]
-    let _ = socket.set_tos(0xB8);
+    let _ = socket.set_tos_v4(0xB8);
     socket.set_nonblocking(true)?;
     socket.bind(&socket2::SockAddr::from(bind_addr))?;
 
