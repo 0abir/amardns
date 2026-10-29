@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::dns::dnssec::{DnssecStatus, validate_dnssec};
-use crate::dns::parser::{build_blocked_response, build_servfail_response, parse_dns_query_opts};
+use crate::dns::parser::{build_blocked_response, build_servfail_response, build_sinkhole_response, parse_dns_query_opts};
 use crate::security::auth::check_auth;
 use crate::server::api::DnsQueryParam;
 use crate::state::AppState;
