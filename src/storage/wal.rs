@@ -339,10 +339,6 @@ impl WalStorage {
         }
     }
 
-    pub fn append_fb_block(&self, enabled: bool) {
-        self.append_instant_block_state(enabled);
-    }
-
     pub fn append_instant_block_state(&self, enabled: bool) {
         if let Ok(mut lock) = self.writer.lock() {
             if let Some(f) = lock.as_mut() {
