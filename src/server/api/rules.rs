@@ -241,6 +241,7 @@ pub async fn handle_add_blocklist(
             }
         }
     }
+    state.flush_all_caches().await;
 
     broadcast_peer_sync(
         headers,
@@ -311,6 +312,7 @@ pub async fn handle_delete_blocklist(
     };
     state.wal.append_unblock(&clean);
     state.custom_blocklist.write().remove(&clean);
+    state.flush_all_caches().await;
     broadcast_peer_sync(
         headers,
         &state.config.dns_master_key,
@@ -356,6 +358,7 @@ pub async fn handle_clear_blocklist(
 
     state.custom_blocklist.write().clear();
     state.wal.clear();
+    state.flush_all_caches().await;
     broadcast_peer_sync(
         headers,
         &state.config.dns_master_key,
@@ -466,6 +469,7 @@ pub async fn handle_add_whitelist(
             }
         }
     }
+    state.flush_all_caches().await;
     for dom in &added_domains {
         state.cache.invalidate_negative(dom).await;
     }
@@ -539,6 +543,7 @@ pub async fn handle_delete_whitelist(
     };
     state.wal.append_unwhitelist(&clean);
     state.custom_whitelist.write().remove(&clean);
+    state.flush_all_caches().await;
     broadcast_peer_sync(
         headers,
         &state.config.dns_master_key,
@@ -583,6 +588,7 @@ pub async fn handle_clear_whitelist(
     }
 
     state.custom_whitelist.write().clear();
+    state.flush_all_caches().await;
     broadcast_peer_sync(
         headers,
         &state.config.dns_master_key,
@@ -693,6 +699,7 @@ pub async fn handle_add_bypasslist(
             }
         }
     }
+    state.flush_all_caches().await;
     for dom in &added_domains {
         state.cache.invalidate_negative(dom).await;
     }
@@ -766,6 +773,7 @@ pub async fn handle_delete_bypasslist(
     };
     state.wal.append_unbypass(&clean);
     state.custom_bypasslist.write().remove(&clean);
+    state.flush_all_caches().await;
     broadcast_peer_sync(
         headers,
         &state.config.dns_master_key,
@@ -810,6 +818,7 @@ pub async fn handle_clear_bypasslist(
     }
 
     state.custom_bypasslist.write().clear();
+    state.flush_all_caches().await;
     broadcast_peer_sync(
         headers,
         &state.config.dns_master_key,

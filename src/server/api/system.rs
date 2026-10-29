@@ -129,6 +129,11 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/upstreams/sync", post(sync_upstreams))
         .route("/api/upstreams/sync/", post(sync_upstreams))
         .route("/api/upstreams/sync/{key}", post(sync_upstreams_key))
+        // Reboot & System Restart
+        .route("/api/system/reboot", post(reboot_handler))
+        .route("/api/system/reboot/", post(reboot_handler))
+        .route("/api/system/reboot/{key}", post(reboot_key_handler))
+        .route("/{key}/api/system/reboot", post(reboot_key_handler))
         // Controls & Wipe
         .route("/api/reset-cb", post(reset_circuit_breakers))
         .route("/api/reset-cb/", post(reset_circuit_breakers))
@@ -396,7 +401,7 @@ pub async fn set_facebook_block_key(
 }
 
 pub async fn handle_set_facebook_block(
-    state: &AppState,
+    state: &Arc<AppState>,
     key: Option<&str>,
     headers: &HeaderMap,
     payload: BoolSetting,
@@ -466,7 +471,7 @@ pub async fn toggle_instant_block_key(
 }
 
 pub async fn handle_toggle_instant_block(
-    state: &AppState,
+    state: &Arc<AppState>,
     key: Option<&str>,
     headers: &HeaderMap,
     payload: BoolSetting,
@@ -486,14 +491,12 @@ pub async fn handle_toggle_instant_block(
         .block_facebook
         .store(payload.enabled, Ordering::Relaxed);
     state.wal.append_instant_block_state(payload.enabled);
-    // Instant separate cache flush: 0ms reaction without wiping general AeroCache!
-    state.instant_cache.invalidate_all();
-    if payload.enabled {
-        let domains = state.instant_block_domains.read().clone();
-        for d in &domains {
-            state.cache.invalidate_negative(d).await;
-        }
-    }
+
+    // Industrial-grade rule execution: Flush all caches immediately and reload feeds/rules
+    // to prevent any collision between active/released rules and stale cache entries.
+    state.flush_all_caches().await;
+    state.trigger_background_feed_sync();
+
     state.log_action(
         "instant_block_toggled",
         if payload.enabled { "enabled" } else { "disabled" },
@@ -519,7 +522,7 @@ pub async fn save_instant_block_sources_key(
 }
 
 pub async fn handle_save_instant_block_sources(
-    state: &AppState,
+    state: &Arc<AppState>,
     key: Option<&str>,
     headers: &HeaderMap,
     payload: InstantShieldSourcesPayload,
@@ -540,7 +543,8 @@ pub async fn handle_save_instant_block_sources(
         .collect();
     let (sources_cnt, rules_cnt) = state.compile_instant_blocklist(lines).await;
     state.wal.save_instant_block_sources(&state.instant_block_sources.read());
-    state.instant_cache.invalidate_all();
+    state.flush_all_caches().await;
+    state.trigger_background_feed_sync();
     state.log_action(
         "instant_block_sources_updated",
         &format!("{} sources, {} rules compiled", sources_cnt, rules_cnt),
@@ -569,7 +573,7 @@ pub async fn sync_instant_block_sources_key(
 }
 
 pub async fn handle_sync_instant_block_sources(
-    state: &AppState,
+    state: &Arc<AppState>,
     key: Option<&str>,
     headers: &HeaderMap,
 ) -> Response {
@@ -583,7 +587,8 @@ pub async fn handle_sync_instant_block_sources(
     }
     let current_sources = state.instant_block_sources.read().clone();
     let (sources_cnt, rules_cnt) = state.compile_instant_blocklist(current_sources).await;
-    state.instant_cache.invalidate_all();
+    state.flush_all_caches().await;
+    state.trigger_background_feed_sync();
     Json(serde_json::json!({
         "ok": true,
         "sourcesCount": sources_cnt,
@@ -608,7 +613,7 @@ pub async fn clear_instant_block_sources_key(
 }
 
 pub async fn handle_clear_instant_block_sources(
-    state: &AppState,
+    state: &Arc<AppState>,
     key: Option<&str>,
     headers: &HeaderMap,
 ) -> Response {
@@ -623,13 +628,72 @@ pub async fn handle_clear_instant_block_sources(
     state.instant_block_sources.write().clear();
     state.instant_block_domains.write().clear();
     state.instant_block_wildcards.write().clear();
-    state.instant_cache.invalidate_all();
     state.wal.save_instant_block_sources(&[]);
+    state.flush_all_caches().await;
+    state.trigger_background_feed_sync();
     state.log_action("instant_block_cleared", "admin");
     Json(serde_json::json!({
         "ok": true,
         "sourcesCount": 0,
         "rulesCount": 0,
+    }))
+    .into_response()
+}
+
+pub async fn reboot_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    handle_system_reboot(&state, None, &headers).await
+}
+
+pub async fn reboot_key_handler(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_system_reboot(&state, Some(&key), &headers).await
+}
+
+pub async fn handle_system_reboot(
+    state: &Arc<AppState>,
+    key: Option<&str>,
+    headers: &HeaderMap,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/system/reboot");
+    if !auth.is_admin() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "ok": false, "error": "Forbidden: Reboot requires Master Key" })),
+        )
+            .into_response();
+    }
+
+    state.log_action("system_reboot", "admin_api");
+    state.flush_all_caches().await;
+    state.wal.compact();
+
+    let state_c = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let _ = state_c.shutdown_tx.send(true);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        #[cfg(unix)]
+        {
+            if let Ok(current_exe) = std::env::current_exe() {
+                use std::os::unix::process::CommandExt;
+                let _ = std::process::Command::new(current_exe)
+                    .args(std::env::args().skip(1))
+                    .envs(std::env::vars())
+                    .env("AMARDNS_EXEC_GUARD", "1")
+                    .exec();
+            }
+        }
+        std::process::exit(0);
+    });
+
+    Json(serde_json::json!({
+        "ok": true,
+        "message": "System reboot initiated successfully. Engine restarting in 500ms.",
+        "restarting": true
     }))
     .into_response()
 }

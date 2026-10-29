@@ -977,6 +977,15 @@ impl AppState {
         (total_sources, total_rules)
     }
 
+    /// Flushes all in-memory caches across the engine (positive AeroCache, negative cache,
+    /// fast negative filter, and dedicated instant block cache), releasing memory immediately.
+    pub async fn flush_all_caches(&self) {
+        self.cache.clear().await;
+        self.fast_neg_filter.invalidate_all();
+        self.instant_cache.invalidate_all();
+        crate::telemetry::metrics::trim_process_memory();
+    }
+
     pub fn is_exact_whitelisted(&self, domain: &str) -> bool {
         if self.whitelist_exact.read().contains(domain) {
             return true;

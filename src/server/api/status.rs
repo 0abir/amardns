@@ -415,12 +415,25 @@ pub async fn dashboard_handler(State(state): State<Arc<AppState>>, headers: Head
             [
                 (header::CONTENT_TYPE, "text/html; charset=utf-8"),
                 (header::SET_COOKIE, cookie.as_str()),
+                (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate, max-age=0"),
+                (header::PRAGMA, "no-cache"),
+                (header::EXPIRES, "0"),
             ],
             render_dashboard(&active_key, &fly_machine_id, &fly_region),
         )
             .into_response()
     } else {
-        Html(GATEWAY_HTML).into_response()
+        (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate, max-age=0"),
+                (header::PRAGMA, "no-cache"),
+                (header::EXPIRES, "0"),
+            ],
+            GATEWAY_HTML,
+        )
+            .into_response()
     }
 }
 
@@ -468,12 +481,25 @@ pub async fn status_handler(
                 [
                     (header::CONTENT_TYPE, "text/html; charset=utf-8"),
                     (header::SET_COOKIE, cookie.as_str()),
+                    (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate, max-age=0"),
+                    (header::PRAGMA, "no-cache"),
+                    (header::EXPIRES, "0"),
                 ],
                 render_dashboard(&key, &fly_machine_id, &fly_region),
             )
                 .into_response();
         } else {
-            return Html(GATEWAY_HTML).into_response();
+            return (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                    (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate, max-age=0"),
+                    (header::PRAGMA, "no-cache"),
+                    (header::EXPIRES, "0"),
+                ],
+                GATEWAY_HTML,
+            )
+                .into_response();
         }
     }
 

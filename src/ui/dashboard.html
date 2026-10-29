@@ -1576,6 +1576,7 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
       <button class="chip-cmd" data-cmd="feed status">feed status</button>
       <button class="chip-cmd" data-cmd="sockets">sockets</button>
       <button class="chip-cmd" data-cmd="software list">software list</button>
+      <button class="chip-cmd" data-cmd="reboot" style="color:var(--bad);border-color:rgba(255,0,85,0.3)">reboot</button>
       <button class="chip-cmd" data-cmd="help">help</button>
     </div>
 
@@ -5233,6 +5234,10 @@ function runConsoleCommand(cmd, isInitial){
       timeBadge.style.marginTop='4px';
       timeBadge.textContent='Completed in '+res.elapsed_ms.toFixed(2)+' ms';
       resEl.appendChild(timeBadge);
+    }
+    if(cmd.trim().toLowerCase()==='reboot'||cmd.trim().toLowerCase().indexOf('reboot')===0||cmd.trim().toLowerCase()==='restart'){
+      toast('System is rebooting... Reconnecting in 3 seconds...','in');
+      setTimeout(function(){window.location.reload();},3500);
     }
     lineEl.appendChild(resEl);
     outEl.scrollTop=outEl.scrollHeight;

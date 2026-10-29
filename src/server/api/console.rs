@@ -359,6 +359,12 @@ fn get_command_list() -> Vec<ConsoleCommandInfo> {
                     .into(),
             category: "System".into(),
         },
+        ConsoleCommandInfo {
+            name: "reboot".into(),
+            syntax: "reboot".into(),
+            description: "Flush all caches, compact WAL, and restart the AmarDNS engine".into(),
+            category: "System".into(),
+        },
     ]
 }
 
@@ -405,6 +411,7 @@ pub async fn execute_command(state: &Arc<AppState>, input: &str) -> (String, Str
         "update" => cmd_update(args).await,
         "software" | "versions" => cmd_software(args).await,
         "rm" => cmd_rm(args).await,
+        "reboot" | "restart" => cmd_reboot(state, args).await,
         _ => (
             format!(
                 "Command not recognized: '{}'. Type 'help' to see all available commands.",
@@ -617,6 +624,50 @@ async fn cmd_rm(args: &[&str]) -> (String, String) {
             "error".into(),
         ),
     }
+}
+
+async fn cmd_reboot(state: &Arc<AppState>, _args: &[&str]) -> (String, String) {
+    tracing::info!("[system] Manual reboot command received from interactive console.");
+    state.log_action("system_reboot", "admin_console");
+
+    // 1. Flush all in-memory caches (AeroCache, negative filter, instant cache)
+    state.flush_all_caches().await;
+
+    // 2. Compact WAL to ensure clean on-disk persistence
+    state.wal.compact();
+
+    // 3. Spawn background reboot after brief delay to allow HTTP response to reach client
+    let state_c = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // Signal graceful shutdown
+        let _ = state_c.shutdown_tx.send(true);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        #[cfg(unix)]
+        {
+            if let Ok(current_exe) = std::env::current_exe() {
+                use std::os::unix::process::CommandExt;
+                tracing::info!("[system] Executing in-place restart via execve: {:?}", current_exe);
+                let _ = std::process::Command::new(current_exe)
+                    .args(std::env::args().skip(1))
+                    .envs(std::env::vars())
+                    .env("AMARDNS_EXEC_GUARD", "1")
+                    .exec();
+            }
+        }
+        // If execve is unsupported or inside container, exit cleanly with 0
+        // Fly.io init supervisor will immediately restart container with fresh state
+        tracing::info!("[system] Exiting cleanly (code 0) to trigger supervisor container restart...");
+        std::process::exit(0);
+    });
+
+    (
+        "── [ System Reboot Triggered ] ──────────────────────────────────────────\n\n  • In-memory caches: Flushed (AeroCache, negative filter, instant cache)\n  • PulseDB (WAL): Compacted and synced to disk\n  • Restarting engine in 500ms...\n\nDashboard will reconnect in 3 seconds.\n"
+            .into(),
+        "ok".into(),
+    )
 }
 
 fn cmd_banner(_state: &AppState) -> String {

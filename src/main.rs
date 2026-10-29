@@ -317,9 +317,23 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Application State
     let state = Arc::new(AppState::new(config.clone()));
 
-    // 4. Background Boot Ingestion: Load Threat Feeds (400k domains), Rank Upstreams, and Sync IANA DNSSEC Root Anchors
+    // Firmware update & cold-boot clean slate:
+    // Flush all stale in-memory caches completely so that fresh boots, new releases,
+    // bypasslists, and rule modifications start with a 100% clean slate with zero collisions.
+    state.flush_all_caches().await;
+
+    // 4. Background Boot Ingestion: Load Threat Feeds (400k domains), Rank Upstreams, Sync IANA DNSSEC Root Anchors,
+    // and compile dynamic Instant Blocker sources (including remote URLs)
     let boot_state = state.clone();
     tokio::spawn(async move {
+        // Compile any saved Instant Blocker sources fresh
+        let ib_sources = boot_state.instant_block_sources.read().clone();
+        if !ib_sources.is_empty() {
+            info!("[boot] Compiling {} saved instant blocker sources...", ib_sources.len());
+            let (srcs, rules) = boot_state.compile_instant_blocklist(ib_sources).await;
+            info!("[boot] Instant Blocker compiled: {} sources, {} rules", srcs, rules);
+        }
+
         info!("[boot] Triggering background threat feed ingestion queue...");
         boot_state.trigger_background_feed_sync();
 
