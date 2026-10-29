@@ -199,10 +199,12 @@ select.fld option{background:var(--sur2)}
 .btag-auto::before{content:'';font-size:8px;opacity:.8}
 .btag-x{cursor:pointer;opacity:.35;transition:opacity .1s}.btag-x:hover{opacity:1}
 .wltag{padding:3px 8px;background:rgba(57,255,20,.05);border:1px solid rgba(57,255,20,.22);font-size:12px;color:var(--good);display:flex;align-items:center;gap:5px;word-break:break-all}
-.btag-group,.wltag-group{display:inline-flex;flex-direction:column;gap:3px;vertical-align:top;max-width:100%}
-.btag-group-hdr,.wltag-group-hdr{cursor:pointer;user-select:none;transition:all .15s ease}
+.bptag{padding:3px 8px;background:rgba(0,255,231,.08);border:1px solid rgba(0,255,231,.3);font-size:12px;color:var(--acc);display:flex;align-items:center;gap:5px;word-break:break-all}
+.btag-group,.wltag-group,.bptag-group{display:inline-flex;flex-direction:column;gap:3px;vertical-align:top;max-width:100%}
+.btag-group-hdr,.wltag-group-hdr,.bptag-group-hdr{cursor:pointer;user-select:none;transition:all .15s ease}
 .btag-group-hdr:hover{border-color:var(--acc2);filter:brightness(1.15)}
 .wltag-group-hdr:hover{border-color:var(--good);filter:brightness(1.15)}
+.bptag-group-hdr:hover{border-color:var(--acc);filter:brightness(1.15)}
 .grp-badge{font-size:9px;font-weight:700;padding:1px 5px;border-radius:2px;display:inline-flex;align-items:center;gap:3px}
 .grp-arrow{font-size:8px;transition:transform .15s ease}
 .group-subdomains{display:none;flex-wrap:wrap;gap:4px;padding:6px 8px;border-radius:2px;animation:fadeIn .15s ease}
@@ -1297,6 +1299,54 @@ footer{text-align:center;padding:22px 0 6px;font-size:9px;color:var(--mut);lette
     <button class="btn btn-g" id="btn-add-wl">+ Whitelist</button>
   </div>
 
+  <div class="sh" style="color:var(--acc)">Bypasslist</div>
+  <div style="color:var(--sub);font-size:11px;margin-bottom:8px">Bypassed domains unconditionally bypass ALL security, rebinding, GSB, and threat filters. Accepts asterisks (*) and bulk input.</div>
+  <div class="ap" style="margin-bottom:6px"><div class="apb"><div class="btags" id="bptags"><span style="color:var(--mut);font-size:8px">Loading…</span></div></div></div>
+  <div id="bptags-paging" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;font-size:10px;color:var(--sub);min-height:22px"></div>
+  <div class="action-input-row">
+    <button class="btn btn-d" id="btn-clear-bp" style="white-space:nowrap;flex-shrink:0"> Clean</button>
+    <input class="fld" id="bp-in" aria-label="Domain or pattern to bypass" placeholder="domain.com, *.domain.com, *pattern* (comma-sep or multiline)" style="flex:1;min-width:0">
+    <button class="btn btn-ok" id="btn-add-bp">+ Bypass</button>
+  </div>
+
+  <div class="sh" style="color:var(--bad)">Instant Blocker (Zero-Delay Dynamic Block & Release)</div>
+  <div class="ap" style="margin-bottom:18px">
+    <div class="apb">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:12px">
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--txt)">Instant Blocker:</span>
+            <span id="is-status-badge" class="badge" style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:2px;letter-spacing:.06em;background:rgba(57,255,20,.15);color:var(--good);border:1px solid rgba(57,255,20,.3)">RELEASED</span>
+            <span id="is-stats-badge" style="font-size:10px;color:var(--mut);font-family:var(--fm);margin-left:4px">0 sources · 0 rules compiled</span>
+          </div>
+          <p id="is-status-desc" style="font-size:9px;color:var(--mut);margin:0;max-width:620px;line-height:1.5">
+            <strong>Released:</strong> Instant Blocker is inactive. Toggle to immediately drop all matching domains and raw blocklist feeds in 0ms via an isolated instant cache. Untoggle to instantly release without clearing warm general DNS cache entries.
+          </p>
+        </div>
+        <div style="display:inline-flex;background:rgba(0,0,0,.4);border:1px solid var(--brd2);border-radius:4px;padding:3px;gap:4px">
+          <button class="btn btn-g" id="btn-is-allow" style="min-height:30px;padding:4px 14px;font-size:10px;clip-path:none;border-radius:3px"> Release (Allow)</button>
+          <button class="btn btn-p" id="btn-is-block" style="min-height:30px;padding:4px 14px;font-size:10px;clip-path:none;border-radius:3px"> Activate (Block)</button>
+        </div>
+      </div>
+
+      <!-- Multiline Sources & Raw URL Input Box -->
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.05)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="font-size:10px;font-weight:700;color:var(--mut);letter-spacing:.06em">INSTANT BLOCK SOURCES & WILDCARD DOMAINS (ONE PER LINE):</span>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-sm btn-d" id="btn-is-clear" style="font-size:9px;padding:2px 8px" title="Clear all instant block rules">Clear Sources</button>
+            <button class="btn btn-sm btn-b" id="btn-is-save" style="font-size:9px;padding:2px 10px">Save & Sync Rules</button>
+          </div>
+        </div>
+        <textarea id="is-sources-input" rows="6" style="width:100%;background:#060a12;border:1px solid var(--brd2);border-radius:4px;color:var(--txt);font-family:var(--fm);font-size:11px;padding:8px 10px;box-sizing:border-box;resize:vertical;line-height:1.45" placeholder="Enter raw blocklist URLs (http:// or https://) and/or wildcard domain patterns (*.example.com, tracker.net, ad.*), one per line..."></textarea>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:9px;color:var(--mut)">
+          <span>Supports raw link feeds (e.g. GitHub raw blocklists), wildcard domains (<code style="color:var(--bad)">*</code>), Adblock syntax (<code style="color:var(--acc1)">||domain^</code>), and hosts format (<code style="color:var(--acc2)">0.0.0.0 domain</code>).</span>
+          <span id="is-sync-status" style="color:var(--acc1);font-family:var(--fm)"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="sh" style="color:var(--acc3)">Machine LOG</div>
   <div class="ap" style="margin-bottom:20px">
     <div class="apb">
@@ -1556,8 +1606,10 @@ if(typeof window!=='undefined'){
 var _expandedGroups=new Set();
 var _blockPage=1, _blockPageSize=25;
 var _wlPage=1, _wlPageSize=25;
+var _bpPage=1, _bpPageSize=25;
 var _lastBlkCount=null;
 var _lastWlCount=null;
+var _lastBpCount=null;
 function isNodeSelected(node){
   if(!node)return false;
   var sel=typeof window!=='undefined'&&window.getSelection&&window.getSelection();
@@ -1590,7 +1642,7 @@ function renderTab(id){
   if(id==='logs')renderLogs(_D);
   if(id==='brain')renderBrain(_D);
   if(id==='heatmap')loadHeatmap();
-  if(id==='intelligence'){renderIntelligence(_D);loadBlock();loadWhitelist();}
+  if(id==='intelligence'){renderIntelligence(_D);loadBlock();loadWhitelist();loadBypasslist();}
   if(id==='security')renderSecurity(_D);
   if(id==='admin')renderAdmin(_D);
 }
@@ -1812,7 +1864,7 @@ function render(d){
         hdr.parentNode.insertBefore(vb,hdr.nextSibling);
       }
     }
-    ['btn-add-block','btn-clear-block','btn-add-wl','btn-clear-wl','btn-block-active','btn-block-deactive','btn-mode-public','btn-mode-private','btn-reset-cb','btn-clear-sh','btn-clear-inc','btn-nuke','btn-prune-noise','btn-import-brain','btn-apply-update','btn-rollback-update'].forEach(function(id){
+    ['btn-add-block','btn-clear-block','btn-add-wl','btn-clear-wl','btn-add-bp','btn-clear-bp','btn-is-allow','btn-is-block','btn-is-save','btn-is-clear','btn-block-active','btn-block-deactive','btn-mode-public','btn-mode-private','btn-reset-cb','btn-clear-sh','btn-clear-inc','btn-nuke','btn-prune-noise','btn-import-brain','btn-apply-update','btn-rollback-update'].forEach(function(id){
       var b=document.getElementById(id);
       if(b){b.disabled=true;b.style.opacity='0.4';b.style.cursor='not-allowed';b.title='Locked in View-Only Mode';}
     });
@@ -1824,7 +1876,11 @@ function render(d){
   var ai=d.ai||{},sh=d.selfHeal||{},cfg=d.config||{},nn=(d.perpetualAI&&d.perpetualAI.nn)||{};
   var now=Date.now();
   // Autoload lists once on first data
-  if(!_listsLoaded){_listsLoaded=true;loadBlock();loadWhitelist();}
+  if(!_listsLoaded){_listsLoaded=true;loadBlock();loadWhitelist();loadBypasslist();loadInstantBlocker();}
+  var isBlockerActive=(typeof cfg.instantBlockEnabled==='boolean')?cfg.instantBlockEnabled:(d.intelligence&&typeof d.intelligence.instantBlockEnabled==='boolean'?d.intelligence.instantBlockEnabled:false);
+  if(typeof isBlockerActive==='boolean'){
+    updateInstantBlockerUI(isBlockerActive,null,cfg.instantBlockSourcesCount,cfg.instantBlockRulesCount);
+  }
 
   // Header
   var iso=document.getElementById('iso-lbl');
@@ -2044,8 +2100,14 @@ function render(d){
       renderIntelligence(d);
       var curBlk=(dbInfo.blocklistDomains||0)+(ai.autoBlockActive||0);
       var curWl=dbInfo.whitelistDomains||0;
+      var curBp=(cfg.bypasslistCount||0);
       if(_lastBlkCount!==curBlk){_lastBlkCount=curBlk;loadBlock();}
       if(_lastWlCount!==curWl){_lastWlCount=curWl;loadWhitelist();}
+      if(_lastBpCount!==curBp){_lastBpCount=curBp;loadBypasslist();}
+      var isBlockerActive=(typeof cfg.instantBlockEnabled==='boolean')?cfg.instantBlockEnabled:(d.intelligence&&typeof d.intelligence.instantBlockEnabled==='boolean'?d.intelligence.instantBlockEnabled:false);
+      if(typeof isBlockerActive==='boolean'){
+        updateInstantBlockerUI(isBlockerActive,null,cfg.instantBlockSourcesCount,cfg.instantBlockRulesCount);
+      }
     }
     else if(tid==='logs')renderLogs(d);
     else if(tid==='brain')renderBrain(d);
@@ -3378,7 +3440,7 @@ function groupDomainsByRoot(rows){
 function toggleDomainGroup(hdr){
   var container=hdr.nextElementSibling;
   if(!container)return;
-  var grp=hdr.closest('.btag-group, .wltag-group');
+  var grp=hdr.closest('.btag-group, .wltag-group, .bptag-group');
   var root=grp?grp.getAttribute('data-group'):null;
   var isOpen=container.style.display!=='none';
   if(isOpen){
@@ -3701,6 +3763,245 @@ function clearWhitelist(){
       toast('Bulk clear not available — remove entries individually','wl');
     });
   });
+}
+
+// Bypasslist
+function setBpPage(p){
+  _bpPage=p;
+  loadBypasslist();
+}
+function loadBypasslist(){
+  api('/api/bypasslist').then(function(d){
+    var tags=document.getElementById('bptags');
+    if(!d.domains||!d.domains.length){
+      tags.innerHTML='<span style="color:var(--mut);font-size:8px">Bypasslist empty.</span>';
+      renderPagination('bptags-paging',1,1,0,0,'setBpPage');
+      return;
+    }
+    var grouped=groupDomainsByRoot(d.domains);
+    var totalPages=Math.max(1,Math.ceil(grouped.order.length/_bpPageSize));
+    if(_bpPage>totalPages)_bpPage=totalPages;
+    if(_bpPage<1)_bpPage=1;
+    var start=(_bpPage-1)*_bpPageSize;
+    var pageRoots=grouped.order.slice(start,start+_bpPageSize);
+
+    var html=[];
+    for(var k=0;k<pageRoots.length;k++){
+      var root=pageRoots[k];
+      var items=grouped.groups[root];
+      if(items.length>=3){
+        var itemDoms=items.map(function(it){return typeof it==='string'?it:it.domain;});
+        var subHtml=items.map(function(dom){
+          return '<div class="bptag">'+dom+'<span class="btag-x" data-domain='+JSON.stringify(dom)+' data-list="bp"></span></div>';
+        }).join('');
+        var isOpen=_expandedGroups.has(root);
+        var disp=isOpen?'flex':'none';
+        var arrowTxt=isOpen?'▴':'▾';
+        html.push(
+          '<div class="bptag-group" data-group="'+root+'">'+
+            '<div class="bptag bptag-group-hdr" style="border-color:rgba(0,255,231,0.4);background:rgba(0,255,231,0.08);color:var(--txt)">'+
+              '<span style="color:var(--acc);font-weight:700">*.'+root+'</span>'+
+              '<span class="grp-badge" style="background:rgba(0,255,231,0.2);color:var(--acc)">'+items.length+' subdomains <span class="grp-arrow">'+arrowTxt+'</span></span>'+
+              '<span class="btag-x" data-domain="*.'+root+'" data-list="bp" data-domains='+JSON.stringify(JSON.stringify(itemDoms))+' title="Remove all '+items.length+' subdomains"></span>'+
+            '</div>'+
+            '<div class="group-subdomains" style="display:'+disp+';background:rgba(0,0,0,0.3);border:1px dashed rgba(0,255,231,0.25)">'+
+              subHtml+
+            '</div>'+
+          '</div>'
+        );
+      } else {
+        for(var j=0;j<items.length;j++){
+          var dom=typeof items[j]==='string'?items[j]:items[j].domain;
+          html.push('<div class="bptag">'+dom+'<span class="btag-x" data-domain='+JSON.stringify(dom)+' data-list="bp"></span></div>');
+        }
+      }
+    }
+    var newHtml=html.join('');if(tags.innerHTML!==newHtml&&!isNodeSelected(tags)&&!_isMouseDown)tags.innerHTML=newHtml;
+    renderPagination('bptags-paging',_bpPage,totalPages,grouped.order.length,d.domains.length,'setBpPage');
+  }).catch(function(e){var tags=document.getElementById('bptags');if(tags)tags.innerHTML='<span style="color:var(--mut);font-size:8px">Bypasslist empty.</span>';});
+}
+
+function _cleanBypassDom(str) {
+  if (!str) return null;
+  var s = String(str).trim().toLowerCase();
+  if (s.indexOf('://') !== -1) {
+    try { s = new URL(s).hostname; } catch(_) { s = s.split('://')[1].split('/')[0]; }
+  }
+  s = s.split('/')[0].split(':')[0].split('?')[0].split('#')[0].replace(/^\.+|\.+$/g, '');
+  if (!s || s.length > 253) return null;
+  if (s === 'localhost') return s;
+  if (/^[a-z0-9*._-]+$/i.test(s) && !s.includes('..')) {
+    return s;
+  }
+  return null;
+}
+
+function addBypass(){
+  var v=document.getElementById('bp-in').value.trim();
+  if(!v)return;
+  var rawList=v.split(/[\r\n,;\s]+/).map(function(s){return s.trim();}).filter(Boolean);
+  var valid=[], invalid=[];
+  for(var i=0;i<rawList.length;i++){
+    var cd=_cleanBypassDom(rawList[i]);
+    if(cd) valid.push(cd); else invalid.push(rawList[i]);
+  }
+  if(invalid.length>0) toast('Invalid domain format: '+invalid.slice(0,3).join(', '),'er');
+  if(valid.length===0) return;
+  api('/api/bypasslist','POST',{domains:valid}).then(function(r){
+    if(r.added>0) toast('Bypassed: '+r.added+' domain(s)','ok');
+    if(r.skipped && r.skipped.length>0) toast('EXISTS: '+r.skipped.join(', '),'wl');
+    document.getElementById('bp-in').value = (r.skipped && r.skipped.length > 0) ? r.skipped.map(function(s){return s.split(' ')[0];}).join(', ') : '';
+    loadBypasslist();
+  }).catch(function(e){toast(e.message,'er');});
+}
+
+function removeBypass(el,domain,domainsList){
+  if(domainsList&&Array.isArray(domainsList)){
+    Promise.all(domainsList.map(function(d){return api('/api/bypasslist','DELETE',{domain:d});}))
+      .then(function(){
+        var grp=el.closest('.bptag-group');
+        if(grp)grp.remove();
+        toast('Removed group from bypass: '+domain,'ok');
+        loadBypasslist();
+      }).catch(function(e){toast(e.message,'er');});
+    return;
+  }
+  api('/api/bypasslist','DELETE',{domain:domain}).then(function(){
+    var grp=el.closest('.bptag-group');
+    el.closest('.bptag').remove();
+    if(grp){
+      var rem=grp.querySelectorAll('.group-subdomains .bptag');
+      if(!rem||rem.length===0){
+        grp.remove();
+      }else{
+        var b=grp.querySelector('.grp-badge');
+        if(b){b.innerHTML=rem.length+' subdomains <span class="grp-arrow">'+(grp.querySelector('.group-subdomains').style.display==='none'?'▾':'▴')+'</span>';}
+      }
+    }
+    toast('Removed from bypass: '+domain,'ok');
+    loadBypasslist();
+  }).catch(function(e){toast(e.message,'er');});
+}
+
+function clearBypasslist(){
+  uiConfirm('Clear all bypassed domains from bypasslist?', {
+    title: 'BYPASSLIST // CLEAR CONFIRMATION',
+    confirmText: 'CLEAR BYPASSLIST',
+    danger: true
+  }, function(ok){
+    if(!ok) return;
+    api('/api/bypasslist/clear','POST').then(function(){toast('Bypasslist cleared','ok');loadBypasslist();}).catch(function(){
+      toast('Bulk clear not available — remove entries individually','wl');
+    });
+  });
+}
+
+// Instant Blocker (Zero-Delay Dynamic Block & Release)
+function updateInstantBlockerUI(isActive, sourcesText, sourcesCount, rulesCount){
+  var badge=document.getElementById('is-status-badge');
+  var stats=document.getElementById('is-stats-badge');
+  var desc=document.getElementById('is-status-desc');
+  var btnAllow=document.getElementById('btn-is-allow');
+  var btnBlock=document.getElementById('btn-is-block');
+  var ta=document.getElementById('is-sources-input');
+
+  if(badge){
+    badge.textContent=isActive?"ACTIVE (BLOCKING)":"RELEASED (ALLOWED)";
+    badge.style.background=isActive?"rgba(255,45,107,.15)":"rgba(57,255,20,.15)";
+    badge.style.color=isActive?"var(--bad)":"var(--good)";
+    badge.style.borderColor=isActive?"rgba(255,45,107,.3)":"rgba(57,255,20,.3)";
+  }
+  if(stats && typeof rulesCount==='number'){
+    stats.textContent=(sourcesCount||0)+' sources · '+(rulesCount||0)+' rules compiled';
+  }
+  if(desc){
+    desc.innerHTML=isActive
+      ?"<strong>Active:</strong> Instant Blocker is actively dropping all matching domains and raw blocklist feeds in 0ms. Untoggle to instantly release."
+      :"<strong>Released:</strong> Instant Blocker is inactive. Toggle to immediately drop all matching domains and raw blocklist feeds in 0ms via an isolated instant cache. Untoggle to instantly release without clearing warm general DNS cache entries.";
+  }
+  if(btnAllow)btnAllow.className=isActive?"btn btn-p":"btn btn-g";
+  if(btnBlock)btnBlock.className=isActive?"btn btn-d":"btn btn-p";
+
+  if(ta && typeof sourcesText==='string' && document.activeElement!==ta){
+    ta.value=sourcesText;
+  }
+}
+
+function loadInstantBlocker(){
+  api('/api/instant-block')
+    .then(function(res){
+      if(res&&res.ok){
+        updateInstantBlockerUI(res.enabled, res.sources, res.sourcesCount, res.rulesCount);
+      }
+    })
+    .catch(function(e){
+      console.warn('loadInstantBlocker error:', e);
+    });
+}
+
+function setInstantBlocker(block){
+  var btnAllow=document.getElementById('btn-is-allow');
+  var btnBlock=document.getElementById('btn-is-block');
+  if(btnAllow)btnAllow.disabled=true;
+  if(btnBlock)btnBlock.disabled=true;
+  api('/api/instant-block/toggle','POST',{enabled:block})
+    .then(function(res){
+      updateInstantBlockerUI(res.enabled);
+      if(_D&&_D.config)_D.config.instantBlockEnabled=res.enabled;
+      toast(res.enabled?"Instant Blocker: ACTIVATED (Traffic blocked, instant cache ready)":"Instant Blocker: RELEASED (Traffic allowed, instant cache flushed in 0ms)","ok");
+    })
+    .catch(function(err){
+      toast("Failed to toggle Instant Blocker: "+(err.message||err),"bad");
+    })
+    .finally(function(){
+      if(btnAllow)btnAllow.disabled=false;
+      if(btnBlock)btnBlock.disabled=false;
+    });
+}
+
+function saveInstantBlockerSources(){
+  var ta=document.getElementById('is-sources-input');
+  var btn=document.getElementById('btn-is-save');
+  var statusSpan=document.getElementById('is-sync-status');
+  if(!ta)return;
+  var text=ta.value;
+  if(btn)btn.disabled=true;
+  if(statusSpan)statusSpan.textContent='Syncing & compiling feeds…';
+  toast('Syncing Instant Blocker sources…','in');
+
+  api('/api/instant-block/sources','POST',{sources:text})
+    .then(function(res){
+      if(statusSpan)statusSpan.textContent='Synced: '+res.rulesCount+' rules from '+res.sourcesCount+' sources';
+      toast("Instant Blocker synced: "+res.sourcesCount+" sources, "+res.rulesCount+" rules compiled!","ok");
+      var badge=document.getElementById('is-status-badge');
+      var isActive=badge && badge.textContent.indexOf('ACTIVE')!==-1;
+      updateInstantBlockerUI(isActive, null, res.sourcesCount, res.rulesCount);
+    })
+    .catch(function(err){
+      if(statusSpan)statusSpan.textContent='Sync error';
+      toast("Failed to sync sources: "+(err.message||err),"bad");
+    })
+    .finally(function(){
+      if(btn)btn.disabled=false;
+    });
+}
+
+function clearInstantBlockerSources(){
+  if(!confirm('Clear all Instant Blocker sources and compiled rules?'))return;
+  var ta=document.getElementById('is-sources-input');
+  var statusSpan=document.getElementById('is-sync-status');
+  api('/api/instant-block/clear','POST')
+    .then(function(res){
+      if(ta)ta.value='';
+      if(statusSpan)statusSpan.textContent='Sources cleared';
+      var badge=document.getElementById('is-status-badge');
+      var isActive=badge && badge.textContent.indexOf('ACTIVE')!==-1;
+      updateInstantBlockerUI(isActive, '', 0, 0);
+      toast('Instant Blocker sources cleared','ok');
+    })
+    .catch(function(err){
+      toast('Failed to clear sources: '+(err.message||err),'bad');
+    });
 }
 
 
@@ -4666,6 +4967,13 @@ on('block-in','keydown',function(e){if(e.key==='Enter')addBlock();});
 on('btn-clear-wl','click',clearWhitelist);
 on('btn-add-wl','click',addWhitelist);
 on('wl-in','keydown',function(e){if(e.key==='Enter')addWhitelist();});
+on('btn-clear-bp','click',clearBypasslist);
+on('btn-add-bp','click',addBypass);
+on('bp-in','keydown',function(e){if(e.key==='Enter')addBypass();});
+on('btn-is-allow','click',function(){setInstantBlocker(false);});
+on('btn-is-block','click',function(){setInstantBlocker(true);});
+on('btn-is-save','click',saveInstantBlockerSources);
+on('btn-is-clear','click',clearInstantBlockerSources);
 on('btn-export-brain','click',exportBrain);
 on('btn-import-brain','click',function(){$('brain-import').click();});
 on('btn-prune-noise','click',pruneNoise);
@@ -4727,6 +5035,21 @@ $('wltags').addEventListener('click',function(e){
     toggleDomainGroup(hdr);
   }
 });
+var _bptagsEl = $('bptags');
+if (_bptagsEl) {
+  _bptagsEl.addEventListener('click',function(e){
+    var x=e.target.closest('.btag-x');
+    if(x){
+      var doms=x.dataset.domains?JSON.parse(x.dataset.domains):null;
+      removeBypass(x,x.dataset.domain,doms);
+      return;
+    }
+    var hdr=e.target.closest('.bptag-group-hdr');
+    if(hdr){
+      toggleDomainGroup(hdr);
+    }
+  });
+}
 }());
 
 // Feature: Interactive Engine Console

@@ -93,6 +93,10 @@ pub fn create_dual_stack_tcp_listener(addr: SocketAddr) -> Result<TcpListener, s
     #[cfg(unix)]
     let _ = socket.set_reuse_port(true);
     let _ = socket.set_tcp_nodelay(true);
+    let _ = socket.set_recv_buffer_size(8 * 1024 * 1024);
+    let _ = socket.set_send_buffer_size(8 * 1024 * 1024);
+    #[cfg(unix)]
+    let _ = socket.set_tos(0xB8);
     if addr.is_ipv6() {
         let _ = socket.set_only_v6(false);
     }

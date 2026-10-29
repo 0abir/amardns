@@ -314,15 +314,75 @@ impl WalStorage {
             }
         }
     }
+
+    pub fn append_bypass(&self, domain: &str) {
+        if let Ok(mut lock) = self.writer.lock() {
+            if let Some(f) = lock.as_mut() {
+                let line = format!("+BP:{}", domain);
+                let crc = line_checksum(&line);
+                let _ = writeln!(f, "{} #crc={:08x}", line, crc);
+                let _ = f.flush();
+                self.total_records.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub fn append_unbypass(&self, domain: &str) {
+        if let Ok(mut lock) = self.writer.lock() {
+            if let Some(f) = lock.as_mut() {
+                let line = format!("-BP:{}", domain);
+                let crc = line_checksum(&line);
+                let _ = writeln!(f, "{} #crc={:08x}", line, crc);
+                let _ = f.flush();
+                self.total_records.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub fn append_fb_block(&self, enabled: bool) {
+        self.append_instant_block_state(enabled);
+    }
+
+    pub fn append_instant_block_state(&self, enabled: bool) {
+        if let Ok(mut lock) = self.writer.lock() {
+            if let Some(f) = lock.as_mut() {
+                let line = format!("+IS_ENABLE:{}", if enabled { "1" } else { "0" });
+                let crc = line_checksum(&line);
+                let _ = writeln!(f, "{} #crc={:08x}", line, crc);
+                let _ = f.flush();
+                self.total_records.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub fn save_instant_block_sources(&self, sources: &[String]) {
+        if let Ok(mut lock) = self.writer.lock() {
+            if let Some(f) = lock.as_mut() {
+                let clear_line = "!IS_SRC_CLEAR";
+                let crc = line_checksum(clear_line);
+                let _ = writeln!(f, "{} #crc={:08x}", clear_line, crc);
+                for src in sources {
+                    let line = format!("+IS_SRC:{}", src);
+                    let crc = line_checksum(&line);
+                    let _ = writeln!(f, "{} #crc={:08x}", line, crc);
+                }
+                let _ = f.flush();
+                self.total_records.fetch_add(1 + sources.len() as u64, Ordering::Relaxed);
+            }
+        }
+    }
     // ─── Stats and maintenance ─────────────────────────────────────────────────
 
     pub fn total_records(&self) -> u64 {
         self.total_records.load(Ordering::Relaxed)
     }
 
-    pub fn load_lists(&self) -> (HashSet<String>, HashSet<String>) {
+    pub fn load_lists(&self) -> (HashSet<String>, HashSet<String>, HashSet<String>, bool, Vec<String>) {
         let mut custom_blocks = HashSet::new();
         let mut custom_whitelists = HashSet::new();
+        let mut custom_bypasses = HashSet::new();
+        let mut instant_block_enabled = false;
+        let mut instant_block_sources = Vec::new();
         let mut lines_count = 0u64;
 
         if self.file_path.as_str() != ":memory:" && !self.file_path.is_empty() {
@@ -368,6 +428,18 @@ impl WalStorage {
                         custom_whitelists.insert(domain.to_string());
                     } else if let Some(domain) = trimmed.strip_prefix("-W:") {
                         custom_whitelists.remove(domain);
+                    } else if let Some(domain) = trimmed.strip_prefix("+BP:") {
+                        custom_bypasses.insert(domain.to_string());
+                    } else if let Some(domain) = trimmed.strip_prefix("-BP:") {
+                        custom_bypasses.remove(domain);
+                    } else if let Some(val) = trimmed.strip_prefix("+IS_ENABLE:") {
+                        instant_block_enabled = val == "1" || val == "true";
+                    } else if let Some(val) = trimmed.strip_prefix("+FB:") {
+                        instant_block_enabled = val == "1" || val == "true";
+                    } else if trimmed.starts_with("!IS_SRC_CLEAR") {
+                        instant_block_sources.clear();
+                    } else if let Some(src) = trimmed.strip_prefix("+IS_SRC:") {
+                        instant_block_sources.push(src.to_string());
                     } else if let Some(domain) = trimmed.strip_prefix("+C:") {
                         // Legacy common domain record: migrate into custom_whitelists
                         custom_whitelists.insert(domain.to_string());
@@ -379,7 +451,7 @@ impl WalStorage {
         }
 
         self.total_records.store(lines_count, Ordering::Relaxed);
-        (custom_blocks, custom_whitelists)
+        (custom_blocks, custom_whitelists, custom_bypasses, instant_block_enabled, instant_block_sources)
     }
 
     pub fn is_open(&self) -> bool {
@@ -445,6 +517,9 @@ impl WalStorage {
         let temp_path = format!("{}.tmp", self.file_path.as_str());
         let mut custom_blocks = HashSet::new();
         let mut custom_whitelists = HashSet::new();
+        let mut custom_bypasses = HashSet::new();
+        let mut instant_block_enabled = false;
+        let mut instant_block_sources = Vec::new();
         let mut recent_events = std::collections::VecDeque::with_capacity(3000);
 
         if let Ok(file) = File::open(self.file_path.as_str()) {
@@ -483,6 +558,18 @@ impl WalStorage {
                     custom_whitelists.insert(domain.to_string());
                 } else if let Some(domain) = trimmed.strip_prefix("-W:") {
                     custom_whitelists.remove(domain);
+                } else if let Some(domain) = trimmed.strip_prefix("+BP:") {
+                    custom_bypasses.insert(domain.to_string());
+                } else if let Some(domain) = trimmed.strip_prefix("-BP:") {
+                    custom_bypasses.remove(domain);
+                } else if let Some(val) = trimmed.strip_prefix("+IS_ENABLE:") {
+                    instant_block_enabled = val == "1" || val == "true";
+                } else if let Some(val) = trimmed.strip_prefix("+FB:") {
+                    instant_block_enabled = val == "1" || val == "true";
+                } else if trimmed.starts_with("!IS_SRC_CLEAR") {
+                    instant_block_sources.clear();
+                } else if let Some(src) = trimmed.strip_prefix("+IS_SRC:") {
+                    instant_block_sources.push(src.to_string());
                 } else if let Some(domain) = trimmed.strip_prefix("+C:") {
                     // Legacy common domain record: migrate into custom_whitelists
                     custom_whitelists.insert(domain.to_string());
@@ -509,6 +596,26 @@ impl WalStorage {
                 let body = format!("+W:{}", domain);
                 let crc = line_checksum(&body);
                 writeln!(out, "{} #crc={:08x}", body, crc)?;
+            }
+            for domain in &custom_bypasses {
+                let body = format!("+BP:{}", domain);
+                let crc = line_checksum(&body);
+                writeln!(out, "{} #crc={:08x}", body, crc)?;
+            }
+            if instant_block_enabled {
+                let body = "+IS_ENABLE:1";
+                let crc = line_checksum(body);
+                writeln!(out, "{} #crc={:08x}", body, crc)?;
+            }
+            if !instant_block_sources.is_empty() {
+                let clear_body = "!IS_SRC_CLEAR";
+                let clear_crc = line_checksum(clear_body);
+                writeln!(out, "{} #crc={:08x}", clear_body, clear_crc)?;
+                for src in &instant_block_sources {
+                    let body = format!("+IS_SRC:{}", src);
+                    let crc = line_checksum(&body);
+                    writeln!(out, "{} #crc={:08x}", body, crc)?;
+                }
             }
             for re in &recent_events {
                 writeln!(out, "{}", re)?;
@@ -617,6 +724,14 @@ mod tests {
             wal.append_whitelist("trusted.org");
             wal.append_whitelist("apple.com");
             wal.append_unwhitelist("apple.com"); // removed
+            wal.append_bypass("redforce.live");
+            wal.append_bypass("*.bypass.org");
+            wal.append_unbypass("*.bypass.org"); // removed
+            wal.append_instant_block_state(true);
+            wal.save_instant_block_sources(&[
+                "*.tracker.com".to_string(),
+                "https://example.com/block.txt".to_string(),
+            ]);
 
             // 2. Inject a corrupt line with bad CRC directly to the file
             if let Ok(mut f) = OpenOptions::new().append(true).open(&wal_path) {
@@ -628,19 +743,28 @@ mod tests {
         // 3. Re-open WAL in a new instance and verify recovery
         {
             let wal_recovered = WalStorage::new(&wal_path_str);
-            let (blocks, whitelists) = wal_recovered.load_lists();
+            let (blocks, whitelists, bypasses, is_enabled, is_sources) = wal_recovered.load_lists();
 
             assert!(blocks.contains("malware.com"));
             assert!(!blocks.contains("ad.doubleclick.net")); // properly unblocked
             assert!(!blocks.contains("bad-checksum.evil")); // corrupt line was skipped
             assert!(whitelists.contains("trusted.org"));
             assert!(!whitelists.contains("apple.com")); // properly unwhitelisted
+            assert!(bypasses.contains("redforce.live"));
+            assert!(!bypasses.contains("*.bypass.org")); // properly unbypassed
+            assert!(is_enabled);
+            assert_eq!(is_sources.len(), 2);
+            assert_eq!(is_sources[0], "*.tracker.com");
+            assert_eq!(is_sources[1], "https://example.com/block.txt");
 
             // 4. Test compaction preserves state
             wal_recovered.compact();
-            let (blocks_after, whitelists_after) = wal_recovered.load_lists();
+            let (blocks_after, whitelists_after, bypasses_after, is_enabled_after, is_sources_after) = wal_recovered.load_lists();
             assert_eq!(blocks, blocks_after);
             assert_eq!(whitelists, whitelists_after);
+            assert_eq!(bypasses, bypasses_after);
+            assert_eq!(is_enabled, is_enabled_after);
+            assert_eq!(is_sources, is_sources_after);
         }
 
         let _ = std::fs::remove_dir_all(&temp_dir);

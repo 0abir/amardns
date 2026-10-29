@@ -59,6 +59,28 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/whitelist/clear", post(clear_whitelist))
         .route("/api/whitelist/clear/", post(clear_whitelist))
         .route("/api/whitelist/clear/{key}", post(clear_whitelist_key))
+        // Bypasslist
+        .route(
+            "/api/bypasslist",
+            get(get_bypasslist)
+                .post(add_bypasslist)
+                .delete(delete_bypasslist),
+        )
+        .route(
+            "/api/bypasslist/",
+            get(get_bypasslist)
+                .post(add_bypasslist)
+                .delete(delete_bypasslist),
+        )
+        .route(
+            "/api/bypasslist/{key}",
+            get(get_bypasslist_key)
+                .post(add_bypasslist_key)
+                .delete(delete_bypasslist_key),
+        )
+        .route("/api/bypasslist/clear", post(clear_bypasslist))
+        .route("/api/bypasslist/clear/", post(clear_bypasslist))
+        .route("/api/bypasslist/clear/{key}", post(clear_bypasslist_key))
         // Auto-block
         .route(
             "/api/auto-block",
@@ -569,6 +591,233 @@ pub async fn handle_clear_whitelist(
         None,
     );
     state.log_action("whitelist_cleared", "admin");
+    Json(serde_json::json!({ "ok": true })).into_response()
+}
+
+// ── Bypasslist Handlers ─────────────────────────────────────────────────────
+
+pub async fn get_bypasslist(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    handle_get_bypasslist(&state, None, &headers).await
+}
+
+pub async fn get_bypasslist_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_get_bypasslist(&state, Some(&key), &headers).await
+}
+
+pub async fn handle_get_bypasslist(
+    state: &AppState,
+    key: Option<&str>,
+    headers: &HeaderMap,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/bypasslist");
+    if !auth.is_view_or_admin() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false, "error": "Unauthorized: Master key or token required" })),
+        ).into_response();
+    }
+    let list: Vec<String> = state.custom_bypasslist.read().iter().cloned().collect();
+    Json(serde_json::json!({ "ok": true, "domains": list })).into_response()
+}
+
+pub async fn add_bypasslist(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<DomainReq>,
+) -> Response {
+    handle_add_bypasslist(&state, None, &headers, payload).await
+}
+
+pub async fn add_bypasslist_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+    Json(payload): Json<DomainReq>,
+) -> Response {
+    handle_add_bypasslist(&state, Some(&key), &headers, payload).await
+}
+
+pub async fn handle_add_bypasslist(
+    state: &AppState,
+    key: Option<&str>,
+    headers: &HeaderMap,
+    payload: DomainReq,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/bypasslist");
+    if auth == AuthRole::None {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false, "error": "Unauthorized: Master key required" })),
+        )
+            .into_response();
+    }
+    if auth == AuthRole::View {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "ok": false, "error": "Forbidden: Generated tokens are view-only. No changes can be made." })),
+        ).into_response();
+    }
+
+    let mut added = 0;
+    let mut skipped = Vec::new();
+    let mut to_add = Vec::new();
+    if let Some(ref dom) = payload.domain {
+        to_add.push(dom.clone());
+    }
+    if let Some(ref doms) = payload.domains {
+        to_add.extend(doms.clone());
+    }
+
+    let mut added_domains = Vec::new();
+    {
+        let mut guard = state.custom_bypasslist.write();
+        for raw in to_add {
+            let clean = match crate::security::sanitizer::sanitize_bypass_domain(&raw) {
+                Ok(c) => c,
+                Err(err) => {
+                    skipped.push(format!("{}: {}", raw.trim(), err));
+                    continue;
+                }
+            };
+            if guard.contains(&clean) {
+                skipped.push(format!("{} already exists", clean));
+            } else {
+                state.wal.append_bypass(&clean);
+                guard.insert(clean.clone());
+                added_domains.push(clean);
+                added += 1;
+            }
+        }
+    }
+    for dom in &added_domains {
+        state.cache.invalidate_negative(dom).await;
+    }
+
+    broadcast_peer_sync(
+        headers,
+        &state.config.dns_master_key,
+        reqwest::Method::POST,
+        "/api/bypasslist",
+        Some(serde_json::json!(payload)),
+    );
+    state.log_action("bypasslist_added", &format!("Added {} domain(s)", added));
+    Json(serde_json::json!({
+        "ok": true,
+        "added": added,
+        "skipped": skipped
+    }))
+    .into_response()
+}
+
+pub async fn delete_bypasslist(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<DomainReq>,
+) -> Response {
+    handle_delete_bypasslist(&state, None, &headers, payload).await
+}
+
+pub async fn delete_bypasslist_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+    Json(payload): Json<DomainReq>,
+) -> Response {
+    handle_delete_bypasslist(&state, Some(&key), &headers, payload).await
+}
+
+pub async fn handle_delete_bypasslist(
+    state: &AppState,
+    key: Option<&str>,
+    headers: &HeaderMap,
+    payload: DomainReq,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/bypasslist");
+    if auth == AuthRole::None {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false, "error": "Unauthorized: Master key required" })),
+        )
+            .into_response();
+    }
+    if auth == AuthRole::View {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "ok": false, "error": "Forbidden: Generated tokens are view-only. No changes can be made." })),
+        ).into_response();
+    }
+
+    let raw = payload.domain.clone().unwrap_or_default();
+    let clean = match crate::security::sanitizer::sanitize_bypass_domain(&raw) {
+        Ok(c) => c,
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    serde_json::json!({ "ok": false, "error": format!("invalid domain: {}", err) }),
+                ),
+            )
+                .into_response();
+        }
+    };
+    state.wal.append_unbypass(&clean);
+    state.custom_bypasslist.write().remove(&clean);
+    broadcast_peer_sync(
+        headers,
+        &state.config.dns_master_key,
+        reqwest::Method::DELETE,
+        "/api/bypasslist",
+        Some(serde_json::json!(payload)),
+    );
+    state.log_action("bypasslist_removed", &clean);
+    Json(serde_json::json!({ "ok": true, "domain": clean })).into_response()
+}
+
+pub async fn clear_bypasslist(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    handle_clear_bypasslist(&state, None, &headers).await
+}
+
+pub async fn clear_bypasslist_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_clear_bypasslist(&state, Some(&key), &headers).await
+}
+
+pub async fn handle_clear_bypasslist(
+    state: &AppState,
+    key: Option<&str>,
+    headers: &HeaderMap,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/bypasslist/clear");
+    if auth == AuthRole::None {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false, "error": "Unauthorized: Master key required" })),
+        )
+            .into_response();
+    }
+    if auth == AuthRole::View {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "ok": false, "error": "Forbidden: Generated tokens are view-only. No changes can be made." })),
+        ).into_response();
+    }
+
+    state.custom_bypasslist.write().clear();
+    broadcast_peer_sync(
+        headers,
+        &state.config.dns_master_key,
+        reqwest::Method::POST,
+        "/api/bypasslist/clear",
+        None,
+    );
+    state.log_action("bypasslist_cleared", "admin");
     Json(serde_json::json!({ "ok": true })).into_response()
 }
 

@@ -749,7 +749,8 @@ pub async fn process_dns_wire_packet_full(
                     p_wire.extend_from_slice(&1u16.to_be_bytes()); // QTYPE A
                     p_wire.extend_from_slice(&1u16.to_be_bytes()); // QCLASS IN
                     if let Some((resp, _)) = state_p.upstreams.resolve(&p_wire).await {
-                        if !crate::dns::parser::is_rebind_exempt_domain(&cand)
+                        if !state_p.is_bypassed(&cand)
+                            && !crate::dns::parser::is_rebind_exempt_domain(&cand)
                             && crate::dns::parser::extract_rebind_ip(&resp).is_some()
                         {
                             return;
@@ -847,7 +848,50 @@ pub async fn process_dns_wire_packet_full(
         });
     }
 
-    if !state.is_exempt(&q.name) && state.cache.get_negative(&q.name, q.qtype).await {
+    let is_bypassed = state.is_bypassed(&q.name);
+
+    // Instant Blocker: Zero-delay dynamic blocking (instantly blocked when active, released in 0ms when untoggled)
+    if !is_bypassed && state.is_instant_blocked(&q.name) {
+        state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
+        state.fingerprint.record_response(client_ip, 3);
+        state.log_action("instant_block", &q.name);
+        state.wal.append_threat_event(&q.name, "INSTANT_BLOCK", log_id);
+        state
+            .wal
+            .append_query(&q.name, q.qtype, log_id, 3, 0, "INSTANT_BLOCK");
+        state.log_query_dnssec(
+            &q.name,
+            q.qtype,
+            log_id,
+            proto,
+            "INSTANT_BLOCK",
+            3,
+            0,
+            "INSTANT_BLOCK",
+            "InstantBlocker",
+            "INSECURE",
+            None,
+            None,
+            false,
+        );
+        let resp_bytes = if let Some(cached_resp) = state.instant_cache.get_blocked_response(&q.name, q.qtype, q.tx_id) {
+            cached_resp
+        } else {
+            let mut fresh = build_blocked_response(query_wire, true);
+            crate::dns::parser::append_ede_to_response(&mut fresh, 15, "INSTANT_BLOCK");
+            state.instant_cache.insert_blocked_response(&q.name, q.qtype, fresh.clone());
+            fresh
+        };
+        state.metrics.record_latency(query_start.elapsed());
+        return (
+            resp_bytes,
+            "BLOCKED",
+            "INSECURE".to_string(),
+            Some("INSTANT_BLOCK"),
+        );
+    }
+
+    if !is_bypassed && !state.is_exempt(&q.name) && state.cache.get_negative(&q.name, q.qtype).await {
         state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
         let (feats, ent) = state.brain.extract_features(&q.name);
         state.brain.record_decision(
@@ -889,7 +933,7 @@ pub async fn process_dns_wire_packet_full(
     }
 
     // 2. Google Safe Browsing Cloud Threat Check
-    if state.blocking_enabled.load(Ordering::Relaxed) && !state.is_exempt(&q.name) {
+    if state.blocking_enabled.load(Ordering::Relaxed) && !is_bypassed && !state.is_exempt(&q.name) {
         if let Some(threat_type) = state.safe_browsing.check_domain(&q.name).await {
             state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
             state.metrics.gsb_blocks.fetch_add(1, Ordering::Relaxed);
@@ -936,6 +980,7 @@ pub async fn process_dns_wire_packet_full(
         crate::dns::cache::CacheLookupResult::Fresh(cached_wire) => {
             // RebindGuard: Intercept cached responses containing private IPs
             if state.blocking_enabled.load(Ordering::Relaxed)
+                && !is_bypassed
                 && !crate::dns::parser::is_rebind_exempt_domain(&q.name)
             {
                 if let Some(rebind_ip) = crate::dns::parser::extract_rebind_ip(&cached_wire) {
@@ -999,6 +1044,7 @@ pub async fn process_dns_wire_packet_full(
         crate::dns::cache::CacheLookupResult::Stale(cached_wire) => {
             // RebindGuard: Intercept stale cached responses containing private IPs
             if state.blocking_enabled.load(Ordering::Relaxed)
+                && !is_bypassed
                 && !crate::dns::parser::is_rebind_exempt_domain(&q.name)
             {
                 if let Some(rebind_ip) = crate::dns::parser::extract_rebind_ip(&cached_wire) {
@@ -1053,7 +1099,9 @@ pub async fn process_dns_wire_packet_full(
             let wire_clone = query_wire.to_vec();
             tokio::spawn(async move {
                 if let Some((upstream_resp, _)) = state_bg.upstreams.resolve(&wire_clone).await {
+                    let is_bypassed_bg = state_bg.is_bypassed(&q_name);
                     if state_bg.blocking_enabled.load(Ordering::Relaxed)
+                        && !is_bypassed_bg
                         && !crate::dns::parser::is_rebind_exempt_domain(&q_name)
                     {
                         if let Some(rebind_ip) =
@@ -1088,7 +1136,7 @@ pub async fn process_dns_wire_packet_full(
                     };
                     state_bg
                         .cache
-                        .insert_with_grace(&q_name, q_type, upstream_resp, smart_ttl, smart_grace)
+                        .insert_with_grace_allowed(&q_name, q_type, upstream_resp, smart_ttl, smart_grace, is_bypassed_bg)
                         .await;
                 }
             });
@@ -1220,6 +1268,7 @@ pub async fn process_dns_wire_packet_full(
         // Feature 6: TTL Manipulation Guard
         if state.ttl_guard_enabled.load(Ordering::Relaxed)
             && state.blocking_enabled.load(Ordering::Relaxed)
+            && !is_bypassed
             && !state.is_exempt(&q.name)
             && rcode == 0
         {
@@ -1287,6 +1336,7 @@ pub async fn process_dns_wire_packet_full(
 
         // DNS Rebinding Protection
         if state.blocking_enabled.load(Ordering::Relaxed)
+            && !is_bypassed
             && !crate::dns::parser::is_rebind_exempt_domain(&q.name)
         {
             if let Some(rebind_ip) = crate::dns::parser::extract_rebind_ip(&upstream_resp) {
@@ -1410,12 +1460,13 @@ pub async fn process_dns_wire_packet_full(
 
         state
             .cache
-            .insert_with_grace(
+            .insert_with_grace_allowed(
                 &q.name,
                 q.qtype,
                 upstream_resp.clone(),
                 smart_ttl,
                 smart_grace,
+                is_bypassed,
             )
             .await;
         state
@@ -1616,8 +1667,28 @@ pub async fn doh_json_handler(
     }
 
     // Check RAM Cache
+    let is_json_bypassed = state.is_bypassed(&clean_domain);
+    if !is_json_bypassed && state.is_instant_blocked(&clean_domain) {
+        state.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
+        let resp = serde_json::json!({
+            "Status": 3,
+            "TC": false,
+            "RD": true,
+            "RA": true,
+            "AD": false,
+            "CD": false,
+            "Question": [{
+                "name": format!("{}.", clean_domain),
+                "type": qtype
+            }],
+            "Answer": [],
+            "Comment": "AmarDNS Block: INSTANT_BLOCK"
+        });
+        return Json(resp).into_response();
+    }
     if let Some(cached_wire) = state.cache.get(&clean_domain, qtype, 0x1234).await {
         if state.blocking_enabled.load(Ordering::Relaxed)
+            && !is_json_bypassed
             && !crate::dns::parser::is_rebind_exempt_domain(&clean_domain)
         {
             if let Some(rebind_ip) = crate::dns::parser::extract_rebind_ip(&cached_wire) {
@@ -1720,6 +1791,7 @@ pub async fn doh_json_handler(
     if let Some((resp_bytes, upstream_name)) = upstream_res {
         // DNS Rebinding Protection for DoH JSON API
         if state.blocking_enabled.load(Ordering::Relaxed)
+            && !is_json_bypassed
             && !crate::dns::parser::is_rebind_exempt_domain(&clean_domain)
         {
             if let Some(rebind_ip) = crate::dns::parser::extract_rebind_ip(&resp_bytes) {
@@ -1781,7 +1853,7 @@ pub async fn doh_json_handler(
                 };
             state
                 .cache
-                .insert_with_grace(&clean_domain, qtype, resp_bytes.clone(), ttl, grace)
+                .insert_with_grace_allowed(&clean_domain, qtype, resp_bytes.clone(), ttl, grace, is_json_bypassed)
                 .await;
         }
 

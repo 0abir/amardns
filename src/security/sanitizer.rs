@@ -138,6 +138,59 @@ pub fn sanitize_domain(input: &str) -> Result<String, &'static str> {
     Ok(cleaned)
 }
 
+/// Sanitizes a domain or wildcard pattern for the bypasslist.
+/// Supports standard domains, *.domain.com, as well as general wildcard patterns with asterisks.
+pub fn sanitize_bypass_domain(input: &str) -> Result<String, &'static str> {
+    let raw = input.trim();
+    if raw.is_empty() {
+        return Err("domain cannot be empty");
+    }
+
+    if let Ok(clean) = sanitize_domain(raw) {
+        return Ok(clean);
+    }
+
+    if raw.contains('*') {
+        let without_scheme = if let Some(idx) = raw.find("://") {
+            &raw[idx + 3..]
+        } else {
+            raw
+        };
+        let host_str = without_scheme
+            .split('/')
+            .next()
+            .unwrap_or("")
+            .split('?')
+            .next()
+            .unwrap_or("")
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .split(':')
+            .next()
+            .unwrap_or("");
+
+        let cleaned = fast_to_ascii_lowercase(host_str.trim_matches('.'));
+        if cleaned.is_empty() {
+            return Err("domain cannot be empty");
+        }
+        if cleaned.len() > 253 {
+            return Err("domain exceeds maximum length of 253 characters");
+        }
+        if cleaned.contains("..") {
+            return Err("consecutive dots are not allowed");
+        }
+        for b in cleaned.bytes() {
+            if !(b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'*') {
+                return Err("wildcard domain contains invalid characters");
+            }
+        }
+        return Ok(cleaned);
+    }
+
+    Err("invalid domain format")
+}
+
 /// Validates 24-hour time format (HH:MM).
 #[allow(dead_code)]
 pub fn sanitize_time(time_str: &str) -> Result<String, &'static str> {

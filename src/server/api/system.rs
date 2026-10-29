@@ -49,6 +49,79 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/api/settings/ttl-guard/{key}",
             get(get_ttl_guard_key).post(set_ttl_guard_key),
         )
+        .route(
+            "/api/settings/facebook-block",
+            get(get_facebook_block).post(set_facebook_block),
+        )
+        .route(
+            "/api/settings/facebook-block/",
+            get(get_facebook_block).post(set_facebook_block),
+        )
+        .route(
+            "/api/settings/facebook-block/{key}",
+            get(get_facebook_block_key).post(set_facebook_block_key),
+        )
+        // Instant Shield (Dynamic Zero-Delay Blocklist)
+        .route(
+            "/api/instant-block",
+            get(get_instant_block),
+        )
+        .route(
+            "/api/instant-block/",
+            get(get_instant_block),
+        )
+        .route(
+            "/api/instant-block/{key}",
+            get(get_instant_block_key),
+        )
+        .route(
+            "/api/instant-block/toggle",
+            post(toggle_instant_block),
+        )
+        .route(
+            "/api/instant-block/toggle/",
+            post(toggle_instant_block),
+        )
+        .route(
+            "/api/instant-block/toggle/{key}",
+            post(toggle_instant_block_key),
+        )
+        .route(
+            "/api/instant-block/sources",
+            post(save_instant_block_sources),
+        )
+        .route(
+            "/api/instant-block/sources/",
+            post(save_instant_block_sources),
+        )
+        .route(
+            "/api/instant-block/sources/{key}",
+            post(save_instant_block_sources_key),
+        )
+        .route(
+            "/api/instant-block/sync",
+            post(sync_instant_block_sources),
+        )
+        .route(
+            "/api/instant-block/sync/",
+            post(sync_instant_block_sources),
+        )
+        .route(
+            "/api/instant-block/sync/{key}",
+            post(sync_instant_block_sources_key),
+        )
+        .route(
+            "/api/instant-block/clear",
+            post(clear_instant_block_sources),
+        )
+        .route(
+            "/api/instant-block/clear/",
+            post(clear_instant_block_sources),
+        )
+        .route(
+            "/api/instant-block/clear/{key}",
+            post(clear_instant_block_sources_key),
+        )
         // Upstreams
         .route("/api/upstreams/ranked", get(get_ranked_upstreams))
         .route("/api/upstreams/ranked/", get(get_ranked_upstreams))
@@ -276,6 +349,289 @@ pub async fn handle_set_blocking(
         },
     );
     Json(serde_json::json!({ "ok": true, "blockingEnabled": payload.enabled })).into_response()
+}
+
+pub async fn get_facebook_block(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    handle_get_facebook_block(&state, None, &headers).await
+}
+
+pub async fn get_facebook_block_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_get_facebook_block(&state, Some(&key), &headers).await
+}
+
+pub async fn handle_get_facebook_block(
+    state: &AppState,
+    key: Option<&str>,
+    headers: &HeaderMap,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/settings/facebook-block");
+    if !auth.is_view_or_admin() {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "ok": false, "error": "Unauthorized: Master key or token required" }))).into_response();
+    }
+    Json(serde_json::json!({ "ok": true, "blockFacebook": state.block_facebook.load(Ordering::Relaxed) })).into_response()
+}
+
+pub async fn set_facebook_block(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<BoolSetting>,
+) -> Response {
+    handle_set_facebook_block(&state, None, &headers, payload).await
+}
+
+pub async fn set_facebook_block_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+    Json(payload): Json<BoolSetting>,
+) -> Response {
+    handle_set_facebook_block(&state, Some(&key), &headers, payload).await
+}
+
+pub async fn handle_set_facebook_block(
+    state: &AppState,
+    key: Option<&str>,
+    headers: &HeaderMap,
+    payload: BoolSetting,
+) -> Response {
+    handle_toggle_instant_block(state, key, headers, payload).await
+}
+
+#[derive(serde::Deserialize)]
+pub struct InstantShieldSourcesPayload {
+    pub sources: String,
+}
+
+pub async fn get_instant_block(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    handle_get_instant_block(&state, None, &headers).await
+}
+
+pub async fn get_instant_block_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_get_instant_block(&state, Some(&key), &headers).await
+}
+
+pub async fn handle_get_instant_block(
+    state: &AppState,
+    key: Option<&str>,
+    headers: &HeaderMap,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/instant-block");
+    if !auth.is_view_or_admin() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "ok": false, "error": "Unauthorized: Master key or token required" })),
+        )
+            .into_response();
+    }
+    let sources = state.instant_block_sources.read().join("\n");
+    let sources_cnt = state.instant_block_sources.read().len();
+    let rules_cnt = state.instant_block_domains.read().len() + state.instant_block_wildcards.read().len();
+    let enabled = state.instant_block_enabled.load(Ordering::Relaxed);
+    Json(serde_json::json!({
+        "ok": true,
+        "enabled": enabled,
+        "sources": sources,
+        "sourcesCount": sources_cnt,
+        "rulesCount": rules_cnt,
+    }))
+    .into_response()
+}
+
+pub async fn toggle_instant_block(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<BoolSetting>,
+) -> Response {
+    handle_toggle_instant_block(&state, None, &headers, payload).await
+}
+
+pub async fn toggle_instant_block_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+    Json(payload): Json<BoolSetting>,
+) -> Response {
+    handle_toggle_instant_block(&state, Some(&key), &headers, payload).await
+}
+
+pub async fn handle_toggle_instant_block(
+    state: &AppState,
+    key: Option<&str>,
+    headers: &HeaderMap,
+    payload: BoolSetting,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/instant-block/toggle");
+    if !auth.is_admin() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "ok": false, "error": "Forbidden: Instant Blocker can only be toggled with the Master Key" })),
+        )
+            .into_response();
+    }
+    state
+        .instant_block_enabled
+        .store(payload.enabled, Ordering::Relaxed);
+    state
+        .block_facebook
+        .store(payload.enabled, Ordering::Relaxed);
+    state.wal.append_instant_block_state(payload.enabled);
+    // Instant separate cache flush: 0ms reaction without wiping general AeroCache!
+    state.instant_cache.invalidate_all();
+    if payload.enabled {
+        let domains = state.instant_block_domains.read().clone();
+        for d in &domains {
+            state.cache.invalidate_negative(d).await;
+        }
+    }
+    state.log_action(
+        "instant_block_toggled",
+        if payload.enabled { "enabled" } else { "disabled" },
+    );
+    Json(serde_json::json!({ "ok": true, "enabled": payload.enabled })).into_response()
+}
+
+pub async fn save_instant_block_sources(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<InstantShieldSourcesPayload>,
+) -> Response {
+    handle_save_instant_block_sources(&state, None, &headers, payload).await
+}
+
+pub async fn save_instant_block_sources_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+    Json(payload): Json<InstantShieldSourcesPayload>,
+) -> Response {
+    handle_save_instant_block_sources(&state, Some(&key), &headers, payload).await
+}
+
+pub async fn handle_save_instant_block_sources(
+    state: &AppState,
+    key: Option<&str>,
+    headers: &HeaderMap,
+    payload: InstantShieldSourcesPayload,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/instant-block/sources");
+    if !auth.is_admin() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "ok": false, "error": "Forbidden: Instant Blocker sources can only be configured with the Master Key" })),
+        )
+            .into_response();
+    }
+    let lines: Vec<String> = payload
+        .sources
+        .lines()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let (sources_cnt, rules_cnt) = state.compile_instant_blocklist(lines).await;
+    state.wal.save_instant_block_sources(&state.instant_block_sources.read());
+    state.instant_cache.invalidate_all();
+    state.log_action(
+        "instant_block_sources_updated",
+        &format!("{} sources, {} rules compiled", sources_cnt, rules_cnt),
+    );
+    Json(serde_json::json!({
+        "ok": true,
+        "sourcesCount": sources_cnt,
+        "rulesCount": rules_cnt,
+    }))
+    .into_response()
+}
+
+pub async fn sync_instant_block_sources(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    handle_sync_instant_block_sources(&state, None, &headers).await
+}
+
+pub async fn sync_instant_block_sources_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_sync_instant_block_sources(&state, Some(&key), &headers).await
+}
+
+pub async fn handle_sync_instant_block_sources(
+    state: &AppState,
+    key: Option<&str>,
+    headers: &HeaderMap,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/instant-block/sync");
+    if !auth.is_admin() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "ok": false, "error": "Forbidden: Sync requires Master Key" })),
+        )
+            .into_response();
+    }
+    let current_sources = state.instant_block_sources.read().clone();
+    let (sources_cnt, rules_cnt) = state.compile_instant_blocklist(current_sources).await;
+    state.instant_cache.invalidate_all();
+    Json(serde_json::json!({
+        "ok": true,
+        "sourcesCount": sources_cnt,
+        "rulesCount": rules_cnt,
+    }))
+    .into_response()
+}
+
+pub async fn clear_instant_block_sources(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    handle_clear_instant_block_sources(&state, None, &headers).await
+}
+
+pub async fn clear_instant_block_sources_key(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    handle_clear_instant_block_sources(&state, Some(&key), &headers).await
+}
+
+pub async fn handle_clear_instant_block_sources(
+    state: &AppState,
+    key: Option<&str>,
+    headers: &HeaderMap,
+) -> Response {
+    let auth = check_auth(state, key, headers, "/api/instant-block/clear");
+    if !auth.is_admin() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "ok": false, "error": "Forbidden: Clear requires Master Key" })),
+        )
+            .into_response();
+    }
+    state.instant_block_sources.write().clear();
+    state.instant_block_domains.write().clear();
+    state.instant_block_wildcards.write().clear();
+    state.instant_cache.invalidate_all();
+    state.wal.save_instant_block_sources(&[]);
+    state.log_action("instant_block_cleared", "admin");
+    Json(serde_json::json!({
+        "ok": true,
+        "sourcesCount": 0,
+        "rulesCount": 0,
+    }))
+    .into_response()
 }
 
 pub async fn get_dns_mode(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {

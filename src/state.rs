@@ -91,6 +91,54 @@ pub struct QueryLog {
     pub ad_flag: bool,
 }
 
+/// Ultra-fast, isolated cache dedicated specifically to the Instant Blocker.
+/// Decoupled from the general AeroCache so that activating or releasing instant blocks
+/// occurs in 0ms without evicting or tainting the warm main DNS cache.
+#[derive(Clone)]
+pub struct InstantBlockCache {
+    /// Wire responses for instant-blocked queries: (domain, qtype) -> blocked_wire_packet
+    blocked_cache: moka::sync::Cache<(String, u16), Vec<u8>>,
+}
+
+impl InstantBlockCache {
+    pub fn new(capacity: u64) -> Self {
+        Self {
+            blocked_cache: moka::sync::Cache::builder()
+                .max_capacity(capacity)
+                .time_to_live(std::time::Duration::from_secs(60))
+                .build(),
+        }
+    }
+
+    /// Retrieves pre-built blocked response for this domain & qtype, rewriting the transaction ID.
+    #[inline]
+    pub fn get_blocked_response(&self, domain: &str, qtype: u16, tx_id: u16) -> Option<Vec<u8>> {
+        let key = (domain.to_ascii_lowercase(), qtype);
+        if let Some(mut wire) = self.blocked_cache.get(&key) {
+            if wire.len() >= 2 {
+                let id_bytes = tx_id.to_be_bytes();
+                wire[0] = id_bytes[0];
+                wire[1] = id_bytes[1];
+            }
+            return Some(wire);
+        }
+        None
+    }
+
+    /// Stores pre-built blocked wire response for sub-microsecond subsequent hits.
+    #[inline]
+    pub fn insert_blocked_response(&self, domain: &str, qtype: u16, wire: Vec<u8>) {
+        let key = (domain.to_ascii_lowercase(), qtype);
+        self.blocked_cache.insert(key, wire);
+    }
+
+    /// Instantly invalidates all instant block cached responses in 0ms upon toggle or release.
+    #[inline]
+    pub fn invalidate_all(&self) {
+        self.blocked_cache.invalidate_all();
+    }
+}
+
 pub struct AppState {
     pub config: Config,
     pub threat_bloom: RwLock<BloomFilter>,
@@ -100,6 +148,13 @@ pub struct AppState {
     pub fingerprint: crate::security::heuristics::ClientFingerprintTracker,
     pub custom_blocklist: RwLock<HashMap<String, BlockEntry>>,
     pub custom_whitelist: RwLock<HashSet<String>>,
+    pub custom_bypasslist: RwLock<HashSet<String>>,
+    pub instant_block_enabled: AtomicBool,
+    pub instant_block_sources: RwLock<Vec<String>>,
+    pub instant_block_domains: RwLock<HashSet<String>>,
+    pub instant_block_wildcards: RwLock<Vec<String>>,
+    pub instant_cache: InstantBlockCache,
+    pub block_facebook: AtomicBool,
     pub cache: DnsCache,
     pub upstreams: UpstreamPool,
     pub rate_limiter: RateLimiter,
@@ -151,7 +206,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(config: Config) -> Self {
         let wal = WalStorage::new(&config.db_path);
-        let (raw_blocklist, raw_whitelist) = wal.load_lists();
+        let (raw_blocklist, raw_whitelist, raw_bypasslist, raw_instant_enabled, raw_instant_sources) = wal.load_lists();
         let is_private = config.access_mode_is_private();
         let now = SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -174,6 +229,25 @@ impl AppState {
         }
 
         let custom_whitelist = raw_whitelist;
+        let custom_bypasslist = raw_bypasslist;
+        let initial_sources = raw_instant_sources;
+
+        let mut initial_domains = HashSet::new();
+        let mut initial_wildcards = Vec::new();
+        for src in &initial_sources {
+            let trimmed = src.trim();
+            if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+                continue;
+            }
+            if let Some(rule) = normalize_instant_block_line(trimmed) {
+                if rule.contains('*') {
+                    initial_wildcards.push(rule);
+                } else {
+                    initial_domains.insert(rule);
+                }
+            }
+        }
+
         let heatmap = HashMap::new();
 
         let initial_decisions = vec![ConfigDecision {
@@ -219,6 +293,13 @@ impl AppState {
             fingerprint: crate::security::heuristics::ClientFingerprintTracker::new(),
             custom_blocklist: RwLock::new(custom_blocklist),
             custom_whitelist: RwLock::new(custom_whitelist),
+            custom_bypasslist: RwLock::new(custom_bypasslist),
+            instant_block_enabled: AtomicBool::new(raw_instant_enabled),
+            instant_block_sources: RwLock::new(initial_sources),
+            instant_block_domains: RwLock::new(initial_domains),
+            instant_block_wildcards: RwLock::new(initial_wildcards),
+            instant_cache: InstantBlockCache::new(50_000),
+            block_facebook: AtomicBool::new(raw_instant_enabled),
             cache: DnsCache::new(cache_capacity),
             upstreams: UpstreamPool::new(),
             rate_limiter: RateLimiter::new(100.0, 50.0, 500.0, 200.0), // 100 capacity, 50/sec refill; 500 IP ceiling, 200/sec refill
@@ -454,6 +535,19 @@ impl AppState {
 
         let clean = domain.trim_end_matches('.').to_ascii_lowercase();
 
+        // 0. Bypasslist: unconditionally bypasses all blocking
+        if self.is_bypassed(&clean) {
+            return (false, false, "bypassed");
+        }
+
+        // Instant Shield dynamic block:
+        if self.is_instant_blocked(&clean) {
+            self.metrics.threat_blocks.fetch_add(1, Ordering::Relaxed);
+            self.record_detected_block(&clean, "instant_shield_block");
+            self.log_action("instant_shield_block", &clean);
+            return (true, true, "instant_shield_block");
+        }
+
         // 1. Exact Whitelist (Absolute highest priority: Explicit domain whitelist always wins)
         if self.is_exact_whitelisted(&clean) {
             self.record_detected_whitelist(&clean);
@@ -638,6 +732,16 @@ impl AppState {
 
         let clean = domain.trim_end_matches('.').to_ascii_lowercase();
 
+        // 0. Bypasslist: unconditionally bypasses all blocking
+        if self.is_bypassed(&clean) {
+            return false;
+        }
+
+        // Instant Shield dynamic block:
+        if self.is_instant_blocked(&clean) {
+            return true;
+        }
+
         // 1. Exact Whitelist
         if self.is_exact_whitelisted(&clean) {
             return false;
@@ -691,6 +795,10 @@ impl AppState {
 
     pub fn is_exempt(&self, domain: &str) -> bool {
         let clean = domain.trim_end_matches('.').to_ascii_lowercase();
+        // 0. Bypasslist: unconditionally exempt from all blocks
+        if self.is_bypassed(&clean) {
+            return true;
+        }
         // 1. Exact whitelist always wins and is exempt
         if self.is_exact_whitelisted(&clean) {
             return true;
@@ -701,6 +809,172 @@ impl AppState {
         }
         // 3. Dynamic wildcard whitelist exempts subdomains
         self.is_wildcard_whitelisted(&clean)
+    }
+
+    /// Checks if a domain is on the bypasslist (supports exact, wildcard *.domain, and glob patterns).
+    /// Super-isolated and optimized with zero-allocation stack slicing.
+    pub fn is_bypassed(&self, domain: &str) -> bool {
+        let clean = domain.trim_end_matches('.').to_ascii_lowercase();
+        let guard = self.custom_bypasslist.read();
+        if guard.is_empty() {
+            return false;
+        }
+
+        // 1. Direct O(1) exact match
+        if guard.contains(&clean) {
+            return true;
+        }
+
+        // 2. Zero-allocation wildcard self match (*.clean) via stack buffer
+        let mut wc_buf = [0u8; 256];
+        if clean.len() + 2 <= 256 {
+            wc_buf[0] = b'*';
+            wc_buf[1] = b'.';
+            wc_buf[2..2 + clean.len()].copy_from_slice(clean.as_bytes());
+            if let Ok(wc_str) = std::str::from_utf8(&wc_buf[..2 + clean.len()]) {
+                if guard.contains(wc_str) {
+                    return true;
+                }
+            }
+        }
+
+        // 3. Zero-allocation parent suffix lookup (e.g. portal.redforce.live -> redforce.live -> live)
+        let mut cursor = clean.as_str();
+        while let Some(idx) = cursor.find('.') {
+            cursor = &cursor[idx + 1..];
+            if guard.contains(cursor) {
+                return true;
+            }
+            if cursor.len() + 2 <= 256 {
+                wc_buf[0] = b'*';
+                wc_buf[1] = b'.';
+                wc_buf[2..2 + cursor.len()].copy_from_slice(cursor.as_bytes());
+                if let Ok(wc_str) = std::str::from_utf8(&wc_buf[..2 + cursor.len()]) {
+                    if guard.contains(wc_str) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // 4. Arbitrary glob matching (*pattern*)
+        for key in guard.iter() {
+            if key.contains('*') && !key.starts_with("*.") && domain_matches_pattern(key, &clean) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Checks if a domain is blocked by the Instant Blocker (exact match, parent domain, or wildcard/glob pattern).
+    /// Highly optimized with zero-allocation stack slicing.
+    pub fn is_instant_blocked(&self, domain: &str) -> bool {
+        if !self.instant_block_enabled.load(Ordering::Relaxed) {
+            return false;
+        }
+        let clean = domain.trim_end_matches('.').to_ascii_lowercase();
+        if self.is_bypassed(&clean) {
+            return false;
+        }
+
+        // 1. Fast exact check in instant_block_domains and parent suffixes (zero-allocation)
+        {
+            let guard = self.instant_block_domains.read();
+            if guard.contains(&clean) {
+                return true;
+            }
+            let mut cursor = clean.as_str();
+            while let Some(idx) = cursor.find('.') {
+                cursor = &cursor[idx + 1..];
+                if guard.contains(cursor) {
+                    return true;
+                }
+            }
+        }
+
+        // 2. Wildcard & glob pattern matching
+        {
+            let wc_guard = self.instant_block_wildcards.read();
+            for pat in wc_guard.iter() {
+                if domain_matches_pattern(pat, &clean) {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Compiles instant blocklist sources (fetching raw URLs concurrently and normalizing wildcard/apex rules).
+    pub async fn compile_instant_blocklist(&self, sources: Vec<String>) -> (usize, usize) {
+        let mut new_exact = HashSet::new();
+        let mut new_wildcards = Vec::new();
+        let mut valid_sources = Vec::new();
+        let mut remote_urls = Vec::new();
+
+        for line in sources {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+                remote_urls.push(trimmed.to_string());
+                valid_sources.push(trimmed.to_string());
+            } else if let Some(rule) = normalize_instant_block_line(trimmed) {
+                if rule.contains('*') {
+                    new_wildcards.push(rule);
+                } else {
+                    new_exact.insert(rule);
+                }
+                valid_sources.push(trimmed.to_string());
+            }
+        }
+
+        if !remote_urls.is_empty() {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_default();
+
+            let mut set = tokio::task::JoinSet::new();
+            for url in remote_urls {
+                let c = client.clone();
+                set.spawn(async move {
+                    match c.get(&url).send().await {
+                        Ok(resp) if resp.status().is_success() => {
+                            resp.text().await.ok()
+                        }
+                        _ => None,
+                    }
+                });
+            }
+
+            while let Some(res) = set.join_next().await {
+                if let Ok(Some(body)) = res {
+                    for line in body.lines() {
+                        if let Some(rule) = normalize_instant_block_line(line) {
+                            if rule.contains('*') {
+                                new_wildcards.push(rule);
+                            } else {
+                                new_exact.insert(rule);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let total_rules = new_exact.len() + new_wildcards.len();
+        let total_sources = valid_sources.len();
+
+        *self.instant_block_domains.write() = new_exact;
+        *self.instant_block_wildcards.write() = new_wildcards;
+        *self.instant_block_sources.write() = valid_sources;
+
+        // Invalidate dedicated instant cache in 0ms (leaves main AeroCache intact!)
+        self.instant_cache.invalidate_all();
+
+        (total_sources, total_rules)
     }
 
     pub fn is_exact_whitelisted(&self, domain: &str) -> bool {
@@ -1078,6 +1352,55 @@ pub fn domain_matches_pattern(pattern: &str, domain: &str) -> bool {
     }
 
     false
+}
+
+/// Normalizes an instant blocklist rule or feed line, preserving wildcards (*) while stripping comments and hosts IPs.
+pub fn normalize_instant_block_line(raw: &str) -> Option<String> {
+    let mut h = raw.trim().to_ascii_lowercase();
+    if h.is_empty() {
+        return None;
+    }
+    let first = h.as_bytes()[0];
+    if matches!(first, b'#' | b'!' | b'@' | b';' | b'/' | b'[' | b'$') {
+        return None;
+    }
+    if h.starts_with("@@") {
+        return None;
+    }
+    if h.starts_with("||") {
+        h = h[2..].to_string();
+    }
+    if h.starts_with('|') {
+        h = h[1..].to_string();
+    }
+    if let Some(idx) = h.find('$') {
+        h = h[..idx].to_string();
+    }
+    if h.ends_with('^') {
+        h = h[..h.len() - 1].to_string();
+    }
+    if h.starts_with("local=/") {
+        h = h[7..].to_string();
+    }
+    if h.ends_with('/') {
+        h = h[..h.len() - 1].to_string();
+    }
+    if let Some(idx) = h.find(|c: char| c.is_whitespace()) {
+        let ip = &h[..idx];
+        if ip == "0.0.0.0" || ip == "127.0.0.1" || ip == "::1" || ip == "::" {
+            h = h[idx..].trim().to_string();
+        } else {
+            return None;
+        }
+    }
+    h = h.trim_end_matches('.').trim().to_string();
+    if h.is_empty() || h.contains(' ') || h.len() > 253 {
+        return None;
+    }
+    if h.chars().any(|c| !c.is_ascii_alphanumeric() && c != '.' && c != '-' && c != '_' && c != '*') {
+        return None;
+    }
+    Some(h)
 }
 
 /// Normalizes raw blocklist feed lines, stripping wildcards, protocols, comments, and IP prefixes.
@@ -1997,5 +2320,65 @@ mod tests {
         assert_eq!(state.metrics.cache_hits.load(Ordering::Relaxed), 85);
 
         let _ = std::fs::remove_file(&temp_wal);
+    }
+
+    #[tokio::test]
+    async fn test_bypasslist_and_instant_shield() {
+        let config = Config::from_env();
+        let state = AppState::new(config);
+
+        // 1. Instant Blocker toggle disabled by default
+        assert!(!state.instant_block_enabled.load(Ordering::Relaxed));
+        assert!(!state.is_domain_blocked("malware.test"));
+
+        // 2. Compile custom wildcard rules into Instant Blocker
+        let custom_rules = vec![
+            "*.tracker.com".to_string(),
+            "0.0.0.0 badhost.org".to_string(),
+            "||ad.*.net^".to_string(),
+        ];
+        let (src_cnt, rules_cnt) = state.compile_instant_blocklist(custom_rules).await;
+        assert_eq!(src_cnt, 3);
+        assert_eq!(rules_cnt, 3);
+
+        // While disabled, domain is not blocked:
+        assert!(!state.is_domain_blocked("tracker.com"));
+
+        // 3. Enable Instant Blocker
+        state.instant_block_enabled.store(true, Ordering::Relaxed);
+        assert!(state.is_domain_blocked("tracker.com"));
+        assert!(state.is_domain_blocked("sub.tracker.com"));
+        assert!(state.is_domain_blocked("badhost.org"));
+        assert!(state.is_domain_blocked("ad.network.net"));
+        assert!(!state.is_domain_blocked("google.com"));
+
+        // 4. Test separate InstantBlockCache
+        assert!(state.instant_cache.get_blocked_response("tracker.com", 1, 0x1234).is_none());
+        let mock_wire = vec![0x12, 0x34, 0x81, 0x83, 0x00, 0x01, 0x00, 0x00];
+        state.instant_cache.insert_blocked_response("tracker.com", 1, mock_wire.clone());
+        let cached = state.instant_cache.get_blocked_response("tracker.com", 1, 0xABCD);
+        assert!(cached.is_some());
+        let unwrapped = cached.unwrap();
+        assert_eq!(unwrapped[0..2], [0xAB, 0xCD]); // Transaction ID rewritten!
+
+        // 5. Bypasslist bypasses all blocking (even Instant Blocker)
+        state.custom_bypasslist.write().insert("tracker.com".to_string());
+        assert!(state.is_bypassed("tracker.com"));
+        assert!(state.is_bypassed("sub.tracker.com"));
+        assert!(!state.is_domain_blocked("tracker.com"));
+        assert!(!state.is_domain_blocked("sub.tracker.com"));
+
+        // 6. Bypasslist with asterisk wildcard
+        state.custom_bypasslist.write().insert("*.redforce.live".to_string());
+        assert!(state.is_bypassed("redforce.live"));
+        assert!(state.is_bypassed("portal.redforce.live"));
+        assert!(state.is_exempt("portal.redforce.live"));
+
+        // 7. Instant release: toggling OFF unblocks immediately and flushes instant_cache in 0ms
+        state.instant_block_enabled.store(false, Ordering::Relaxed);
+        state.instant_cache.invalidate_all();
+        assert!(!state.is_domain_blocked("badhost.org"));
+        assert!(!state.is_domain_blocked("ad.network.net"));
+        assert!(state.instant_cache.get_blocked_response("tracker.com", 1, 0x1234).is_none());
     }
 }

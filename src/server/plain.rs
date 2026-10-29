@@ -11,8 +11,7 @@ use tracing::{error, info, warn};
 
 use crate::state::AppState;
 
-const UDP_SOCKET_BUFFER_SIZE: usize = 4 * 1024 * 1024; // 4MB socket buffer for traffic spikes
-const NUM_UDP_WORKERS: usize = 4; // 4 parallel SO_REUSEPORT worker threads
+const UDP_SOCKET_BUFFER_SIZE: usize = 8 * 1024 * 1024; // 8MB socket buffer for traffic spikes & kernel queue absorption
 
 fn resolve_socket_addr(host: &str, port: u16) -> SocketAddr {
     if let Ok(mut addrs) = format!("{}:{}", host, port).to_socket_addrs() {
@@ -26,7 +25,7 @@ fn resolve_socket_addr(host: &str, port: u16) -> SocketAddr {
     SocketAddr::new(std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED), port)
 }
 
-/// Creates a high-performance SO_REUSEPORT UDP socket bound to `addr` with 4MB buffers.
+/// Creates a high-performance SO_REUSEPORT UDP socket bound to `addr` with 8MB buffers & DSCP prioritization.
 fn create_reuseport_udp(addr: SocketAddr) -> std::io::Result<std::net::UdpSocket> {
     let domain = if addr.is_ipv6() {
         Domain::IPV6
@@ -38,6 +37,8 @@ fn create_reuseport_udp(addr: SocketAddr) -> std::io::Result<std::net::UdpSocket
     let _ = socket.set_reuse_port(true); // Kernel-level multi-worker distribution
     let _ = socket.set_recv_buffer_size(UDP_SOCKET_BUFFER_SIZE);
     let _ = socket.set_send_buffer_size(UDP_SOCKET_BUFFER_SIZE);
+    #[cfg(unix)]
+    let _ = socket.set_tos(0xB8); // DSCP 46 (Expedited Forwarding) for hardware & kernel packet scheduling
     socket.set_nonblocking(true)?;
     if addr.is_ipv6() {
         let _ = socket.set_only_v6(false);
@@ -56,6 +57,10 @@ fn create_reuseport_tcp(addr: SocketAddr) -> std::io::Result<std::net::TcpListen
     let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
     let _ = socket.set_reuse_address(true);
     let _ = socket.set_reuse_port(true);
+    let _ = socket.set_recv_buffer_size(UDP_SOCKET_BUFFER_SIZE);
+    let _ = socket.set_send_buffer_size(UDP_SOCKET_BUFFER_SIZE);
+    #[cfg(unix)]
+    let _ = socket.set_tos(0xB8);
     socket.set_nonblocking(true)?;
     socket.set_tcp_nodelay(true)?;
     if addr.is_ipv6() {
@@ -74,14 +79,18 @@ pub async fn start_plain_udp(
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) {
     let addr = resolve_socket_addr(host, port);
+    let num_workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(4, 32);
     info!(
-        "[plain53] Spawning {} UDP SO_REUSEPORT workers on {}",
-        NUM_UDP_WORKERS, addr
+        "[plain53] Spawning {} UDP SO_REUSEPORT workers on {} (kernel multi-queue hardware acceleration)",
+        num_workers, addr
     );
 
-    let udp_concurrency = Arc::new(tokio::sync::Semaphore::new(2048));
+    let udp_concurrency = Arc::new(tokio::sync::Semaphore::new(4096));
 
-    for worker_id in 0..NUM_UDP_WORKERS {
+    for worker_id in 0..num_workers {
         let std_sock = match create_reuseport_udp(addr) {
             Ok(s) => s,
             Err(e) => {
@@ -129,17 +138,36 @@ pub async fn start_plain_udp(
                                     continue;
                                 }
 
-                                // Fast-Path Microsecond Negative Absorber (<1µs zero-alloc drop)
+                                // Fast-Path Microsecond Negative & Instant Blocker Absorber (<1µs zero-alloc drop)
                                 if let Some(parsed) = crate::dns::parser::parse_dns_query_opts(&buf[..len], state_worker.config.rfc1035_8bit_labels) {
                                     if let Some(ref q) = parsed.question {
                                         let clean = q.name.trim_end_matches('.').to_ascii_lowercase();
-                                        if let Some((reason, is_nx)) = state_worker.fast_neg_filter.get(&clean) {
-                                            state_worker.metrics.threat_blocks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                            state_worker.metrics.fast_neg_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                            let mut blocked = crate::dns::parser::build_blocked_response(&buf[..len], is_nx);
-                                            crate::dns::parser::append_ede_to_response(&mut blocked, 15, reason);
-                                            let _ = sock.send_to(&blocked, peer).await;
-                                            continue;
+                                        let is_bypassed = state_worker.is_bypassed(&clean);
+                                        if !is_bypassed {
+                                            // 1. Dedicated Instant Blocker check & isolated cache lookup
+                                            if state_worker.is_instant_blocked(&clean) {
+                                                state_worker.metrics.threat_blocks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                                let blocked = if let Some(cached_resp) = state_worker.instant_cache.get_blocked_response(&clean, q.qtype, parsed.header.id) {
+                                                    cached_resp
+                                                } else {
+                                                    let mut fresh = crate::dns::parser::build_blocked_response(&buf[..len], true);
+                                                    crate::dns::parser::append_ede_to_response(&mut fresh, 15, "INSTANT_BLOCK");
+                                                    state_worker.instant_cache.insert_blocked_response(&clean, q.qtype, fresh.clone());
+                                                    fresh
+                                                };
+                                                let _ = sock.send_to(&blocked, peer).await;
+                                                continue;
+                                            }
+
+                                            // 2. Fast negative threat filter
+                                            if let Some((reason, is_nx)) = state_worker.fast_neg_filter.get(&clean) {
+                                                state_worker.metrics.threat_blocks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                                state_worker.metrics.fast_neg_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                                let mut blocked = crate::dns::parser::build_blocked_response(&buf[..len], is_nx);
+                                                crate::dns::parser::append_ede_to_response(&mut blocked, 15, reason);
+                                                let _ = sock.send_to(&blocked, peer).await;
+                                                continue;
+                                            }
                                         }
                                     }
                                 }

@@ -151,8 +151,22 @@ impl DnsCache {
         ttl: u32,
         grace_secs: u32,
     ) {
-        // RebindGuard: Never cache responses containing private/internal IPs unless exempt
-        if !crate::dns::parser::is_rebind_exempt_domain(qname)
+        self.insert_with_grace_allowed(qname, qtype, raw_response, ttl, grace_secs, false)
+            .await;
+    }
+
+    pub async fn insert_with_grace_allowed(
+        &self,
+        qname: &str,
+        qtype: u16,
+        raw_response: Vec<u8>,
+        ttl: u32,
+        grace_secs: u32,
+        is_allowed: bool,
+    ) {
+        // RebindGuard: Never cache responses containing private/internal IPs unless exempt or allowed via bypasslist
+        if !is_allowed
+            && !crate::dns::parser::is_rebind_exempt_domain(qname)
             && crate::dns::parser::extract_rebind_ip(&raw_response).is_some()
         {
             return;

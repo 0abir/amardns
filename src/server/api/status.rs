@@ -503,6 +503,7 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
 
     let blk_cnt = state.custom_blocklist.read().len();
     let wl_cnt = state.custom_whitelist.read().len();
+    let bp_cnt = state.custom_bypasslist.read().len();
     let upstreams = state.upstreams.snapshot();
     let active_upstreams = upstreams
         .iter()
@@ -559,7 +560,7 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
 
     let (cache_len, cache_bytes, cache_mem_mb, cache_max_cap) = state.cache.get_stats();
     let (wal_bytes, wal_mb) = state.wal.get_stats();
-    let total_records = state.wal.total_records().max((blk_cnt + wl_cnt) as u64);
+    let total_records = state.wal.total_records().max((blk_cnt + wl_cnt + bp_cnt) as u64);
 
     let raw_rss_mb = crate::telemetry::metrics::get_process_rss_mb();
     let rss_mb = ((raw_rss_mb + state.config.base_mem) * 10.0).round() / 10.0;
@@ -879,6 +880,11 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
             "storageEngine": "PulseDB (WAL) + AeroCache (W-TinyLFU)",
             "dnsMode": if is_priv { "private" } else { "public" },
             "blockingEnabled": state.blocking_enabled.load(Ordering::Relaxed),
+            "blockFacebook": state.block_facebook.load(Ordering::Relaxed),
+            "instantBlockEnabled": state.instant_block_enabled.load(Ordering::Relaxed),
+            "instantBlockSourcesCount": state.instant_block_sources.read().len(),
+            "instantBlockRulesCount": state.instant_block_domains.read().len() + state.instant_block_wildcards.read().len(),
+            "bypasslistCount": bp_cnt,
             "hmacAuth": !state.config.dns_token_secret.is_empty(),
             "upstreamAuraPrioritization": true,
             "upstreamCandidates": state.upstreams.candidate_count(),
@@ -887,9 +893,15 @@ pub fn build_status_response(state: &AppState, auth: AuthRole) -> Response {
         "machineLogs": crate::telemetry::machine_logs::get_machine_logs(),
         "intelligence": {
             "machineLogs": crate::telemetry::machine_logs::get_machine_logs(),
+            "blockFacebook": state.block_facebook.load(Ordering::Relaxed),
+            "instantBlockEnabled": state.instant_block_enabled.load(Ordering::Relaxed),
+            "instantBlockSourcesCount": state.instant_block_sources.read().len(),
+            "instantBlockRulesCount": state.instant_block_domains.read().len() + state.instant_block_wildcards.read().len(),
             "cfgOverride": serde_json::json!({
                 "blockingEnabled": state.blocking_enabled.load(Ordering::Relaxed),
-                "ttlGuardEnabled": state.ttl_guard_enabled.load(Ordering::Relaxed)
+                "ttlGuardEnabled": state.ttl_guard_enabled.load(Ordering::Relaxed),
+                "blockFacebook": state.block_facebook.load(Ordering::Relaxed),
+                "instantBlockEnabled": state.instant_block_enabled.load(Ordering::Relaxed)
             }),
             "configMode": "ai",
             "incidentActive": stress > 0.8,
