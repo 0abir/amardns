@@ -2363,13 +2363,14 @@ mod tests {
 
         // 2. Compile custom wildcard rules into Instant Blocker
         let custom_rules = vec![
-            "*.tracker.com".to_string(),
+            "tracker.com".to_string(),
             "0.0.0.0 badhost.org".to_string(),
             "||ad.*.net^".to_string(),
+            "*.sub-only.org".to_string(),
         ];
         let (src_cnt, rules_cnt) = state.compile_instant_blocklist(custom_rules).await;
-        assert_eq!(src_cnt, 3);
-        assert_eq!(rules_cnt, 3);
+        assert_eq!(src_cnt, 4);
+        assert_eq!(rules_cnt, 4);
 
         // While disabled, domain is not blocked:
         assert!(!state.is_domain_blocked("tracker.com"));
@@ -2380,6 +2381,9 @@ mod tests {
         assert!(state.is_domain_blocked("sub.tracker.com"));
         assert!(state.is_domain_blocked("badhost.org"));
         assert!(state.is_domain_blocked("ad.network.net"));
+        // RFC 4592: *.sub-only.org strictly blocks subdomains, leaving apex sub-only.org unblocked
+        assert!(!state.is_domain_blocked("sub-only.org"));
+        assert!(state.is_domain_blocked("api.sub-only.org"));
         assert!(!state.is_domain_blocked("google.com"));
 
         // 4. Test separate InstantBlockCache
