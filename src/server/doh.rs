@@ -789,7 +789,7 @@ pub async fn process_dns_wire_packet_full(
     }
 
     // 0. Local Threat, Blocklist & Whitelist Policy Check
-    let (is_blocked, is_nxdomain, reason) = state.check_domain(&q.name);
+    let (is_blocked, _is_nxdomain, reason) = state.check_domain(&q.name);
     if is_blocked {
         state.record_detected_block(&q.name, reason);
         state.fingerprint.record_response(client_ip, 3);
