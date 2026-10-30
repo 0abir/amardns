@@ -823,7 +823,7 @@ pub async fn process_dns_wire_packet_full(
             None, false,
         );
         state.cache.insert_negative(&q.name, q.qtype, 60).await;
-        let mut resp_bytes = build_blocked_response(query_wire, is_nxdomain);
+        let mut resp_bytes = build_sinkhole_response(query_wire);
         crate::dns::parser::append_ede_to_response(&mut resp_bytes, 15, reason);
         state.metrics.record_latency(query_start.elapsed());
         return (resp_bytes, "BLOCKED", "INSECURE".to_string(), Some(reason));
@@ -903,7 +903,7 @@ pub async fn process_dns_wire_packet_full(
             "THREAT_CACHE",
             "Preemptively dropped in 0ms from RAM; saved upstream DNS roundtrip and CPU cycles",
         );
-        let mut resp_bytes = build_blocked_response(query_wire, true);
+        let mut resp_bytes = build_sinkhole_response(query_wire);
         crate::dns::parser::append_ede_to_response(&mut resp_bytes, 15, "THREAT_CACHE");
         state
             .wal
@@ -964,7 +964,7 @@ pub async fn process_dns_wire_packet_full(
                 false,
             );
             state.cache.insert_negative(&q.name, q.qtype, 120).await;
-            let mut resp_bytes = build_blocked_response(query_wire, true);
+            let mut resp_bytes = build_sinkhole_response(query_wire);
             crate::dns::parser::append_ede_to_response(&mut resp_bytes, 15, "GSB");
             state.metrics.record_latency(query_start.elapsed());
             return (resp_bytes, "BLOCKED", "INSECURE".to_string(), Some("GSB"));
@@ -994,7 +994,7 @@ pub async fn process_dns_wire_packet_full(
                             q.name, rebind_ip
                         ),
                     );
-                    let mut blocked = build_blocked_response(query_wire, true);
+                    let mut blocked = build_sinkhole_response(query_wire);
                     crate::dns::parser::append_ede_to_response(&mut blocked, 15, "REBIND");
                     return (blocked, "BLOCKED", "INSECURE".to_string(), Some("REBIND"));
                 }
@@ -1058,7 +1058,7 @@ pub async fn process_dns_wire_packet_full(
                             q.name, rebind_ip
                         ),
                     );
-                    let mut blocked = build_blocked_response(query_wire, true);
+                    let mut blocked = build_sinkhole_response(query_wire);
                     crate::dns::parser::append_ede_to_response(&mut blocked, 15, "REBIND");
                     return (blocked, "BLOCKED", "INSECURE".to_string(), Some("REBIND"));
                 }
@@ -1317,7 +1317,7 @@ pub async fn process_dns_wire_packet_full(
                         false,
                     );
                     state.cache.insert_negative(&q.name, q.qtype, 30).await;
-                    let mut blocked = build_blocked_response(query_wire, false);
+                    let mut blocked = build_sinkhole_response(query_wire);
                     crate::dns::parser::append_ede_to_response(&mut blocked, 15, "TTL_GUARD");
                     state.metrics.record_latency(query_start.elapsed());
                     return (
@@ -1371,7 +1371,7 @@ pub async fn process_dns_wire_packet_full(
                     false,
                 );
                 state.cache.insert_negative(&q.name, q.qtype, 120).await;
-                let mut blocked = build_blocked_response(query_wire, true);
+                let mut blocked = build_sinkhole_response(query_wire);
                 crate::dns::parser::append_ede_to_response(&mut blocked, 15, "REBIND");
                 state.metrics.record_latency(query_start.elapsed());
                 return (blocked, "BLOCKED", "INSECURE".to_string(), Some("REBIND"));
@@ -1625,10 +1625,11 @@ pub async fn doh_json_handler(
         return Json(resp).into_response();
     }
 
-    let (is_blocked, is_nx, reason) = state.check_domain(&clean_domain);
+    let (is_blocked, _is_nx, reason) = state.check_domain(&clean_domain);
     if is_blocked {
+        let ans_data = if qtype == 28 { "::" } else { "0.0.0.0" };
         let resp = serde_json::json!({
-            "Status": if is_nx { 3 } else { 0 },
+            "Status": 0,
             "TC": false,
             "RD": true,
             "RA": true,
@@ -1638,14 +1639,12 @@ pub async fn doh_json_handler(
                 "name": format!("{}.", clean_domain),
                 "type": qtype
             }],
-            "Answer": if is_nx { vec![] } else {
-                vec![serde_json::json!({
-                    "name": format!("{}.", clean_domain),
-                    "type": 1,
-                    "TTL": 60,
-                    "data": "0.0.0.0"
-                })]
-            },
+            "Answer": [{
+                "name": format!("{}.", clean_domain),
+                "type": qtype,
+                "TTL": 1,
+                "data": ans_data
+            }],
             "Comment": format!("AmarDNS Block: {}", reason)
         });
         state.log_query_dnssec(
@@ -1654,7 +1653,7 @@ pub async fn doh_json_handler(
             &client_ip.to_string(),
             &proto,
             "BLOCKED",
-            if is_nx { 3 } else { 0 },
+            0,
             0,
             reason,
             "Filter",
@@ -1708,8 +1707,9 @@ pub async fn doh_json_handler(
                         clean_domain, rebind_ip
                     ),
                 );
+                let ans_data = if qtype == 28 { "::" } else { "0.0.0.0" };
                 let resp = serde_json::json!({
-                    "Status": 3,
+                    "Status": 0,
                     "TC": false,
                     "RD": true,
                     "RA": true,
@@ -1719,7 +1719,12 @@ pub async fn doh_json_handler(
                         "name": format!("{}.", clean_domain),
                         "type": qtype
                     }],
-                    "Answer": [],
+                    "Answer": [{
+                        "name": format!("{}.", clean_domain),
+                        "type": qtype,
+                        "TTL": 1,
+                        "data": ans_data
+                    }],
                     "Comment": "AmarDNS Block: REBIND (DNS Rebinding to Private IP Prohibited)"
                 });
                 return Json(resp).into_response();
@@ -1822,8 +1827,9 @@ pub async fn doh_json_handler(
                     .wal
                     .append_threat_event(&clean_domain, "REBIND", &client_ip.to_string());
                 state.cache.insert_negative(&clean_domain, qtype, 120).await;
+                let ans_data = if qtype == 28 { "::" } else { "0.0.0.0" };
                 let resp = serde_json::json!({
-                    "Status": 3,
+                    "Status": 0,
                     "TC": false,
                     "RD": true,
                     "RA": true,
@@ -1833,7 +1839,12 @@ pub async fn doh_json_handler(
                         "name": format!("{}.", clean_domain),
                         "type": qtype
                     }],
-                    "Answer": [],
+                    "Answer": [{
+                        "name": format!("{}.", clean_domain),
+                        "type": qtype,
+                        "TTL": 1,
+                        "data": ans_data
+                    }],
                     "Comment": "AmarDNS Block: REBIND (DNS Rebinding to Private IP Prohibited)"
                 });
                 return Json(resp).into_response();

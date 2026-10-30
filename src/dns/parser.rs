@@ -632,13 +632,21 @@ pub fn is_rebind_exempt_domain(domain: &str) -> bool {
     let clean = domain.trim_end_matches('.').to_ascii_lowercase();
     clean == "localhost"
         || clean.ends_with(".localhost")
+        || clean == "local"
         || clean.ends_with(".local")
+        || clean == "lan"
         || clean.ends_with(".lan")
+        || clean == "home"
         || clean.ends_with(".home")
+        || clean == "home.arpa"
         || clean.ends_with(".home.arpa")
+        || clean == "internal"
         || clean.ends_with(".internal")
+        || clean == "intranet"
         || clean.ends_with(".intranet")
+        || clean == "priv"
         || clean.ends_with(".priv")
+        || clean == "corp"
         || clean.ends_with(".corp")
 }
 
