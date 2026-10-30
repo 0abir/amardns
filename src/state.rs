@@ -820,16 +820,16 @@ impl AppState {
             return false;
         }
 
-        // 1. Direct O(1) exact match
-        if guard.contains(&clean) {
+        // 1. Direct O(1) exact match or apex match for *.apex rule
+        if guard.contains(&clean) || guard.contains(&format!("*.{}", clean)) {
             return true;
         }
 
-        // 2. Parent suffix lookup (e.g. sub.domain.com -> domain.com)
+        // 2. Parent suffix lookup (e.g. sub.domain.com -> domain.com or *.domain.com)
         let mut cursor = clean.as_str();
         while let Some(idx) = cursor.find('.') {
             cursor = &cursor[idx + 1..];
-            if guard.contains(cursor) {
+            if guard.contains(cursor) || guard.contains(&format!("*.{}", cursor)) {
                 return true;
             }
         }
