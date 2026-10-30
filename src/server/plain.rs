@@ -45,7 +45,7 @@ fn create_reuseport_udp(addr: SocketAddr) -> std::io::Result<std::net::UdpSocket
     }
     match socket.bind(&addr.into()) {
         Ok(_) => Ok(socket.into()),
-        Err(e) if addr.is_ipv6() => {
+        Err(_e) if addr.is_ipv6() => {
             let v4_addr = SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), addr.port());
             let socket_v4 = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
             let _ = socket_v4.set_reuse_address(true);
@@ -86,7 +86,7 @@ fn create_reuseport_tcp(addr: SocketAddr) -> std::io::Result<std::net::TcpListen
             socket.listen(4096)?;
             Ok(socket.into())
         }
-        Err(e) if addr.is_ipv6() => {
+        Err(_e) if addr.is_ipv6() => {
             let v4_addr = SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), addr.port());
             let socket_v4 = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
             let _ = socket_v4.set_reuse_address(true);
