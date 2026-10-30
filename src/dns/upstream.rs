@@ -853,6 +853,7 @@ impl UpstreamPool {
         let wire = crate::dns::parser::ensure_edns0_do_bit(query_wire);
         let wire =
             crate::dns::parser::process_ecs_option(&wire, crate::dns::parser::EcsMode::Strip);
+        let wire = crate::dns::parser::apply_dns0x20_randomization(&wire);
 
         let mut tasks = Vec::with_capacity(3);
         let rng = ring::rand::SystemRandom::new();

@@ -166,15 +166,31 @@ pub async fn start_plain_udp(
                             Ok((len, peer)) => {
                                 if len < 12 { continue; }
 
+                                let flags = u16::from_be_bytes([buf[2], buf[3]]);
+                                // RFC 1035 §4.1.1 / RFC 6895: Silently drop incoming DNS responses to prevent reflection loops
+                                if (flags & 0x8000) != 0 {
+                                    continue;
+                                }
+
+                                let client_ip = peer.ip().to_canonical();
+
                                 // Rate Limiting (RRL & Reflection / Amplification Mitigation)
-                                if !state_worker.check_rate_limit(peer.ip(), None) {
+                                if !state_worker.check_rate_limit(client_ip, None) {
                                     state_worker.metrics.burst_events.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                     continue;
                                 }
 
-                                // Fast-Path Microsecond Negative & Instant Blocker Absorber (<1µs zero-alloc drop)
+                                // Fast-Path Microsecond Negative, RFC 8482 ANY & Instant Blocker Absorber (<1µs zero-alloc drop)
                                 if let Some(parsed) = crate::dns::parser::parse_dns_query_opts(&buf[..len], state_worker.config.rfc1035_8bit_labels) {
                                     if let Some(ref q) = parsed.question {
+                                        // Fast-Path RFC 8482 Minimal ANY query absorber
+                                        if q.qtype == 255 {
+                                            if let Some(any_resp) = crate::dns::parser::build_any_minimal_response(&buf[..len]) {
+                                                let _ = sock.send_to(&any_resp, peer).await;
+                                                continue;
+                                            }
+                                        }
+
                                         let clean = q.name.trim_end_matches('.').to_ascii_lowercase();
                                         let is_bypassed = state_worker.is_bypassed(&clean);
                                         if !is_bypassed {
@@ -182,11 +198,18 @@ pub async fn start_plain_udp(
                                             if state_worker.is_instant_blocked(&clean) {
                                                 state_worker.metrics.threat_blocks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                                 state_worker.record_detected_block(&clean, "instant_shield_block");
-                                                let blocked = if let Some(cached_resp) = state_worker.instant_cache.get_blocked_response(&clean, q.qtype, parsed.tx_id) {
+                                                let blocked = if let Some(mut cached_resp) = state_worker.instant_cache.get_blocked_response(&clean, q.qtype, parsed.tx_id) {
+                                                    if parsed.question_bytes_len > 0
+                                                        && cached_resp.len() >= 12 + parsed.question_bytes_len
+                                                        && len >= 12 + parsed.question_bytes_len
+                                                    {
+                                                        cached_resp[12..12 + parsed.question_bytes_len]
+                                                            .copy_from_slice(&buf[12..12 + parsed.question_bytes_len]);
+                                                    }
                                                     cached_resp
                                                 } else {
                                                     let mut fresh = crate::dns::parser::build_sinkhole_response(&buf[..len]);
-                                                    crate::dns::parser::append_ede_to_response(&mut fresh, 15, "INSTANT_BLOCK");
+                                                    crate::dns::parser::append_ede_if_edns(&mut fresh, &buf[..len], 15, "INSTANT_BLOCK");
                                                     state_worker.instant_cache.insert_blocked_response(&clean, q.qtype, fresh.clone());
                                                     fresh
                                                 };
@@ -200,7 +223,7 @@ pub async fn start_plain_udp(
                                                 state_worker.metrics.fast_neg_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                                 state_worker.record_detected_block(&clean, reason);
                                                 let mut blocked = crate::dns::parser::build_sinkhole_response(&buf[..len]);
-                                                crate::dns::parser::append_ede_to_response(&mut blocked, 15, reason);
+                                                crate::dns::parser::append_ede_if_edns(&mut blocked, &buf[..len], 15, reason);
                                                 let _ = sock.send_to(&blocked, peer).await;
                                                 continue;
                                             }
@@ -228,7 +251,7 @@ pub async fn start_plain_udp(
                                     let mut resp = crate::server::doh::process_dns_wire_packet(
                                         state_c.clone(),
                                         &query,
-                                        peer.ip(),
+                                        client_ip,
                                         None,
                                         "Plain53-UDP",
                                     ).await;
@@ -242,7 +265,7 @@ pub async fn start_plain_udp(
                                             .as_secs() as u32;
                                         let server_cookie = crate::dns::parser::generate_server_cookie(
                                             secret,
-                                            peer.ip(),
+                                            client_ip,
                                             &client_cookie,
                                             now_unix,
                                         );
@@ -381,8 +404,18 @@ async fn handle_plain_tcp_conn(
             break;
         }
 
+        // RFC 1035 §4.1.1: Drop unsolicited responses on TCP streams
+        if query.len() >= 4 {
+            let flags = u16::from_be_bytes([query[2], query[3]]);
+            if (flags & 0x8000) != 0 {
+                break;
+            }
+        }
+
+        let client_ip = peer.ip().to_canonical();
+
         // Per-query rate limit check within persistent TCP connection
-        if !state.check_rate_limit(peer.ip(), None) {
+        if !state.check_rate_limit(client_ip, None) {
             let fail = crate::dns::parser::build_servfail_response(&query);
             let _ = tx.send(fail).await;
             break;
@@ -394,7 +427,7 @@ async fn handle_plain_tcp_conn(
             let resp = crate::server::doh::process_dns_wire_packet(
                 state_c,
                 &query,
-                peer.ip(),
+                client_ip,
                 None,
                 "Plain53-TCP",
             )

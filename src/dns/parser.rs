@@ -869,6 +869,76 @@ fn ede_append_new_opt(wire: &mut Vec<u8>, ede_option: &[u8]) {
     wire.extend_from_slice(ede_option);
 }
 
+/// Returns true if the DNS packet contains an RFC 6891 EDNS0 OPT RR (TYPE 41) in the Additional section.
+pub fn has_edns(wire: &[u8]) -> bool {
+    if wire.len() < 12 {
+        return false;
+    }
+    let arcount = u16::from_be_bytes([wire[10], wire[11]]) as usize;
+    if arcount == 0 {
+        return false;
+    }
+    let qdcount = u16::from_be_bytes([wire[4], wire[5]]) as usize;
+    let ancount = u16::from_be_bytes([wire[6], wire[7]]) as usize;
+    let nscount = u16::from_be_bytes([wire[8], wire[9]]) as usize;
+
+    let mut pos = 12;
+    for _ in 0..qdcount {
+        pos = match skip_dns_name(wire, pos) {
+            Some(p) => p + 4,
+            None => return false,
+        };
+        if pos > wire.len() {
+            return false;
+        }
+    }
+
+    for _ in 0..(ancount + nscount) {
+        let name_end = match skip_dns_name(wire, pos) {
+            Some(p) => p,
+            None => return false,
+        };
+        if name_end + 10 > wire.len() {
+            return false;
+        }
+        let rdlen = u16::from_be_bytes([wire[name_end + 8], wire[name_end + 9]]) as usize;
+        pos = name_end + 10 + rdlen;
+        if pos > wire.len() {
+            return false;
+        }
+    }
+
+    for _ in 0..arcount {
+        if pos >= wire.len() {
+            break;
+        }
+        let name_end = match skip_dns_name(wire, pos) {
+            Some(p) => p,
+            None => return false,
+        };
+        if name_end + 10 > wire.len() {
+            return false;
+        }
+        let rtype = u16::from_be_bytes([wire[name_end], wire[name_end + 1]]);
+        if rtype == 41 {
+            return true;
+        }
+        let rdlen = u16::from_be_bytes([wire[name_end + 8], wire[name_end + 9]]) as usize;
+        pos = name_end + 10 + rdlen;
+        if pos > wire.len() {
+            return false;
+        }
+    }
+    false
+}
+
+/// Appends Extended DNS Error (RFC 8914) to response wire ONLY if the client query included an EDNS0 OPT RR (RFC 6891 §6.1.1).
+pub fn append_ede_if_edns(wire: &mut Vec<u8>, query_wire: &[u8], ede_code: u16, extra_text: &str) {
+    if has_edns(query_wire) {
+        append_ede_to_response(wire, ede_code, extra_text);
+    }
+}
+
 // ── DNS 0x20 Case Randomization (draft-vixie-dnsext-dns0x20) ─────────────────
 
 /// Randomizes ASCII letter casing in the outbound QNAME using a per-query LCG PRNG
@@ -1273,6 +1343,7 @@ pub fn generate_server_cookie(
 ) -> Vec<u8> {
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret);
     let mut msg = Vec::with_capacity(36);
+    let client_ip = client_ip.to_canonical();
     match client_ip {
         std::net::IpAddr::V4(v4) => msg.extend_from_slice(&v4.octets()),
         std::net::IpAddr::V6(v6) => msg.extend_from_slice(&v6.octets()),
@@ -1303,6 +1374,7 @@ pub fn verify_server_cookie(
     server_cookie: &[u8],
     now_unix: u32,
 ) -> bool {
+    let client_ip = client_ip.to_canonical();
     if server_cookie.len() != 16 || server_cookie[0] != 0x01 || client_cookie.len() != 8 {
         return false;
     }
@@ -2427,5 +2499,49 @@ mod extra_tests {
         let (name, next_pos) = parsed.unwrap();
         assert_eq!(name, "api.example.com");
         assert_eq!(next_pos, api_pos + 1 + 3 + 2);
+    }
+
+    #[test]
+    fn test_has_edns_and_append_ede_if_edns_compliance() {
+        // 1. Query without EDNS (ARCOUNT = 0)
+        let mut wire_no_edns = vec![
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        wire_no_edns.extend_from_slice(b"\x07example\x03com\x00\x00\x01\x00\x01");
+        assert!(!has_edns(&wire_no_edns));
+
+        let mut resp_no_edns = build_sinkhole_response(&wire_no_edns);
+        let orig_len = resp_no_edns.len();
+        append_ede_if_edns(&mut resp_no_edns, &wire_no_edns, 15, "BLOCKED");
+        // Must NOT append OPT RR to non-EDNS query response (RFC 6891 §6.1.1)
+        assert_eq!(resp_no_edns.len(), orig_len);
+        let arcount = u16::from_be_bytes([resp_no_edns[10], resp_no_edns[11]]);
+        assert_eq!(arcount, 0);
+
+        // 2. Query with EDNS0 (ARCOUNT = 1 with Type 41 OPT RR)
+        let wire_with_edns = ensure_edns0_do_bit(&wire_no_edns);
+        assert!(has_edns(&wire_with_edns));
+
+        let mut resp_with_edns = build_sinkhole_response(&wire_with_edns);
+        append_ede_if_edns(&mut resp_with_edns, &wire_with_edns, 15, "BLOCKED");
+        // Must append OPT RR with EDE to EDNS query response
+        assert!(resp_with_edns.len() > orig_len);
+        let arcount_edns = u16::from_be_bytes([resp_with_edns[10], resp_with_edns[11]]);
+        assert_eq!(arcount_edns, 1);
+    }
+
+    #[test]
+    fn test_dual_stack_canonical_cookie_verification() {
+        let secret = b"super-secure-production-cookie-token-secret-64-characters-long!";
+        let client_cookie = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x11];
+        let now = 1700000000u32;
+
+        // Generated with IPv4-mapped IPv6 address (::ffff:192.0.2.42)
+        let mapped_v6: std::net::IpAddr = "::ffff:192.0.2.42".parse().unwrap();
+        let server_cookie = generate_server_cookie(secret, mapped_v6, &client_cookie, now);
+
+        // Verified with native IPv4 address (192.0.2.42)
+        let native_v4: std::net::IpAddr = "192.0.2.42".parse().unwrap();
+        assert!(verify_server_cookie(secret, native_v4, &client_cookie, &server_cookie, now));
     }
 }

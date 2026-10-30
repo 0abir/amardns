@@ -671,6 +671,26 @@ pub async fn process_dns_wire_packet_full(
         }
     };
 
+    // RFC 1035 §4.1.1 / RFC 6895: Silently ignore unsolicited responses to prevent reflection loops
+    if (parsed.flags & 0x8000) != 0 {
+        state.metrics.record_latency(query_start.elapsed());
+        return (
+            Vec::new(),
+            "UNSOLICITED_RESPONSE",
+            "INSECURE".to_string(),
+            None,
+        );
+    }
+
+    // RFC 1035 §4.1.1: Unsupported OPCODES (IQUERY, STATUS, NOTIFY, UPDATE) must return NOTIMP (RCODE 4).
+    let opcode = (parsed.flags >> 11) & 0x0F;
+    if opcode != 0 {
+        let mut notimp = build_servfail_response(query_wire);
+        notimp[3] = (notimp[3] & 0xF0) | 0x04; // RCODE = 4 (NOTIMP)
+        state.metrics.record_latency(query_start.elapsed());
+        return (notimp, "NOT_IMPLEMENTED", "INSECURE".to_string(), None);
+    }
+
     let q = match parsed.question {
         Some(q) => q,
         None => {
@@ -683,6 +703,14 @@ pub async fn process_dns_wire_packet_full(
             );
         }
     };
+
+    // RFC 5936 §2.2: Refuse zone transfer queries (AXFR = 252, IXFR = 251)
+    if q.qtype == 252 || q.qtype == 251 {
+        let mut refused = build_servfail_response(query_wire);
+        refused[3] = (refused[3] & 0xF0) | 0x05; // RCODE = 5 (REFUSED)
+        state.metrics.record_latency(query_start.elapsed());
+        return (refused, "ZONE_TRANSFER_REFUSED", "INSECURE".to_string(), None);
+    }
 
     // Discovery of Designated Resolvers (DDR - RFC 9462)
     if let Some(ddr_resp) = crate::dns::parser::build_ddr_response(query_wire) {
@@ -824,7 +852,7 @@ pub async fn process_dns_wire_packet_full(
         );
         state.cache.insert_negative(&q.name, q.qtype, 60).await;
         let mut resp_bytes = build_sinkhole_response(query_wire);
-        crate::dns::parser::append_ede_to_response(&mut resp_bytes, 15, reason);
+        crate::dns::parser::append_ede_if_edns(&mut resp_bytes, query_wire, 15, reason);
         state.metrics.record_latency(query_start.elapsed());
         return (resp_bytes, "BLOCKED", "INSECURE".to_string(), Some(reason));
     }
@@ -874,11 +902,18 @@ pub async fn process_dns_wire_packet_full(
             None,
             false,
         );
-        let resp_bytes = if let Some(cached_resp) = state.instant_cache.get_blocked_response(&q.name, q.qtype, parsed.tx_id) {
+        let resp_bytes = if let Some(mut cached_resp) = state.instant_cache.get_blocked_response(&q.name, q.qtype, parsed.tx_id) {
+            if parsed.question_bytes_len > 0
+                && cached_resp.len() >= 12 + parsed.question_bytes_len
+                && query_wire.len() >= 12 + parsed.question_bytes_len
+            {
+                cached_resp[12..12 + parsed.question_bytes_len]
+                    .copy_from_slice(&query_wire[12..12 + parsed.question_bytes_len]);
+            }
             cached_resp
         } else {
             let mut fresh = build_sinkhole_response(query_wire);
-            crate::dns::parser::append_ede_to_response(&mut fresh, 15, "INSTANT_BLOCK");
+            crate::dns::parser::append_ede_if_edns(&mut fresh, query_wire, 15, "INSTANT_BLOCK");
             state.instant_cache.insert_blocked_response(&q.name, q.qtype, fresh.clone());
             fresh
         };
@@ -904,7 +939,7 @@ pub async fn process_dns_wire_packet_full(
             "Preemptively dropped in 0ms from RAM; saved upstream DNS roundtrip and CPU cycles",
         );
         let mut resp_bytes = build_sinkhole_response(query_wire);
-        crate::dns::parser::append_ede_to_response(&mut resp_bytes, 15, "THREAT_CACHE");
+        crate::dns::parser::append_ede_if_edns(&mut resp_bytes, query_wire, 15, "THREAT_CACHE");
         state
             .wal
             .append_query(&q.name, q.qtype, log_id, 3, 0, "NEG_HIT");
