@@ -985,7 +985,7 @@ async fn cmd_trace(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
         if let Some(suffix) = w.strip_prefix("*.") {
             domain.ends_with(&format!(".{}", suffix))
         } else {
-            domain == w || domain.ends_with(&format!(".{}", w))
+            domain == *w || domain.ends_with(&format!(".{}", w))
         }
     });
 
