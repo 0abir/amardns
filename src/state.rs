@@ -1195,34 +1195,52 @@ impl AppState {
             return;
         }
         self.brain.train(&clean, true, 3);
-        // Do not pollute local custom blocklist with external feeds, rebinds, caches, or GSB threats
-        if reason.contains("safe_browsing")
-            || reason.contains("gsb")
-            || reason.contains("feed")
-            || reason.contains("threat_feed")
-            || reason.contains("rebind")
-            || reason.contains("REBIND")
-            || reason.contains("cache")
-            || reason.contains("instant")
-        {
+
+        // Do not record internal negative cache loops
+        if reason == "cache" || reason == "NEG_HIT" {
             return;
         }
+
         let mut guard = self.custom_blocklist.write();
-        // Cap auto-detected blocks at 500 to limit memory growth
-        if guard.len() >= 500 && !guard.contains_key(&clean) {
-            return;
+        // Bounded capacity: evict oldest non-manual entry if capacity is reached
+        if guard.len() >= 2000 && !guard.contains_key(&clean) {
+            if let Some((oldest_key, _)) = guard
+                .iter()
+                .filter(|(_, v)| v.source != "manual")
+                .min_by_key(|(_, v)| v.created_at)
+                .map(|(k, v)| (k.clone(), v.created_at))
+            {
+                guard.remove(&oldest_key);
+            } else if guard.len() >= 2500 {
+                return;
+            }
         }
         let now = SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
 
-        let (tag, source, auto) =
-            if reason.contains("dga") || reason.contains("lookalike") || reason.contains("ai") {
-                ("AI", "ai", true)
-            } else {
-                return; // Only true AI detections are recorded as auto blocks
-            };
+        let (tag, source, auto) = if reason.contains("dga")
+            || reason.contains("lookalike")
+            || reason.contains("ai")
+            || reason.contains("typosquat")
+        {
+            ("AI", "ai", true)
+        } else if reason.contains("instant") {
+            ("FEED", "instant", false)
+        } else if reason.contains("rebind") || reason.contains("REBIND") {
+            ("FEED", "rebind", false)
+        } else if reason.contains("feed")
+            || reason.contains("gsb")
+            || reason.contains("threat")
+            || reason.contains("safe_browsing")
+        {
+            ("FEED", "feed", false)
+        } else if reason.contains("manual") || reason.contains("custom_block") {
+            ("MANUAL", "manual", false)
+        } else {
+            ("FEED", "system", false)
+        };
 
         guard.entry(clean.clone()).or_insert_with(|| BlockEntry {
             domain: clean,
@@ -1702,11 +1720,26 @@ mod tests {
     async fn test_record_detected_block() {
         let config = Config::from_env();
         let state = AppState::new(config);
-        // External threat feeds must NOT pollute local custom blocklist
+        // External threat feeds and instant shield blocks are recorded with FEED tag
         state.record_detected_block("malware-test.ru", "threat_feed_abir");
         {
             let guard = state.custom_blocklist.read();
-            assert!(!guard.contains_key("malware-test.ru"));
+            assert!(guard.contains_key("malware-test.ru"));
+            let entry = guard.get("malware-test.ru").unwrap();
+            assert_eq!(entry.tag, "FEED");
+            assert_eq!(entry.source, "feed");
+            assert!(!entry.auto);
+        }
+
+        // Instant shield block recorded with FEED tag
+        state.record_detected_block("instant-blocked.com", "instant_shield_block");
+        {
+            let guard = state.custom_blocklist.read();
+            assert!(guard.contains_key("instant-blocked.com"));
+            let entry = guard.get("instant-blocked.com").unwrap();
+            assert_eq!(entry.tag, "FEED");
+            assert_eq!(entry.source, "instant");
+            assert!(!entry.auto);
         }
 
         // True autonomous AI heuristics ARE recorded as auto blocks

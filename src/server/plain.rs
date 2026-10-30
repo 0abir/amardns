@@ -43,8 +43,23 @@ fn create_reuseport_udp(addr: SocketAddr) -> std::io::Result<std::net::UdpSocket
     if addr.is_ipv6() {
         let _ = socket.set_only_v6(false);
     }
-    socket.bind(&addr.into())?;
-    Ok(socket.into())
+    match socket.bind(&addr.into()) {
+        Ok(_) => Ok(socket.into()),
+        Err(e) if addr.is_ipv6() => {
+            let v4_addr = SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), addr.port());
+            let socket_v4 = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+            let _ = socket_v4.set_reuse_address(true);
+            let _ = socket_v4.set_reuse_port(true);
+            let _ = socket_v4.set_recv_buffer_size(UDP_SOCKET_BUFFER_SIZE);
+            let _ = socket_v4.set_send_buffer_size(UDP_SOCKET_BUFFER_SIZE);
+            #[cfg(unix)]
+            let _ = socket_v4.set_tos_v4(0xB8);
+            socket_v4.set_nonblocking(true)?;
+            socket_v4.bind(&v4_addr.into())?;
+            Ok(socket_v4.into())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Creates a SO_REUSEPORT TCP listener socket bound to `addr`.
@@ -66,9 +81,28 @@ fn create_reuseport_tcp(addr: SocketAddr) -> std::io::Result<std::net::TcpListen
     if addr.is_ipv6() {
         let _ = socket.set_only_v6(false);
     }
-    socket.bind(&addr.into())?;
-    socket.listen(4096)?;
-    Ok(socket.into())
+    match socket.bind(&addr.into()) {
+        Ok(_) => {
+            socket.listen(4096)?;
+            Ok(socket.into())
+        }
+        Err(e) if addr.is_ipv6() => {
+            let v4_addr = SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), addr.port());
+            let socket_v4 = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
+            let _ = socket_v4.set_reuse_address(true);
+            let _ = socket_v4.set_reuse_port(true);
+            let _ = socket_v4.set_recv_buffer_size(UDP_SOCKET_BUFFER_SIZE);
+            let _ = socket_v4.set_send_buffer_size(UDP_SOCKET_BUFFER_SIZE);
+            #[cfg(unix)]
+            let _ = socket_v4.set_tos_v4(0xB8);
+            socket_v4.set_nonblocking(true)?;
+            socket_v4.set_tcp_nodelay(true)?;
+            socket_v4.bind(&v4_addr.into())?;
+            socket_v4.listen(4096)?;
+            Ok(socket_v4.into())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Starts a multi-worker plain DNS UDP listener pool on port 53.
@@ -147,6 +181,7 @@ pub async fn start_plain_udp(
                                             // 1. Dedicated Instant Blocker check & isolated cache lookup
                                             if state_worker.is_instant_blocked(&clean) {
                                                 state_worker.metrics.threat_blocks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                                state_worker.record_detected_block(&clean, "instant_shield_block");
                                                 let blocked = if let Some(cached_resp) = state_worker.instant_cache.get_blocked_response(&clean, q.qtype, parsed.tx_id) {
                                                     cached_resp
                                                 } else {
@@ -163,6 +198,7 @@ pub async fn start_plain_udp(
                                             if let Some((reason, _is_nx)) = state_worker.fast_neg_filter.get(&clean) {
                                                 state_worker.metrics.threat_blocks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                                 state_worker.metrics.fast_neg_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                                state_worker.record_detected_block(&clean, reason);
                                                 let mut blocked = crate::dns::parser::build_sinkhole_response(&buf[..len]);
                                                 crate::dns::parser::append_ede_to_response(&mut blocked, 15, reason);
                                                 let _ = sock.send_to(&blocked, peer).await;

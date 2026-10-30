@@ -197,7 +197,8 @@ select.fld option{background:var(--sur2)}
 .btag{padding:3px 8px 3px 9px;background:rgba(255,45,107,.05);border:1px solid rgba(255,45,107,.22);border-left-width:3px;font-size:12px;color:var(--bad);display:flex;align-items:center;gap:5px;clip-path:polygon(0 0,100% 0,100% 100%,0 100%);word-break:break-all}
 .btag-auto{padding:3px 8px 3px 9px;background:rgba(255,140,0,.08);border:1px solid rgba(255,140,0,.35);font-size:12px;color:#ff8c00;display:flex;align-items:center;gap:5px;clip-path:polygon(3px 0,100% 0,100% calc(100% - 3px),calc(100% - 3px) 100%,0 100%,0 3px);word-break:break-all}
 .btag-auto::before{content:'';font-size:8px;opacity:.8}
-.btag-x{cursor:pointer;opacity:.35;transition:opacity .1s}.btag-x:hover{opacity:1}
+.btag-x{cursor:pointer;opacity:.35;transition:opacity .1s;display:inline-block;padding:0 2px}.btag-x:hover{opacity:1}
+.btag-x::after{content:'×';font-weight:700;font-size:12px;line-height:1}
 .wltag{padding:3px 8px;background:rgba(57,255,20,.05);border:1px solid rgba(57,255,20,.22);font-size:12px;color:var(--good);display:flex;align-items:center;gap:5px;word-break:break-all}
 .bptag{padding:3px 8px;background:rgba(0,255,231,.08);border:1px solid rgba(0,255,231,.3);font-size:12px;color:var(--acc);display:flex;align-items:center;gap:5px;word-break:break-all}
 .btag-group,.wltag-group,.bptag-group{display:inline-flex;flex-direction:column;gap:3px;vertical-align:top;max-width:100%}
@@ -1603,6 +1604,7 @@ var _isMouseDown=false;
 if(typeof window!=='undefined'){
   window.addEventListener('mousedown',function(){_isMouseDown=true;},true);
   window.addEventListener('mouseup',function(){_isMouseDown=false;},true);
+  window.addEventListener('blur',function(){_isMouseDown=false;});
 }
 var _expandedGroups=new Set();
 var _blockPage=1, _blockPageSize=25;
@@ -3461,7 +3463,7 @@ function renderBlockRow(row){
   var isAuto=typeof row==='object'&&Boolean(row.auto);
   var ru=(rs+' '+rawSrc).toUpperCase();
   var tagType='MANUAL';
-  if(rawSrc==='FEED'||ru.includes('FEED')||ru.includes('ABIR')||ru.includes('GSB')){
+  if(rawSrc==='FEED'||ru.includes('FEED')||ru.includes('ABIR')||ru.includes('GSB')||ru.includes('INSTANT')||ru.includes('REBIND')){
     tagType='FEED';
   }else if(isAuto||rawSrc==='AI'||rawSrc==='AUTO'||ru.includes('DGA')||ru.includes('BRAND')||ru.includes('ALIKE')||ru.includes('LOOKALIKE')||ru.includes('TYPO')||ru.includes('ANOMALY')||ru.includes('BURST')){
     tagType='AI';
@@ -3536,7 +3538,7 @@ function loadBlock(){
         var allFeed=items.every(function(it){
           var t=(typeof it==='object'&&(it.tag||it.source))||'';
           var r=(typeof it==='object'&&it.reason)||'';
-          return t==='FEED'||t==='feed'||r.includes('feed')||r.includes('abir')||r.includes('gsb');
+          return t==='FEED'||t==='feed'||r.includes('feed')||r.includes('abir')||r.includes('gsb')||r.includes('instant')||r.includes('rebind');
         });
         var allAi=!allFeed&&items.every(function(it){
           var t=(typeof it==='object'&&(it.tag||it.source))||'';
@@ -3569,7 +3571,7 @@ function loadBlock(){
       }
     }
     var newHtml=html.join('');
-    if(tags.innerHTML!==newHtml&&!isNodeSelected(tags)&&!_isMouseDown){
+    if(tags.innerHTML!==newHtml&&!isNodeSelected(tags)){
       tags.innerHTML=newHtml;
     }
     renderPagination('btags-paging',_blockPage,totalPages,grouped.order.length,d.domains.length,'setBlockPage');
@@ -3593,7 +3595,7 @@ function _cleanDom(str) {
 function addBlock(){
   var v=document.getElementById('block-in').value.trim();
   if(!v)return;
-  var rawList=v.split(',').map(function(s){return s.trim();}).filter(Boolean);
+  var rawList=v.split(/[\r\n,]+/).map(function(s){return s.trim();}).filter(Boolean);
   var valid=[], invalid=[];
   for(var i=0;i<rawList.length;i++){
     var cd=_cleanDom(rawList[i]);
@@ -3711,7 +3713,7 @@ function loadWhitelist(){
 function addWhitelist(){
   var v=document.getElementById('wl-in').value.trim();
   if(!v)return;
-  var rawList=v.split(',').map(function(s){return s.trim();}).filter(Boolean);
+  var rawList=v.split(/[\r\n,]+/).map(function(s){return s.trim();}).filter(Boolean);
   var valid=[], invalid=[];
   for(var i=0;i<rawList.length;i++){
     var cd=_cleanDom(rawList[i]);

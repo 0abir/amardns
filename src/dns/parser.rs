@@ -308,14 +308,14 @@ pub fn build_sinkhole_response(query_buf: &[u8]) -> Vec<u8> {
         resp.extend_from_slice(&[0xC0, 0x0C]);
         resp.extend_from_slice(&1u16.to_be_bytes()); // TYPE A
         resp.extend_from_slice(&1u16.to_be_bytes()); // CLASS IN
-        resp.extend_from_slice(&1u32.to_be_bytes()); // TTL = 1 second
+        resp.extend_from_slice(&60u32.to_be_bytes()); // TTL = 60 seconds (Authoritative sinkhole cache stability)
         resp.extend_from_slice(&4u16.to_be_bytes()); // RDLENGTH = 4
         resp.extend_from_slice(&[0, 0, 0, 0]); // 0.0.0.0
     } else if is_aaaa {
         resp.extend_from_slice(&[0xC0, 0x0C]);
         resp.extend_from_slice(&28u16.to_be_bytes()); // TYPE AAAA
         resp.extend_from_slice(&1u16.to_be_bytes()); // CLASS IN
-        resp.extend_from_slice(&1u32.to_be_bytes()); // TTL = 1 second
+        resp.extend_from_slice(&60u32.to_be_bytes()); // TTL = 60 seconds (Authoritative sinkhole cache stability)
         resp.extend_from_slice(&16u16.to_be_bytes()); // RDLENGTH = 16
         resp.extend_from_slice(&[0u8; 16]); // :: (Unspecified IPv6)
     }

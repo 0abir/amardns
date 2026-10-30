@@ -180,8 +180,8 @@ impl Config {
 
         let host = env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
         let udp_host = env::var("UDP_HOST").unwrap_or_else(|_| host.clone());
-        let plain53_host = env::var("PLAIN53_HOST").unwrap_or_else(|_| host.clone());
-        let plain53_udp_host = env::var("PLAIN53_UDP_HOST").unwrap_or_else(|_| udp_host.clone());
+        let plain53_host = env::var("PLAIN53_HOST").unwrap_or_else(|_| "::".to_string());
+        let plain53_udp_host = env::var("PLAIN53_UDP_HOST").unwrap_or_else(|_| "::".to_string());
 
         let total_mem_cap = env::var("TOTAL_MEM_CAP")
             .or_else(|_| env::var("TOTAL_CAP_MB"))
