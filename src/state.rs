@@ -1068,10 +1068,6 @@ impl AppState {
         if guard.is_empty() {
             return None;
         }
-        let wc_self = format!("*.{}", domain);
-        if let Some(entry) = guard.get(&wc_self) {
-            return Some(Self::block_reason_tag(&entry.reason));
-        }
         let parts: Vec<&str> = domain.split('.').collect();
         for i in 1..parts.len().saturating_sub(1) {
             let parent = parts[i..].join(".");
@@ -1117,10 +1113,6 @@ impl AppState {
     fn is_threat_bloom(&self, domain: &str) -> bool {
         let guard = self.threat_bloom.read();
         if guard.contains(domain) {
-            return true;
-        }
-        let wc_self = format!("*.{}", domain);
-        if guard.contains(&wc_self) {
             return true;
         }
         // Zero-allocation zero-copy subdomain traversal
@@ -1203,8 +1195,16 @@ impl AppState {
             return;
         }
         self.brain.train(&clean, true, 3);
-        // Do not pollute local custom blocklist with external cloud GSB threats
-        if reason.contains("safe_browsing") || reason.contains("gsb") {
+        // Do not pollute local custom blocklist with external feeds, rebinds, caches, or GSB threats
+        if reason.contains("safe_browsing")
+            || reason.contains("gsb")
+            || reason.contains("feed")
+            || reason.contains("threat_feed")
+            || reason.contains("rebind")
+            || reason.contains("REBIND")
+            || reason.contains("cache")
+            || reason.contains("instant")
+        {
             return;
         }
         let mut guard = self.custom_blocklist.write();
@@ -1220,11 +1220,8 @@ impl AppState {
         let (tag, source, auto) =
             if reason.contains("dga") || reason.contains("lookalike") || reason.contains("ai") {
                 ("AI", "ai", true)
-            } else if reason.contains("feed") || reason.contains("gsb") || reason.contains("threat")
-            {
-                ("FEED", "feed", false)
             } else {
-                ("MANUAL", "manual", false)
+                return; // Only true AI detections are recorded as auto blocks
             };
 
         guard.entry(clean.clone()).or_insert_with(|| BlockEntry {
@@ -1316,28 +1313,19 @@ pub fn domain_matches_pattern(pattern: &str, domain: &str) -> bool {
         return true;
     }
 
-    // Pattern "*.root.tld": matches both root.tld AND any subdomain (e.g. sub.root.tld)
+    // Standard DNS wildcard prefix: *.root.tld (or *.sub.root.tld)
+    // RFC 4592: Strictly matches subdomains under root, never the root itself or parent
     if let Some(root) = clean_pat.strip_prefix("*.") {
-        if clean_dom == root || clean_dom.ends_with(&format!(".{}", root)) {
-            return true;
-        }
-    } else if let Some(root) = clean_pat.strip_prefix('*') {
-        if clean_dom == root || clean_dom.ends_with(&format!(".{}", root)) {
-            return true;
-        }
+        return clean_dom.ends_with(&format!(".{}", root));
     }
 
-    // Plain rule without wildcard: "root.tld" also inherently covers all subdomains in DNS filters
-    if !clean_pat.contains('*') && clean_dom.ends_with(&format!(".{}", clean_pat)) {
-        return true;
+    // Plain rule without wildcard: "root.tld" covers root AND all its subdomains in DNS filters
+    if !clean_pat.contains('*') {
+        return clean_dom.ends_with(&format!(".{}", clean_pat));
     }
 
-    // Arbitrary glob matching (*tracker*, *.ads.*, ad.*, *.xyz)
-    if clean_pat.contains('*') {
-        return wildcard_match(&clean_pat, &clean_dom);
-    }
-
-    false
+    // General wildcard/glob matching (*tracker*, ad.*, *.xyz)
+    wildcard_match(&clean_pat, &clean_dom)
 }
 
 /// Normalizes an instant blocklist rule or feed line, preserving wildcards (*) while stripping comments and hosts IPs.
@@ -1714,15 +1702,14 @@ mod tests {
     async fn test_record_detected_block() {
         let config = Config::from_env();
         let state = AppState::new(config);
+        // External threat feeds must NOT pollute local custom blocklist
         state.record_detected_block("malware-test.ru", "threat_feed_abir");
         {
             let guard = state.custom_blocklist.read();
-            assert!(guard.contains_key("malware-test.ru"));
-            let entry = guard.get("malware-test.ru").unwrap();
-            assert_eq!(entry.tag, "FEED");
-            assert_eq!(entry.source, "feed");
+            assert!(!guard.contains_key("malware-test.ru"));
         }
 
+        // True autonomous AI heuristics ARE recorded as auto blocks
         state.record_detected_block("dga-xyz123.com", "dga_threat");
         {
             let guard = state.custom_blocklist.read();
@@ -1779,9 +1766,8 @@ mod tests {
         let config = Config::from_env();
         let state = AppState::new(config);
 
-        // Normalize and insert into threat_bloom
-        let clean = normalize_blocklist_line("*.000webhost.com").unwrap();
-        state.threat_bloom.write().insert(&clean);
+        // Insert exact domain into threat_bloom (covers apex + subdomains)
+        state.threat_bloom.write().insert("000webhost.com");
 
         // Both apex and subdomain must be blocked!
         let (blocked_apex, is_nx, reason) = state.check_domain("000webhost.com");
@@ -1793,6 +1779,11 @@ mod tests {
         assert!(blocked_sub);
         assert!(is_nx_sub);
         assert_eq!(reason_sub, "threat_feed_abir");
+
+        // Wildcard threat feed rule *.malware-network.com blocks subdomains without blocking the apex
+        state.threat_bloom.write().insert("*.malware-network.com");
+        assert!(state.check_domain("sub.malware-network.com").0);
+        assert!(!state.check_domain("malware-network.com").0);
 
         // Whitelist prioritization test: Whitelist takes precedence over threat bloom!
         state
@@ -1826,8 +1817,8 @@ mod tests {
         assert!(!wildcard_match("*.google.com", "notgoogle.com"));
 
         // 2. domain_matches_pattern
-        // *.root.tld matches both root apex and any subdomain
-        assert!(domain_matches_pattern(
+        // RFC 4592: *.root.tld strictly matches subdomains, never the root apex
+        assert!(!domain_matches_pattern(
             "*.doubleclick.net",
             "doubleclick.net"
         ));
@@ -1844,7 +1835,29 @@ mod tests {
             "notdoubleclick.net"
         ));
 
-        // root.tld (without asterisk) inherently covers all its subdomains in DNS
+        // Subdomain wildcard *.something.domain.com must NOT match domain.com or something.domain.com
+        assert!(!domain_matches_pattern(
+            "*.something.domain.com",
+            "domain.com"
+        ));
+        assert!(!domain_matches_pattern(
+            "*.something.domain.com",
+            "something.domain.com"
+        ));
+        assert!(domain_matches_pattern(
+            "*.something.domain.com",
+            "sub.something.domain.com"
+        ));
+        assert!(domain_matches_pattern(
+            "*.something.domain.com",
+            "deep.sub.something.domain.com"
+        ));
+        assert!(!domain_matches_pattern(
+            "*.something.domain.com",
+            "other.domain.com"
+        ));
+
+        // root.tld (without asterisk) inherently covers root AND all its subdomains in DNS
         assert!(domain_matches_pattern("doubleclick.net", "doubleclick.net"));
         assert!(domain_matches_pattern(
             "doubleclick.net",
@@ -1878,17 +1891,48 @@ mod tests {
             },
         );
 
-        // Both apex and subdomains of *.tiktok.com must be blocked!
-        assert!(state.check_domain("tiktok.com").0);
+        // Subdomains of *.tiktok.com are blocked, but apex tiktok.com remains accessible (RFC 4592)
+        assert!(!state.check_domain("tiktok.com").0);
         assert!(state.check_domain("v16.tiktok.com").0);
         assert!(state.check_domain("deep.sub.tiktok.com").0);
         assert!(!state.check_domain("nottiktok.com").0);
 
-        // Add *.evil.com to custom blocklist
+        // Adding exact tiktok.com blocks the apex too!
         state.custom_blocklist.write().insert(
-            "*.evil.com".to_string(),
+            "tiktok.com".to_string(),
             BlockEntry {
-                domain: "*.evil.com".to_string(),
+                domain: "tiktok.com".to_string(),
+                reason: "custom_block".to_string(),
+                source: "manual".to_string(),
+                tag: "MANUAL".to_string(),
+                auto: false,
+                created_at: 0,
+            },
+        );
+        assert!(state.check_domain("tiktok.com").0);
+
+        // Test *.something.domain.com does NOT block domain.com or something.domain.com
+        state.custom_blocklist.write().insert(
+            "*.analytics.facebook.com".to_string(),
+            BlockEntry {
+                domain: "*.analytics.facebook.com".to_string(),
+                reason: "custom_block".to_string(),
+                source: "manual".to_string(),
+                tag: "MANUAL".to_string(),
+                auto: false,
+                created_at: 0,
+            },
+        );
+        assert!(!state.check_domain("facebook.com").0);
+        assert!(!state.check_domain("analytics.facebook.com").0);
+        assert!(state.check_domain("sub.analytics.facebook.com").0);
+        assert!(state.check_domain("deep.sub.analytics.facebook.com").0);
+
+        // Add evil.com to custom blocklist
+        state.custom_blocklist.write().insert(
+            "evil.com".to_string(),
+            BlockEntry {
+                domain: "evil.com".to_string(),
                 reason: "custom_block".to_string(),
                 source: "manual".to_string(),
                 tag: "MANUAL".to_string(),

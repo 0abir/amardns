@@ -982,10 +982,10 @@ async fn cmd_trace(state: &Arc<AppState>, args: &[&str]) -> (String, String) {
     let is_wl_exact = state.whitelist_exact.read().contains(&domain);
     let is_custom_wl = state.custom_whitelist.read().contains(&domain);
     let is_wl_wildcard = state.whitelist_wildcards.read().iter().any(|w| {
-        if w.starts_with("*.") {
-            domain.ends_with(&w[1..])
+        if let Some(suffix) = w.strip_prefix("*.") {
+            domain.ends_with(&format!(".{}", suffix))
         } else {
-            domain.ends_with(w)
+            domain == w || domain.ends_with(&format!(".{}", w))
         }
     });
 
